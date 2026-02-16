@@ -6,6 +6,8 @@ Aplikace pro přípravu importních CSV do SmartEmailingu:
 - vezme 1+ zdrojových CSV a aplikuje transformace (split emailů, split jmen, programy → sloupce, bucket zemí)
 - vygeneruje importní CSV pouze se sloupci, které existují ve schématu (odolné na změny polí v čase)
 - umí používat uložené schéma z `config/schema_cache.yaml` (upload exportu je volitelný)
+- umí načíst schéma přímo ze SmartEmailing API (ping + custom fields) a uložit ho do `config/schema_cache_api.yaml`
+- při API chybě umí automaticky použít CSV fallback schéma
 - ukládá metadata schématu (čas, zdroj, hash) a umí cache schématu smazat z UI
 - umí zvolit kódování výstupních CSV (`utf-8`, `utf-8-sig`, `cp1250`)
 - umí deduplikovat emaily ve finálním exportu (`bez`, `první`, `poslední`)
@@ -24,6 +26,12 @@ python -m venv .venv
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+### SmartEmailing API schéma
+
+V UI můžeš zapnout volbu `Načítat schéma přímo ze SmartEmailing API`.
+App používá `username + API key`, umí `ping`, stáhne custom fields a složí z nich cílové schéma.
+CSV upload zůstává jako fallback.
 
 ### Windows rychlý start
 
