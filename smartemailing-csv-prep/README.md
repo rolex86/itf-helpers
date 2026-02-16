@@ -6,7 +6,10 @@ Aplikace pro přípravu importních CSV do SmartEmailingu:
 - vezme 1+ zdrojových CSV a aplikuje transformace (split emailů, split jmen, programy → sloupce, bucket zemí)
 - vygeneruje importní CSV pouze se sloupci, které existují ve schématu (odolné na změny polí v čase)
 - umí používat uložené schéma z `config/schema_cache.yaml` (upload exportu je volitelný)
+- ukládá metadata schématu (čas, zdroj, hash) a umí cache schématu smazat z UI
 - umí zvolit kódování výstupních CSV (`utf-8`, `utf-8-sig`, `cp1250`)
+- umí deduplikovat emaily ve finálním exportu (`bez`, `první`, `poslední`)
+- report obsahuje i summary metriky kvality dat
 - exportuje ZIP: import_CZ_SK.csv, import_DE_AT_CH.csv, import_EN.csv + report.csv
 
 ## Spuštění

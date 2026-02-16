@@ -4,7 +4,12 @@ import unittest
 
 import pandas as pd
 
-from src.export_smartemailing import build_import_df, drop_empty_columns, dataframe_to_csv_bytes
+from src.export_smartemailing import (
+    build_import_df,
+    dataframe_to_csv_bytes,
+    deduplicate_import_df,
+    drop_empty_columns,
+)
 from src.schema import Schema
 
 
@@ -64,6 +69,20 @@ class BuildImportDfTests(unittest.TestCase):
 
         self.assertIn("Jméno", decoded)
         self.assertIn("Žluťoučký", decoded)
+
+    def test_deduplicate_import_df_keeps_first_and_reports_removed(self) -> None:
+        df = pd.DataFrame(
+            {
+                "E-mail": ["a@x.cz", "a@x.cz", "b@x.cz"],
+                "country_bucket": ["CZ_SK", "EN", "EN"],
+                "__row_order": [0, 1, 2],
+            }
+        )
+
+        out, removed = deduplicate_import_df(df, email_column="E-mail", keep="first")
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(out["E-mail"].tolist(), ["a@x.cz", "b@x.cz"])
 
 
 if __name__ == "__main__":

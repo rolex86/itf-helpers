@@ -57,6 +57,9 @@ smartemailing:
     also_fill_combined_field: true
     combined_field_name: "prohlížené aplikace plusSystem"
     combined_field_separator: ","
+    split_separators: [",", ";", "|", "/"]
+    # volitelné aliasy -> cílový kód/sloupec ve SmartEmailing schématu
+    code_aliases: {}
 
 transforms:
   email:
@@ -74,3 +77,17 @@ transforms:
     cz_sk: ["CZ", "SK"]
     de_at_ch: ["DE", "AT", "CH"]
     other: "EN"
+    # volitelné aliasy názvů zemí -> ISO kód
+    aliases:
+      "česká republika": "CZ"
+      "ceska republika": "CZ"
+      "czech republic": "CZ"
+      "slovensko": "SK"
+      "slovakia": "SK"
+      "deutschland": "DE"
+      "germany": "DE"
+      "osterreich": "AT"
+      "österreich": "AT"
+      "austria": "AT"
+      "schweiz": "CH"
+      "switzerland": "CH"

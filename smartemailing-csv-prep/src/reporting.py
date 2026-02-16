@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Dict, Set
+
 import pandas as pd
 
 
@@ -45,12 +47,46 @@ def find_duplicates_by_email(df: pd.DataFrame) -> pd.DataFrame:
     return dups
 
 
+def find_duplicates_from_stats(
+    email_counts: Dict[str, int],
+    source_files_by_email: Dict[str, Set[str]] | None = None,
+) -> pd.DataFrame:
+    rows = []
+    source_files_by_email = source_files_by_email or {}
+
+    for email, count in email_counts.items():
+        if int(count) <= 1:
+            continue
+        files = ",".join(sorted(source_files_by_email.get(email, set())))
+        rows.append({"email": email, "count": int(count), "source_files": files})
+
+    if not rows:
+        return pd.DataFrame(columns=["email", "count", "source_files"])
+    return pd.DataFrame(rows, columns=["email", "count", "source_files"])
+
+
 def build_report(
     invalid_emails_df: pd.DataFrame,
     unknown_programs_df: pd.DataFrame,
     duplicates_df: pd.DataFrame,
+    summary_metrics: Dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     parts = []
+
+    if summary_metrics:
+        summary_rows = [
+            {
+                "type": "summary",
+                "row_index": str(metric),
+                "detail": str(value),
+                "email_raw": "",
+                "company": "",
+                "source_file": "",
+                "source_row_index": "",
+            }
+            for metric, value in summary_metrics.items()
+        ]
+        parts.append(pd.DataFrame(summary_rows, columns=REPORT_COLUMNS))
 
     if len(invalid_emails_df) > 0:
         source_row = _col_or_default(invalid_emails_df, "source_row_index")
