@@ -1,0 +1,36 @@
+<div class="bsuc-flex2 bg0 sid-techparams" style="background-color: transparent; margin: 15px 0; padding: 0;">
+	{% if top_title_html %}
+	<div class="bsuc-flex2 bg0" style="justify-content: center; margin-top: 10px;">
+		<div class="bsuc-flex2 bg0" style="--width_max: 95%; ">
+			<div class="sid-tp-title">
+				<strong>{{ top_title_html }}</strong>
+			</div>
+		</div>
+	</div>
+	{% endif %}
+
+	{% for sec in sections %}
+	<div class="bsuc-flex2 bg0" style="justify-content: center; margin-top: {{ margin_top(sec.title, loop.index0) }}px;">
+		<div class="bsuc-flex2 bg0" style="--width_max: 95%; ">
+			<div class="sid-tp-title">
+				<strong>{{ sec.title }}</strong>
+			</div>
+		</div>
+
+		<div class="bsuc-flex2 bg0" style="margin-top: 10px; --width_max: 95%;">
+			<div class="sid-tp-card">
+				{% for row in sec.rows %}
+				<div class="bsuc-flex2 bg0">
+					<div>{{ row.label_html | safe }}</div>
+					<div>{{ row.value_html | safe }}</div>
+				</div>
+				{% endfor %}
+			</div>
+		</div>
+	</div>
+
+	{% if not loop.last %}
+	<div class="bsuc-flex2 bg0 sid-tp-spacer">&nbsp;</div>
+	{% endif %}
+	{% endfor %}
+</div>

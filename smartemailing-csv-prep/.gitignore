@@ -1,0 +1,71 @@
+# OS / editor clutter
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Python cache and tooling
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build / packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Logs and temp files
+*.log
+*.pid
+*.seed
+*.tmp
+*.bak
+
+# Local secrets and environment config
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+*.secrets
+*.key
+*.pem
+*.p12
+*.pfx
+credentials*.json
+
+# Streamlit local state
+.streamlit/
+
+# Generated / local data (may include personal data)
+config/schema_cache.yaml
+smartemailing_import.zip
+report.csv
+import_*.csv
+export_*.csv
+data/
+input/
+output/
+exports/

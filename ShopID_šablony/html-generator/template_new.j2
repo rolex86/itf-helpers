@@ -1,0 +1,216 @@
+{# template_new.j2 #}
+
+{# HERO: intro / media / highlights #}
+{% if sections.hero %}
+<div class="bsuc-flex2 bg0" style="justify-content: center; margin-top: 12px; margin-bottom: 18px;">
+  <div class="bsuc-flex2 bg0" style="background: linear-gradient(135deg,#0f1620 0%,#141b23 45%,#1f2a3a 100%); border-radius: 18px; border: 1px solid rgba(255,255,255,.08); overflow: hidden;">
+
+    {% if sections.intro %}
+    <div style="--width_max: {% if sections.spin3d or hero.img_src %}55%{% else %}100%{% endif %}; --width_600: 100%; padding: 22px 22px 20px 22px; min-width: 0; box-sizing: border-box;">
+      {% if hero.badge %}
+      <div style="display: inline-block; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,255,255,.75); background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.10); padding: 6px 10px; border-radius: 999px; margin-bottom: 12px;">{{ hero.badge }}</div>
+      {% endif %}
+
+      {% if hero.title %}
+      <div style="margin: 0 0 8px 0; color: #ffffff; font-size: 28px; line-height: 1.15;">
+        <strong>{{ hero.title }}</strong>
+      </div>
+      {% endif %}
+
+      {% if hero.subtitle %}
+      <div style="margin: 0 0 14px 0; color: rgba(255,255,255,.85); font-size: 16px; line-height: 1.5;">{{ hero.subtitle }}</div>
+      {% endif %}
+
+      {% if hero.body_html %}
+      <div style="color: rgba(255,255,255,.78); font-size: 15px; line-height: 1.7;">{{ hero.body_html | safe }}</div>
+      {% endif %}
+
+      {% if hero.links and hero.links|length > 0 %}
+      <div style="height: 1px; background: rgba(255,255,255,.10); margin: 16px 0 14px 0;"></div>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+        {% for l in hero.links %}
+        <a style="text-decoration: none;" href="{{ l.href }}">
+          <span style="display: inline-block; font-size: 13px; color: #ffffff; background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.14); padding: 9px 12px; border-radius: 999px;">{{ l.label }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if sections.spin3d %}
+    <div id="sid-c5-spin" style="--width_max: {% if sections.intro %}45%{% else %}100%{% endif %}; --width_600: 100%; padding: 18px; min-width: 0; box-sizing: border-box;">
+      <div style="background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); border-radius: 16px; padding: 14px;">
+        <div style="position: relative; width: 100%; padding-top: 100%; border-radius: 14px; overflow: hidden; background: #0f1620;">
+          <a style="position: absolute; inset: 0; display: block; text-decoration: none;" rel="noopener noreferrer" target="_blank" href="{{ spin3d.url }}">
+            <img src="{{ spin3d.placeholder_img }}" alt="{{ spin3d.alt }}" loading="lazy" decoding="async" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scale(1.02);">
+            <div style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(15,22,32,.15) 0%, rgba(15,22,32,.55) 100%);"></div>
+            <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box;">
+              <span style="display: inline-block; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22); color: #fff; padding: 10px 14px; border-radius: 999px; font-size: 13px;">{{ spin3d.button_label }}</span>
+            </div>
+            <div style="position: absolute; left: 12px; bottom: 12px; font-size: 12px; color: rgba(255,255,255,.80);">{{ spin3d.note }}</div>
+          </a>
+        </div>
+      </div>
+    </div>
+    {% elif hero.img_src %}
+    <div id="sid-c5-heroimg" style="--width_max: {% if sections.intro %}45%{% else %}100%{% endif %}; --width_600: 100%; padding: 18px; min-width: 0; box-sizing: border-box;">
+      <div style="background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); border-radius: 16px; padding: 14px;">
+        <div style="position: relative; width: 100%; padding-top: 100%; border-radius: 14px; overflow: hidden; background: #0f1620;">
+          <img src="{{ hero.img_src }}" alt="{{ hero.img_alt }}" loading="lazy" decoding="async"
+               style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;">
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if sections.highlights and highlights and highlights|length > 0 %}
+    <div style="--width_max: 100%; --width_600: 100%; padding: 0 22px 18px 22px; box-sizing: border-box; min-width: 0;">
+      <div style="height: 1px; background: rgba(255,255,255,.10); margin: 0 0 12px 0;"></div>
+
+      <div style="
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+      ">
+        {% for h in highlights %}
+          <span style="
+            display: inline-flex;
+            align-items: baseline;
+            gap: 6px;
+
+            flex: 0 1 auto;
+            max-width: 100%;
+            box-sizing: border-box;
+
+            background: rgba(255,255,255,.10);
+            border: 1px solid rgba(255,255,255,.14);
+            border-radius: 999px;
+            padding: 7px 10px;
+            line-height: 1.25;
+          ">
+            <span style="
+              font-size: 11px;
+              letter-spacing: .10em;
+              text-transform: uppercase;
+              color: rgba(255,255,255,.75);
+              white-space: nowrap;
+            ">{{ h.kicker }}</span>
+
+            <span style="
+              font-size: 13px;
+              color: #ffffff;
+              font-weight: 700;
+              white-space: normal;
+              word-break: break-word;
+            ">{{ h.value }}</span>
+          </span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{# Video #}
+{% if sections.video %}
+<div id="sid-c5-video" class="bsuc-flex2 bg0" style="justify-content: center; margin-bottom: 22px;">
+  <div style="background: #fbfbff; border: 1px solid #e6e6e6; border-radius: 16px; padding: 16px; box-shadow: 0 1px 0 rgba(0,0,0,.03);">
+    <div style="position: relative; width: 100%; padding-top: 56.25%; border-radius: 14px; overflow: hidden; background: #f7f7f7;">
+      {{ video.iframe_html | safe }}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# Parametry #}
+{% if sections.params %}
+{% set has_features = params.features and params.features|length > 0 %}
+{% set has_functions = params.functions and params.functions|length > 0 %}
+<div id="sid-c5-features" class="bsuc-flex2 bg0" style="margin-bottom: 24px;">
+  <div>
+    <div style="background: rgb(255, 255, 255); box-shadow: rgba(0, 0, 0, 0.03) 0px 1px 0px;">
+      <div class="bsuc-flex2 bg0" style="align-items: flex-start; box-sizing: border-box; margin-left: -10px; margin-right: -10px;">
+
+        {% if has_features %}
+        <div style="--width_max: {% if has_features and has_functions %}50%{% else %}100%{% endif %}; --width_600: 100%; padding: 0 10px; margin-top: 6px; box-sizing: border-box;">
+          <div style="background: #fbfbff; border: 1px solid #e7e7f0; border-radius: 16px; padding: 14px;">
+            <div style="text-align: center; background: linear-gradient(90deg,#8b8989 0%,#7d7b7b 100%); color: #ffffff; padding: 7px 10px; border-radius: 12px; margin-bottom: 12px;">
+              <span style="font-size: 16px;"><strong>{{ params.features_title }}</strong></span>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+              {% for it in params.features %}
+              <div style="flex: 1 1 280px; background: #ffffff; border: 1px solid #e6e6e6; border-radius: 16px; padding: 12px; box-sizing: border-box;">
+                <div style="font-size: 12px; color: #666; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px;">{{ it.label }}</div>
+                <div style="font-size: 16px; color: #141b23; line-height: 1.35;"><strong>{{ it.value }}</strong></div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if has_functions %}
+        <div style="--width_max: {% if has_features and has_functions %}50%{% else %}100%{% endif %}; --width_600: 100%; padding: 0 10px; margin-top: 6px; box-sizing: border-box;">
+          <div style="background: #fbfbff; border: 1px solid #e7e7f0; border-radius: 16px; padding: 14px;">
+            <div style="text-align: center; background: linear-gradient(90deg,#8b8989 0%,#7d7b7b 100%); color: #ffffff; padding: 7px 10px; border-radius: 12px; margin-bottom: 12px;">
+              <span style="font-size: 16px;"><strong>{{ params.functions_title }}</strong></span>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+              {% for it in params.functions %}
+              <div style="flex: 1 1 280px; background: #ffffff; border: 1px solid #e6e6e6; border-radius: 16px; padding: 12px; box-sizing: border-box;">
+                <div style="font-size: 12px; color: #666; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px;">{{ it.label }}</div>
+                <div style="font-size: 16px; color: #141b23; line-height: 1.35;"><strong>{{ it.value }}</strong></div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        {% endif %}
+
+      </div>
+      <div style="height: 10px;"></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# DLAŽDICE (H2 + obrázek + text) #}
+{% if sections.tiles %}
+<div class="bsuc-flex2 bg0" style="justify-content: center; margin-top: 15px;">
+  <div class="bsuc-flex2 bg0" style="--width_max: 100%; --width_600: 100%;">
+
+    {% for t in tiles %}
+    <div class="bsuc-flex2 bg0" style="margin-top: 15px; align-items: center; background: #ffffff; border: 1px solid #e6e6e6; border-radius: 16px; padding: 18px 15px 18px 15px;">
+      <div style="--width_max: 100%; --width_600: 100%;">
+        <div class="desktop_left_mobil_center">
+          <h2 style="margin: 0 0 8px; line-height: 1.2;">{{ t.title }}</h2>
+        </div>
+      </div>
+
+      <div style="--width_max: 60%; --width_600: 100%;">
+        <img src="{{ t.img_src }}" alt="{{ t.title }}" style="width: 100%; height: auto; display: block; border-radius: 14px;">
+      </div>
+
+      <div style="--width_max: 40%; --width_600: 100%; text-align: center; padding-right: 20px; padding-left: 20px; margin-top: 10px;">
+        <div style="font-size: 16px;">{{ t.text_html | safe }}</div>
+      </div>
+    </div>
+    {% endfor %}
+
+  </div>
+</div>
+{% endif %}
+
+{# Poznámka - vždy renderovat #}
+<div id="sid-c5-note" class="bsuc-flex2 bg0" style="justify-content: center; align-items: flex-start; margin-top: 15px;">
+  <div style="background: #f6f6f6; border: 1px solid #e6e6e6; border-radius: 16px; padding: 18px; line-height: 1.7;">
+    {{ note_html | safe }}
+  </div>
+</div>

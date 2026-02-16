@@ -1,0 +1,35 @@
+# SmartEmailing CSV Prep
+
+Aplikace pro přípravu importních CSV do SmartEmailingu:
+
+- načte export\_\*.csv ze SmartEmailingu a vezme z něj schéma sloupců
+- vezme 1+ zdrojových CSV a aplikuje transformace (split emailů, split jmen, programy → sloupce, bucket zemí)
+- vygeneruje importní CSV pouze se sloupci, které existují ve schématu (odolné na změny polí v čase)
+- umí používat uložené schéma z `config/schema_cache.yaml` (upload exportu je volitelný)
+- umí zvolit kódování výstupních CSV (`utf-8`, `utf-8-sig`, `cp1250`)
+- exportuje ZIP: import_CZ_SK.csv, import_DE_AT_CH.csv, import_EN.csv + report.csv
+
+## Spuštění
+
+Požadovaný Python: **3.9 až 3.12** (doporučeno 3.12 x64).
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/Mac: source .venv/bin/activate
+
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+### Windows rychlý start
+
+Spusť `start.bat` (nebo zvlášť `setup.bat` a `run.bat`).
+Skripty automaticky vyberou kompatibilní Python verzi z `py` launcheru.
+Pokud není dostupný Python 3.9-3.12, `setup.bat` zkusí automaticky `py install 3.12-64`.
+
+## Testy
+
+```bash
+python3 -m unittest discover -s tests -p "test_*.py"
+```

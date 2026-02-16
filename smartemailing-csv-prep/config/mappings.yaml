@@ -1,0 +1,76 @@
+# mappings.yaml
+
+sources:
+  simple_firma_email:
+    detect_columns: ["firma", "email"]
+    map:
+      company: "firma"
+      email_raw: "email"
+
+  full_contact_no_programs:
+    detect_columns: ["firma", "email", "jmeno", "obec", "okres", "zeme"]
+    map:
+      company: "firma"
+      email_raw: "email"
+      full_name: "jmeno"
+      city: "obec"
+      district: "okres"
+      country: "zeme"
+
+  full_contact_with_programs:
+    detect_columns:
+      ["firma", "email", "jmeno", "obec", "okres", "zeme", "programy"]
+    map:
+      external_id: "id"
+      company: "firma"
+      email_raw: "email"
+      full_name: "jmeno"
+      city: "obec"
+      district: "okres"
+      country: "zeme"
+      programs_raw: "programy"
+
+  partnerske_plusmobile:
+    detect_columns: ["vprfirma", "vpruzivatel", "email"]
+    map:
+      partner_company: "vprfirma"
+      company: "vpruzivatel"
+      email_raw: "email"
+
+smartemailing:
+  field_map:
+    "E-mail": "email"
+    "Společnost": "company"
+    "Město": "city"
+    "Země": "country"
+    "okres": "district"
+    "Tituly před jménem": "title_before"
+    "Jméno": "first_name"
+    "Příjmení": "last_name"
+    "Tituly za jménem": "title_after"
+    # volitelné
+    "Poznámky": "notes"
+
+  programs:
+    mode: "one_column_per_code"
+    fill_value: "{code}"
+    also_fill_combined_field: true
+    combined_field_name: "prohlížené aplikace plusSystem"
+    combined_field_separator: ","
+
+transforms:
+  email:
+    split_separators: [",", ";"]
+    trim: true
+
+  name:
+    title_before_regex: "(^|\\s)(Bc\\.|BcA\\.|Ing\\.|Ing\\.arch\\.|JUDr\\.|MUDr\\.|MVDr\\.|MgA\\.|Mgr\\.|PhDr\\.|RNDr\\.|ThDr\\.|ThLic\\.|doc\\.|prof\\.)(\\s|$)"
+    title_after_regex: "(^|\\s)(CSc\\.|Dr\\.|DrSc\\.|Ph\\.D\\.|Th\\.D\\.|MBA|DiS\\.|ACCA|FCCA)(\\s|$)"
+    punctuation_strip_regex: "[\\.,;:!?\\-]"
+    first_name_rule: "all_but_last_token"
+    last_name_rule: "last_token"
+
+  country_bucket:
+    cz_sk: ["CZ", "SK"]
+    de_at_ch: ["DE", "AT", "CH"]
+    other: "EN"
