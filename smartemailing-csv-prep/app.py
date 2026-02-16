@@ -50,6 +50,7 @@ with CFG_PATH.open("r", encoding="utf-8") as f:
 
 SCHEMA_CACHE_PATH = Path("config/schema_cache.yaml")
 API_SCHEMA_CACHE_PATH = Path("config/schema_cache_api.yaml")
+API_CREDENTIALS_PATH = Path("config/se_api_credentials.local")
 
 
 def schema_hash(columns: list[str]) -> str:
@@ -99,6 +100,38 @@ def save_cached_schema(
         yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
 
 
+def load_saved_api_credentials(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {"username": "", "api_key": "", "base_url": DEFAULT_BASE_URL}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return {
+            "username": str(data.get("username", "")).strip(),
+            "api_key": str(data.get("api_key", "")).strip(),
+            "base_url": str(data.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL,
+        }
+    except Exception:
+        return {"username": "", "api_key": "", "base_url": DEFAULT_BASE_URL}
+
+
+def save_api_credentials(path: Path, username: str, api_key: str, base_url: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "username": str(username).strip(),
+        "api_key": str(api_key).strip(),
+        "base_url": str(base_url).strip() or DEFAULT_BASE_URL,
+    }
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
+
+
+def clear_api_credentials(path: Path) -> None:
+    if path.exists():
+        path.unlink()
+
+
 def build_system_schema_columns(cfg: dict[str, Any]) -> list[str]:
     se_cfg = cfg.get("smartemailing", {})
     field_map = se_cfg.get("field_map", {})
@@ -123,7 +156,21 @@ def fetch_schema_from_api(username: str, api_key: str, base_url: str) -> tuple[S
 
     client = SmartEmailingApiClient(creds)
     ping = client.ping()
-    custom_fields = client.fetch_custom_field_names()
+    api_cfg = CFG.get("smartemailing", {}).get("api", {})
+    custom_fields_endpoint_candidates = [
+        str(x).strip()
+        for x in api_cfg.get("custom_fields_endpoint_candidates", [])
+        if str(x).strip()
+    ]
+    custom_fields_error = ""
+    try:
+        custom_fields = client.fetch_custom_field_names(
+            endpoint_candidates=custom_fields_endpoint_candidates or None
+        )
+    except SmartEmailingApiError as exc:
+        # Schema sync still works with system fields only.
+        custom_fields = []
+        custom_fields_error = str(exc)
     columns = combine_schema_columns(build_system_schema_columns(CFG), custom_fields)
     if not columns:
         raise SmartEmailingApiError("SmartEmailing API nevrátilo žádné použitelné názvy polí.")
@@ -134,6 +181,7 @@ def fetch_schema_from_api(username: str, api_key: str, base_url: str) -> tuple[S
         "api_base_url": client.base_url,
         "ping_status": str(ping.get("status", "")) if isinstance(ping, dict) else "",
         "custom_field_count": len(custom_fields),
+        "custom_fields_error": custom_fields_error,
     }
     return schema, meta
 
@@ -183,6 +231,20 @@ dedup_keep = {
     "Ponechat první výskyt": "first",
     "Ponechat poslední výskyt": "last",
 }[dedup_label]
+
+saved_api_credentials = load_saved_api_credentials(API_CREDENTIALS_PATH)
+remember_api_credentials = st.sidebar.checkbox(
+    "Pamatovat SE API údaje lokálně",
+    value=bool(saved_api_credentials.get("username", "") or saved_api_credentials.get("api_key", "")),
+)
+st.sidebar.caption(f"Lokální soubor: `{API_CREDENTIALS_PATH}` (bez šifrování)")
+if st.sidebar.button("Smazat uložené SE API údaje"):
+    try:
+        clear_api_credentials(API_CREDENTIALS_PATH)
+        st.sidebar.success("Uložené SE API údaje byly smazány.")
+        st.rerun()
+    except Exception as exc:
+        st.sidebar.error(f"Nepodařilo se smazat uložené údaje: {exc}")
 
 st.markdown("### 1) Schéma sloupců (CSV fallback)")
 cached_schema, cached_schema_meta = load_cached_schema(SCHEMA_CACHE_PATH)
@@ -256,17 +318,47 @@ use_api_schema = st.checkbox(
 )
 api_username = ""
 api_key = ""
-api_base_url = DEFAULT_BASE_URL
+api_base_url = str(saved_api_credentials.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
 refresh_api_schema_on_generate = True
 use_api_cache_on_error = True
 api_schema_for_run = None
 
 if use_api_schema:
-    api_username = st.text_input("SmartEmailing username", value="")
-    api_key = st.text_input("SmartEmailing API key", value="", type="password")
-    api_base_url = st.text_input("API base URL", value=DEFAULT_BASE_URL)
+    api_username = st.text_input(
+        "SmartEmailing username",
+        value=str(saved_api_credentials.get("username", "")).strip(),
+        key="schema_api_username",
+    )
+    api_key = st.text_input(
+        "SmartEmailing API key",
+        value=str(saved_api_credentials.get("api_key", "")).strip(),
+        type="password",
+        key="schema_api_key",
+    )
+    api_base_url = st.text_input(
+        "API base URL",
+        value=str(saved_api_credentials.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL,
+        key="schema_api_base_url",
+    )
+    save_schema_api_credentials = st.button("Uložit API údaje na disk", key="save_api_credentials_schema")
     refresh_api_schema_on_generate = st.checkbox("Před exportem načíst schéma z API znovu", value=True)
     use_api_cache_on_error = st.checkbox("Při chybě API použít cache schéma z API", value=True)
+
+    if save_schema_api_credentials:
+        if str(api_username).strip() and str(api_key).strip():
+            try:
+                save_api_credentials(API_CREDENTIALS_PATH, api_username, api_key, api_base_url)
+                st.success(f"API údaje byly uloženy do `{API_CREDENTIALS_PATH}`.")
+            except Exception as exc:
+                st.error(f"Nepodařilo se uložit API údaje: {exc}")
+        else:
+            st.error("Pro uložení vyplň username i API key.")
+
+    if remember_api_credentials and str(api_username).strip() and str(api_key).strip():
+        try:
+            save_api_credentials(API_CREDENTIALS_PATH, api_username, api_key, api_base_url)
+        except Exception as exc:
+            st.warning(f"Nepodařilo se uložit API údaje lokálně: {exc}")
 
     if cached_api_schema is None:
         st.caption("Uložená API cache schématu zatím neexistuje.")
@@ -325,6 +417,11 @@ if use_api_schema:
                 f"Načteno API schéma: {len(api_schema_for_run.columns)} sloupců "
                 f"(custom fields: {api_meta.get('custom_field_count', 0)})"
             )
+            if str(api_meta.get("custom_fields_error", "")).strip():
+                st.warning(
+                    "Custom fields se nepodařilo načíst, pokračuje se se systémovými poli. "
+                    f"Detail: {api_meta.get('custom_fields_error', '')}"
+                )
         except Exception as exc:
             st.error(f"Nepodařilo se načíst schéma z API: {exc}")
 
@@ -395,17 +492,49 @@ if api_mode_enabled:
 
     api_import_username = st.text_input(
         "API username (pro import)",
-        value=str(api_username).strip() if str(api_username).strip() else "",
+        value=(
+            str(api_username).strip()
+            if str(api_username).strip()
+            else str(saved_api_credentials.get("username", "")).strip()
+        ),
+        key="import_api_username",
     )
     api_import_key = st.text_input(
         "API key (pro import)",
-        value=str(api_key).strip() if str(api_key).strip() else "",
+        value=(
+            str(api_key).strip()
+            if str(api_key).strip()
+            else str(saved_api_credentials.get("api_key", "")).strip()
+        ),
         type="password",
+        key="import_api_key",
     )
     api_import_base_url = st.text_input(
         "API base URL (pro import)",
-        value=str(api_base_url).strip() if str(api_base_url).strip() else DEFAULT_BASE_URL,
+        value=(
+            str(api_base_url).strip()
+            if str(api_base_url).strip()
+            else str(saved_api_credentials.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
+        ),
+        key="import_api_base_url",
     )
+    save_import_api_credentials = st.button("Uložit API údaje na disk", key="save_api_credentials_import")
+
+    if save_import_api_credentials:
+        if str(api_import_username).strip() and str(api_import_key).strip():
+            try:
+                save_api_credentials(API_CREDENTIALS_PATH, api_import_username, api_import_key, api_import_base_url)
+                st.success(f"API údaje byly uloženy do `{API_CREDENTIALS_PATH}`.")
+            except Exception as exc:
+                st.error(f"Nepodařilo se uložit API údaje: {exc}")
+        else:
+            st.error("Pro uložení vyplň username i API key.")
+
+    if remember_api_credentials and str(api_import_username).strip() and str(api_import_key).strip():
+        try:
+            save_api_credentials(API_CREDENTIALS_PATH, api_import_username, api_import_key, api_import_base_url)
+        except Exception as exc:
+            st.warning(f"Nepodařilo se uložit API údaje lokálně: {exc}")
 
     load_lists = st.button("Načíst listy z API")
     if load_lists:
@@ -417,7 +546,9 @@ if api_mode_enabled:
                     base_url=str(api_import_base_url).strip() or DEFAULT_BASE_URL,
                 )
             )
-            fetched_lists = list_client.fetch_contact_lists()
+            fetched_lists = list_client.fetch_contact_lists(
+                endpoint_candidates=contact_lists_endpoint_candidates
+            )
             st.session_state.api_contact_lists_cache = fetched_lists
             st.success(f"Načteno listů: {len(fetched_lists)}")
         except Exception as exc:
@@ -499,6 +630,16 @@ import_endpoint_candidates = [
     for x in api_cfg.get("import_endpoint_candidates", ["/api/v3/import", "/api/v3/imports", "/api/v3/import-contacts"])
     if str(x).strip()
 ]
+custom_fields_endpoint_candidates = [
+    str(x).strip()
+    for x in api_cfg.get("custom_fields_endpoint_candidates", ["/api/v3/customfields", "/api/v3/custom-fields"])
+    if str(x).strip()
+]
+contact_lists_endpoint_candidates = [
+    str(x).strip()
+    for x in api_cfg.get("contact_lists_endpoint_candidates", ["/api/v3/contactlists", "/api/v3/contact-lists"])
+    if str(x).strip()
+]
 strict_custom_fields = bool(api_cfg.get("strict_custom_fields", True))
 list_status = str(api_cfg.get("list_status", "confirmed")).strip() or "confirmed"
 
@@ -527,6 +668,11 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
                 f"Před exportem načteno čerstvé API schéma: {len(active_schema.columns)} sloupců "
                 f"(custom fields: {api_meta.get('custom_field_count', 0)})"
             )
+            if str(api_meta.get("custom_fields_error", "")).strip():
+                st.warning(
+                    "Custom fields se nepodařilo načíst, pokračuje se se systémovými poli. "
+                    f"Detail: {api_meta.get('custom_fields_error', '')}"
+                )
         except Exception as exc:
             if use_api_cache_on_error and cached_api_schema is not None:
                 active_schema = cached_api_schema
@@ -691,7 +837,14 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
             )
             api_ping = client.ping()
             custom_fields = client.fetch_custom_fields()
-            api_resolved_list_id = client.resolve_contact_list_id(staging_list_value) if str(staging_list_value).strip() else ""
+            api_resolved_list_id = (
+                client.resolve_contact_list_id(
+                    staging_list_value,
+                    endpoint_candidates=contact_lists_endpoint_candidates,
+                )
+                if str(staging_list_value).strip()
+                else ""
+            )
 
             import_for_api = final_import_df.drop(columns=["country_bucket", "__row_order"], errors="ignore")
             api_contacts, api_issues = build_api_contacts_from_import_df(

@@ -356,9 +356,10 @@ class SmartEmailingApiClient:
         self,
         page_limit: int = 100,
         max_pages: int = 30,
+        endpoint_candidates: list[str] | None = None,
     ) -> list[dict[str, str]]:
         return self._fetch_paginated_with_fallback(
-            endpoints=CUSTOM_FIELDS_ENDPOINTS,
+            endpoints=endpoint_candidates or CUSTOM_FIELDS_ENDPOINTS,
             item_extractor=extract_custom_fields,
             page_limit=page_limit,
             max_pages=max_pages,
@@ -369,27 +370,36 @@ class SmartEmailingApiClient:
         self,
         page_limit: int = 100,
         max_pages: int = 30,
+        endpoint_candidates: list[str] | None = None,
     ) -> list[str]:
-        return [x["name"] for x in self.fetch_custom_fields(page_limit=page_limit, max_pages=max_pages)]
+        return [
+            x["name"]
+            for x in self.fetch_custom_fields(
+                page_limit=page_limit,
+                max_pages=max_pages,
+                endpoint_candidates=endpoint_candidates,
+            )
+        ]
 
     def fetch_contact_lists(
         self,
         page_limit: int = 100,
         max_pages: int = 30,
+        endpoint_candidates: list[str] | None = None,
     ) -> list[dict[str, str]]:
         return self._fetch_paginated_with_fallback(
-            endpoints=CONTACT_LISTS_ENDPOINTS,
+            endpoints=endpoint_candidates or CONTACT_LISTS_ENDPOINTS,
             item_extractor=extract_contact_lists,
             page_limit=page_limit,
             max_pages=max_pages,
             empty_message="Nepodařilo se načíst contact listy ze SmartEmailing API.",
         )
 
-    def resolve_contact_list_id(self, list_name_or_id: str) -> str:
+    def resolve_contact_list_id(self, list_name_or_id: str, endpoint_candidates: list[str] | None = None) -> str:
         wanted = str(list_name_or_id).strip()
         if not wanted:
             return ""
-        lists = self.fetch_contact_lists()
+        lists = self.fetch_contact_lists(endpoint_candidates=endpoint_candidates)
         lower_wanted = wanted.casefold()
         for item in lists:
             if str(item.get("id", "")).strip() == wanted:
@@ -515,8 +525,8 @@ class SmartEmailingApiClient:
                     page_limit=page_limit,
                     max_pages=max_pages,
                 )
-                if items:
-                    return items
+                # Empty list is a valid response for some endpoints (e.g. no custom fields yet).
+                return items
             except SmartEmailingApiError as exc:
                 if exc.status_code in {401, 403}:
                     raise
@@ -554,9 +564,7 @@ class SmartEmailingApiClient:
             if not self._has_more_pages(payload, current_page=page, limit=page_limit, received_count=len(page_rows)):
                 break
 
-        if rows:
-            return rows
-        raise SmartEmailingApiError(f"Endpoint {path} nevrátil žádná data.")
+        return rows
 
     @staticmethod
     def _has_more_pages(payload: Any, current_page: int, limit: int, received_count: int) -> bool:

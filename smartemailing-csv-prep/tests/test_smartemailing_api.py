@@ -172,6 +172,18 @@ class SmartEmailingApiTests(unittest.TestCase):
         pages = [call[2].get("page") for call in client.calls if call[1] == "/api/v3/customfields"]
         self.assertEqual(pages, [1, 2])
 
+    def test_fetch_custom_field_names_allows_empty_result(self) -> None:
+        responses = {
+            ("/api/v3/customfields", 1): {"data": [], "meta": {"total_pages": 1}},
+        }
+        client = PagingFakeApiClient(responses)
+
+        names = client.fetch_custom_field_names()
+
+        self.assertEqual(names, [])
+        called_paths = [call[1] for call in client.calls]
+        self.assertEqual(called_paths, ["/api/v3/customfields"])
+
     def test_import_contacts_batch_tries_fallback_endpoint(self) -> None:
         client = ImportFakeApiClient()
 
