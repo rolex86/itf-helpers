@@ -12,7 +12,9 @@ DEFAULT_BASE_URL = "https://app.smartemailing.cz"
 
 PING_ENDPOINT = "/api/v3/ping"
 CUSTOM_FIELDS_ENDPOINTS = ["/api/v3/customfields", "/api/v3/custom-fields"]
+CUSTOM_FIELDS_SEARCH_ENDPOINTS = ["/api/v3/customfields/search", "/api/v3/custom-fields/search"]
 CONTACT_LISTS_ENDPOINTS = ["/api/v3/contactlists", "/api/v3/contact-lists"]
+CONTACT_LISTS_SEARCH_ENDPOINTS = ["/api/v3/contactlists/search", "/api/v3/contact-lists/search"]
 IMPORT_CONTACTS_ENDPOINTS = ["/api/v3/import", "/api/v3/imports", "/api/v3/import-contacts"]
 
 
@@ -82,12 +84,28 @@ def _extract_items(payload: Any) -> list[dict[str, Any]]:
             values = data.get(key)
             if isinstance(values, list):
                 candidates.append(values)
+            elif isinstance(values, dict):
+                dict_values = [x for x in values.values() if isinstance(x, dict)]
+                if dict_values:
+                    candidates.append(dict_values)
+        dict_values = [x for x in data.values() if isinstance(x, dict)]
+        if dict_values:
+            candidates.append(dict_values)
         candidates.append([data])
 
-    for key in ["items", "customfields", "custom_fields", "contactlists", "contact_lists", "results", "records"]:
+    for key in ["items", "customfields", "custom_fields", "contactlists", "contact_lists", "results", "records", "collection"]:
         values = payload.get(key)
         if isinstance(values, list):
             candidates.append(values)
+        elif isinstance(values, dict):
+            dict_values = [x for x in values.values() if isinstance(x, dict)]
+            if dict_values:
+                candidates.append(dict_values)
+
+    for key in ["item", "customfield", "custom_field", "contactlist", "contact_list"]:
+        single = payload.get(key)
+        if isinstance(single, dict):
+            candidates.append([single])
 
     for values in candidates:
         if not isinstance(values, list):
@@ -101,10 +119,28 @@ def _extract_items(payload: Any) -> list[dict[str, Any]]:
 def _pick_value(item: dict[str, Any], keys: list[str]) -> str:
     attrs = item.get("attributes")
     attrs_dict = attrs if isinstance(attrs, dict) else {}
+    nested_dicts: list[dict[str, Any]] = []
+    for nested_key in ["data", "customfield", "custom_field", "contactlist", "contact_list", "item"]:
+        nested = item.get(nested_key)
+        if isinstance(nested, dict):
+            nested_dicts.append(nested)
+    nested_attrs = [
+        nested.get("attributes") for nested in nested_dicts if isinstance(nested.get("attributes"), dict)
+    ]
     for key in keys:
         value = item.get(key)
         if value is None and attrs_dict:
             value = attrs_dict.get(key)
+        if value is None:
+            for nested in nested_dicts:
+                value = nested.get(key)
+                if value is not None:
+                    break
+        if value is None:
+            for nested_attr in nested_attrs:
+                value = nested_attr.get(key)
+                if value is not None:
+                    break
         if value is None:
             continue
         as_str = str(value).strip()
@@ -116,10 +152,28 @@ def _pick_value(item: dict[str, Any], keys: list[str]) -> str:
 def _pick_id(item: dict[str, Any], keys: list[str]) -> str:
     attrs = item.get("attributes")
     attrs_dict = attrs if isinstance(attrs, dict) else {}
+    nested_dicts: list[dict[str, Any]] = []
+    for nested_key in ["data", "customfield", "custom_field", "contactlist", "contact_list", "item"]:
+        nested = item.get(nested_key)
+        if isinstance(nested, dict):
+            nested_dicts.append(nested)
+    nested_attrs = [
+        nested.get("attributes") for nested in nested_dicts if isinstance(nested.get("attributes"), dict)
+    ]
     for key in keys:
         value = item.get(key)
         if value is None and attrs_dict:
             value = attrs_dict.get(key)
+        if value is None:
+            for nested in nested_dicts:
+                value = nested.get(key)
+                if value is not None:
+                    break
+        if value is None:
+            for nested_attr in nested_attrs:
+                value = nested_attr.get(key)
+                if value is not None:
+                    break
         if value in [None, ""]:
             continue
         as_str = str(value).strip()
@@ -157,7 +211,7 @@ def extract_contact_lists(payload: Any) -> list[dict[str, str]]:
     seen: set[str] = set()
     for item in _extract_items(payload):
         list_id = _pick_id(item, ["id", "contactlist_id", "contact_list_id"])
-        name = _pick_value(item, ["name", "title", "label"])
+        name = _pick_value(item, ["name", "title", "label", "contactlist_name", "contact_list_name", "list_name"])
         if not list_id and not name:
             continue
         dedupe_key = f"{list_id}:{name}"
@@ -357,20 +411,63 @@ class SmartEmailingApiClient:
         page_limit: int = 100,
         max_pages: int = 30,
         endpoint_candidates: list[str] | None = None,
+        search_endpoint_candidates: list[str] | None = None,
     ) -> list[dict[str, str]]:
-        return self._fetch_paginated_with_fallback(
-            endpoints=endpoint_candidates or CUSTOM_FIELDS_ENDPOINTS,
-            item_extractor=extract_custom_fields,
-            page_limit=page_limit,
-            max_pages=max_pages,
-            empty_message="Nepodařilo se načíst custom fields ze SmartEmailing API.",
+        get_endpoints = CUSTOM_FIELDS_ENDPOINTS if endpoint_candidates is None else endpoint_candidates
+        post_endpoints = (
+            CUSTOM_FIELDS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
         )
+
+        best_rows: list[dict[str, str]] = []
+        any_success = False
+        last_error: SmartEmailingApiError | None = None
+
+        for endpoint in get_endpoints:
+            try:
+                rows = self._fetch_paginated_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_custom_fields,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                any_success = True
+                if len(rows) > len(best_rows):
+                    best_rows = rows
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                last_error = exc
+                continue
+
+        for endpoint in post_endpoints:
+            try:
+                rows = self._fetch_paginated_post_search_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_custom_fields,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                any_success = True
+                if len(rows) > len(best_rows):
+                    best_rows = rows
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                last_error = exc
+                continue
+
+        if any_success:
+            return best_rows
+        if last_error is not None:
+            raise last_error
+        raise SmartEmailingApiError("Nepodařilo se načíst custom fields ze SmartEmailing API.")
 
     def fetch_custom_field_names(
         self,
         page_limit: int = 100,
         max_pages: int = 30,
         endpoint_candidates: list[str] | None = None,
+        search_endpoint_candidates: list[str] | None = None,
     ) -> list[str]:
         return [
             x["name"]
@@ -378,6 +475,7 @@ class SmartEmailingApiClient:
                 page_limit=page_limit,
                 max_pages=max_pages,
                 endpoint_candidates=endpoint_candidates,
+                search_endpoint_candidates=search_endpoint_candidates,
             )
         ]
 
@@ -386,20 +484,70 @@ class SmartEmailingApiClient:
         page_limit: int = 100,
         max_pages: int = 30,
         endpoint_candidates: list[str] | None = None,
+        search_endpoint_candidates: list[str] | None = None,
     ) -> list[dict[str, str]]:
-        return self._fetch_paginated_with_fallback(
-            endpoints=endpoint_candidates or CONTACT_LISTS_ENDPOINTS,
-            item_extractor=extract_contact_lists,
-            page_limit=page_limit,
-            max_pages=max_pages,
-            empty_message="Nepodařilo se načíst contact listy ze SmartEmailing API.",
+        get_endpoints = CONTACT_LISTS_ENDPOINTS if endpoint_candidates is None else endpoint_candidates
+        post_endpoints = (
+            CONTACT_LISTS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
         )
 
-    def resolve_contact_list_id(self, list_name_or_id: str, endpoint_candidates: list[str] | None = None) -> str:
+        best_rows: list[dict[str, str]] = []
+        any_success = False
+        last_error: SmartEmailingApiError | None = None
+
+        for endpoint in get_endpoints:
+            try:
+                rows = self._fetch_paginated_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_contact_lists,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                any_success = True
+                if len(rows) > len(best_rows):
+                    best_rows = rows
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                last_error = exc
+                continue
+
+        for endpoint in post_endpoints:
+            try:
+                rows = self._fetch_paginated_post_search_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_contact_lists,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                any_success = True
+                if len(rows) > len(best_rows):
+                    best_rows = rows
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                last_error = exc
+                continue
+
+        if any_success:
+            return best_rows
+        if last_error is not None:
+            raise last_error
+        raise SmartEmailingApiError("Nepodařilo se načíst contact listy ze SmartEmailing API.")
+
+    def resolve_contact_list_id(
+        self,
+        list_name_or_id: str,
+        endpoint_candidates: list[str] | None = None,
+        search_endpoint_candidates: list[str] | None = None,
+    ) -> str:
         wanted = str(list_name_or_id).strip()
         if not wanted:
             return ""
-        lists = self.fetch_contact_lists(endpoint_candidates=endpoint_candidates)
+        lists = self.fetch_contact_lists(
+            endpoint_candidates=endpoint_candidates,
+            search_endpoint_candidates=search_endpoint_candidates,
+        )
         lower_wanted = wanted.casefold()
         for item in lists:
             if str(item.get("id", "")).strip() == wanted:
@@ -507,6 +655,83 @@ class SmartEmailingApiClient:
 
         return results
 
+    def probe_custom_fields_endpoints(
+        self,
+        endpoint_candidates: list[str] | None = None,
+        search_endpoint_candidates: list[str] | None = None,
+        page_limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        get_endpoints = CUSTOM_FIELDS_ENDPOINTS if endpoint_candidates is None else endpoint_candidates
+        post_endpoints = (
+            CUSTOM_FIELDS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
+        )
+        rows: list[dict[str, Any]] = []
+
+        for endpoint in get_endpoints:
+            try:
+                payload = self._request_json("GET", endpoint)
+                parsed = self._fetch_paginated_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_custom_fields,
+                    page_limit=page_limit,
+                    max_pages=5,
+                )
+                keys = list(payload.keys())[:10] if isinstance(payload, dict) else []
+                rows.append(
+                    {
+                        "method": "GET",
+                        "endpoint": endpoint,
+                        "status": "ok",
+                        "http_status": 200,
+                        "parsed_fields": len(parsed),
+                        "payload_keys": ",".join([str(k) for k in keys]),
+                        "error": "",
+                    }
+                )
+            except SmartEmailingApiError as exc:
+                rows.append(
+                    {
+                        "method": "GET",
+                        "endpoint": endpoint,
+                        "status": "error",
+                        "http_status": exc.status_code or "",
+                        "parsed_fields": 0,
+                        "payload_keys": "",
+                        "error": str(exc),
+                    }
+                )
+
+        for endpoint in post_endpoints:
+            try:
+                payload = self._request_json("POST", endpoint, body={"page": 1, "limit": page_limit})
+                parsed = extract_custom_fields(payload)
+                keys = list(payload.keys())[:10] if isinstance(payload, dict) else []
+                rows.append(
+                    {
+                        "method": "POST",
+                        "endpoint": endpoint,
+                        "status": "ok",
+                        "http_status": 200,
+                        "parsed_fields": len(parsed),
+                        "payload_keys": ",".join([str(k) for k in keys]),
+                        "error": "",
+                    }
+                )
+            except SmartEmailingApiError as exc:
+                rows.append(
+                    {
+                        "method": "POST",
+                        "endpoint": endpoint,
+                        "status": "error",
+                        "http_status": exc.status_code or "",
+                        "parsed_fields": 0,
+                        "payload_keys": "",
+                        "error": str(exc),
+                    }
+                )
+
+        return rows
+
     def _fetch_paginated_with_fallback(
         self,
         endpoints: list[str],
@@ -544,6 +769,78 @@ class SmartEmailingApiClient:
         page_limit: int,
         max_pages: int,
     ) -> list[dict[str, str]]:
+        """
+        Robust GET collection loader for SE endpoints:
+        1) try plain GET without query,
+        2) try page/limit pagination,
+        3) try offset/limit pagination.
+        Returns the largest successful result set.
+        """
+        best_rows: list[dict[str, str]] = []
+        any_success = False
+        last_error: SmartEmailingApiError | None = None
+
+        try:
+            rows = self._fetch_single_get_from_endpoint(path=path, item_extractor=item_extractor)
+            any_success = True
+            if len(rows) > len(best_rows):
+                best_rows = rows
+        except SmartEmailingApiError as exc:
+            if exc.status_code in {401, 403}:
+                raise
+            last_error = exc
+
+        try:
+            rows = self._fetch_paginated_from_endpoint_page(
+                path=path,
+                item_extractor=item_extractor,
+                page_limit=page_limit,
+                max_pages=max_pages,
+            )
+            any_success = True
+            if len(rows) > len(best_rows):
+                best_rows = rows
+        except SmartEmailingApiError as exc:
+            if exc.status_code in {401, 403}:
+                raise
+            last_error = exc
+
+        try:
+            rows = self._fetch_paginated_from_endpoint_offset(
+                path=path,
+                item_extractor=item_extractor,
+                page_limit=page_limit,
+                max_pages=max_pages,
+            )
+            any_success = True
+            if len(rows) > len(best_rows):
+                best_rows = rows
+        except SmartEmailingApiError as exc:
+            if exc.status_code in {401, 403}:
+                raise
+            last_error = exc
+
+        if any_success:
+            return best_rows
+        if last_error is not None:
+            raise last_error
+        raise SmartEmailingApiError(f"Nepodařilo se načíst data z endpointu {path}.")
+
+    def _fetch_single_get_from_endpoint(
+        self,
+        path: str,
+        item_extractor: Callable[[Any], list[dict[str, str]]],
+    ) -> list[dict[str, str]]:
+        payload = self._request_json("GET", path)
+        return self._dedupe_rows(item_extractor(payload))
+
+    def _fetch_paginated_from_endpoint_page(
+        self,
+        path: str,
+        item_extractor: Callable[[Any], list[dict[str, str]]],
+        page_limit: int,
+        max_pages: int,
+    ) -> list[dict[str, str]]:
         rows: list[dict[str, str]] = []
         seen: set[str] = set()
 
@@ -553,15 +850,133 @@ class SmartEmailingApiClient:
                 path,
                 query={"page": page, "limit": page_limit},
             )
-            page_rows = item_extractor(payload)
+            page_rows = self._dedupe_rows(item_extractor(payload))
+            added_new = False
             for row in page_rows:
                 dedupe_key = "|".join([str(v).strip() for v in row.values()])
                 if dedupe_key in seen:
                     continue
                 seen.add(dedupe_key)
                 rows.append(row)
+                added_new = True
 
-            if not self._has_more_pages(payload, current_page=page, limit=page_limit, received_count=len(page_rows)):
+            has_more = self._has_more_pages(payload, current_page=page, limit=page_limit, received_count=len(page_rows))
+            if has_more:
+                continue
+            if self._has_explicit_pagination_meta(payload):
+                break
+            if len(page_rows) == 0:
+                break
+            # Unknown pagination metadata fallback:
+            # keep requesting next page while new rows appear; stop when response repeats/no-new.
+            if not added_new:
+                break
+
+        return rows
+
+    def _fetch_paginated_from_endpoint_offset(
+        self,
+        path: str,
+        item_extractor: Callable[[Any], list[dict[str, str]]],
+        page_limit: int,
+        max_pages: int,
+    ) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        for page_index in range(0, max_pages):
+            offset = page_index * page_limit
+            payload = self._request_json(
+                "GET",
+                path,
+                query={"limit": page_limit, "offset": offset},
+            )
+            page_rows = self._dedupe_rows(item_extractor(payload))
+            added_new = False
+            for row in page_rows:
+                dedupe_key = "|".join([str(v).strip() for v in row.values()])
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                rows.append(row)
+                added_new = True
+
+            has_more = self._has_more_offset_pages(
+                payload=payload,
+                next_offset=offset + page_limit,
+                limit=page_limit,
+                received_count=len(page_rows),
+            )
+            if has_more:
+                continue
+            if len(page_rows) == 0:
+                break
+            if not added_new:
+                break
+
+        return rows
+
+    def _fetch_paginated_post_search_with_fallback(
+        self,
+        endpoints: list[str],
+        item_extractor: Callable[[Any], list[dict[str, str]]],
+        page_limit: int,
+        max_pages: int,
+        empty_message: str,
+    ) -> list[dict[str, str]]:
+        last_error: SmartEmailingApiError | None = None
+        for path in endpoints:
+            try:
+                rows = self._fetch_paginated_post_search_from_endpoint(
+                    path=path,
+                    item_extractor=item_extractor,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                return rows
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                last_error = exc
+                continue
+        if last_error is not None:
+            raise last_error
+        raise SmartEmailingApiError(empty_message)
+
+    def _fetch_paginated_post_search_from_endpoint(
+        self,
+        path: str,
+        item_extractor: Callable[[Any], list[dict[str, str]]],
+        page_limit: int,
+        max_pages: int,
+    ) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        for page in range(1, max_pages + 1):
+            payload = self._request_json(
+                "POST",
+                path,
+                body={"page": page, "limit": page_limit},
+            )
+            page_rows = self._dedupe_rows(item_extractor(payload))
+            added_new = False
+            for row in page_rows:
+                dedupe_key = "|".join([str(v).strip() for v in row.values()])
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                rows.append(row)
+                added_new = True
+
+            has_more = self._has_more_pages(payload, current_page=page, limit=page_limit, received_count=len(page_rows))
+            if has_more:
+                continue
+            if self._has_explicit_pagination_meta(payload):
+                break
+            if len(page_rows) == 0:
+                break
+            if not added_new:
                 break
 
         return rows
@@ -590,4 +1005,48 @@ class SmartEmailingApiClient:
                 if isinstance(total_count, str) and total_count.isdigit():
                     return current_page * limit < int(total_count)
 
-        return received_count >= limit
+        # Unknown metadata fallback: continue only while full page is returned.
+        return bool(limit > 0 and received_count >= limit)
+
+    @staticmethod
+    def _has_more_offset_pages(payload: Any, next_offset: int, limit: int, received_count: int) -> bool:
+        if isinstance(payload, dict):
+            meta = payload.get("meta")
+            if isinstance(meta, dict):
+                next_value = meta.get("next_offset")
+                if isinstance(next_value, int):
+                    return True
+                if isinstance(next_value, str) and next_value.strip().isdigit():
+                    return True
+
+                total_count = meta.get("total_count")
+                if total_count is None:
+                    total_count = meta.get("total")
+                if isinstance(total_count, int):
+                    return next_offset < total_count
+                if isinstance(total_count, str) and total_count.strip().isdigit():
+                    return next_offset < int(total_count.strip())
+
+        return bool(limit > 0 and received_count >= limit)
+
+    @staticmethod
+    def _dedupe_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+        out: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for row in rows:
+            dedupe_key = "|".join([str(v).strip() for v in row.values()])
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            out.append(row)
+        return out
+
+    @staticmethod
+    def _has_explicit_pagination_meta(payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        meta = payload.get("meta")
+        if not isinstance(meta, dict):
+            return False
+        keys = {"total_pages", "page_count", "last_page", "next_page", "total_count", "total"}
+        return any(key in meta for key in keys)

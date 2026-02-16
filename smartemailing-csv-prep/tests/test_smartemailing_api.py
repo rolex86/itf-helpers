@@ -77,6 +77,60 @@ class ImportFakeApiClient(SmartEmailingApiClient):
         return {"status": "ok"}
 
 
+class PostSearchFakeApiClient(SmartEmailingApiClient):
+    def __init__(self) -> None:
+        super().__init__(SmartEmailingCredentials(username="user", api_key="key"))
+        self.calls: list[tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]] = []
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        self.calls.append((method, path, query, body))
+
+        if method == "GET" and path in {"/api/v3/customfields", "/api/v3/custom-fields"}:
+            raise SmartEmailingApiError("not found", status_code=404)
+
+        if method == "POST" and path == "/api/v3/customfields/search":
+            page = int((body or {}).get("page", 1))
+            if page == 1:
+                return {"data": {"customfields": [{"id": 1, "name": "Field 1"}]}}
+            if page == 2:
+                return {"data": {"customfields": [{"id": 2, "name": "Field 2"}]}}
+            return {"data": {"customfields": []}}
+
+        raise SmartEmailingApiError("unexpected call", status_code=400)
+
+
+class ContactListPostSearchFakeApiClient(SmartEmailingApiClient):
+    def __init__(self) -> None:
+        super().__init__(SmartEmailingCredentials(username="user", api_key="key"))
+        self.calls: list[tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]] = []
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        self.calls.append((method, path, query, body))
+
+        if method == "GET" and path in {"/api/v3/contactlists", "/api/v3/contact-lists"}:
+            raise SmartEmailingApiError("not found", status_code=404)
+
+        if method == "POST" and path == "/api/v3/contactlists/search":
+            page = int((body or {}).get("page", 1))
+            if page == 1:
+                return {"data": {"contactlists": [{"id": 101, "contactlist_name": "Stage A"}]}}
+            return {"data": {"contactlists": []}}
+
+        raise SmartEmailingApiError("unexpected call", status_code=400)
+
+
 class SmartEmailingApiTests(unittest.TestCase):
     def test_build_basic_auth_header(self) -> None:
         header = build_basic_auth_header("my-user", "my-key")
@@ -88,7 +142,7 @@ class SmartEmailingApiTests(unittest.TestCase):
         custom_payload = {
             "data": {"customfields": [{"id": 10, "name": "Pole A"}, {"attributes": {"id": "11", "label": "Pole B"}}]}
         }
-        lists_payload = {"data": {"contactlists": [{"id": 1, "name": "Staging"}]}}
+        lists_payload = {"data": {"contactlists": [{"id": 1, "contactlist_name": "Staging"}]}}
 
         custom_fields = extract_custom_fields(custom_payload)
         lists = extract_contact_lists(lists_payload)
@@ -156,8 +210,9 @@ class SmartEmailingApiTests(unittest.TestCase):
         names = client.fetch_custom_field_names()
 
         self.assertEqual(names, ["Pole A", "Pole B"])
-        self.assertEqual(client.calls[0][1], "/api/v3/customfields")
-        self.assertEqual(client.calls[1][1], "/api/v3/custom-fields")
+        called_paths = [call[1] for call in client.calls]
+        self.assertIn("/api/v3/customfields", called_paths)
+        self.assertIn("/api/v3/custom-fields", called_paths)
 
     def test_fetch_custom_field_names_handles_pagination(self) -> None:
         responses = {
@@ -169,7 +224,11 @@ class SmartEmailingApiTests(unittest.TestCase):
         names = client.fetch_custom_field_names()
 
         self.assertEqual(names, ["Pole A", "Pole B"])
-        pages = [call[2].get("page") for call in client.calls if call[1] == "/api/v3/customfields"]
+        pages = [
+            call[2].get("page")
+            for call in client.calls
+            if call[1] == "/api/v3/customfields" and isinstance(call[2], dict) and "page" in call[2]
+        ]
         self.assertEqual(pages, [1, 2])
 
     def test_fetch_custom_field_names_allows_empty_result(self) -> None:
@@ -182,7 +241,7 @@ class SmartEmailingApiTests(unittest.TestCase):
 
         self.assertEqual(names, [])
         called_paths = [call[1] for call in client.calls]
-        self.assertEqual(called_paths, ["/api/v3/customfields"])
+        self.assertIn("/api/v3/customfields", called_paths)
 
     def test_import_contacts_batch_tries_fallback_endpoint(self) -> None:
         client = ImportFakeApiClient()
@@ -211,6 +270,24 @@ class SmartEmailingApiTests(unittest.TestCase):
         self.assertTrue(results[0].canary)
         self.assertFalse(results[1].canary)
         self.assertEqual(sum(x.sent_contacts for x in results), 120)
+
+    def test_fetch_custom_fields_falls_back_to_post_search(self) -> None:
+        client = PostSearchFakeApiClient()
+
+        fields = client.fetch_custom_fields()
+
+        self.assertEqual([x["name"] for x in fields], ["Field 1", "Field 2"])
+        called = [(m, p) for m, p, _, _ in client.calls]
+        self.assertIn(("POST", "/api/v3/customfields/search"), called)
+
+    def test_fetch_contact_lists_falls_back_to_post_search(self) -> None:
+        client = ContactListPostSearchFakeApiClient()
+
+        lists = client.fetch_contact_lists()
+
+        self.assertEqual(lists, [{"id": "101", "name": "Stage A"}])
+        called = [(m, p) for m, p, _, _ in client.calls]
+        self.assertIn(("POST", "/api/v3/contactlists/search"), called)
 
 
 if __name__ == "__main__":

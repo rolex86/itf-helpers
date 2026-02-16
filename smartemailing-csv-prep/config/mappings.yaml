@@ -64,6 +64,7 @@ smartemailing:
   api:
     list_status: "confirmed"
     strict_custom_fields: true
+    required_min_custom_fields: 1
     canary_size: 50
     batch_size: 500
     max_contacts_safe: 2000
@@ -77,9 +78,17 @@ smartemailing:
     custom_fields_endpoint_candidates:
       - "/api/v3/customfields"
       - "/api/v3/custom-fields"
+      - "/api/v3/customfield"
+      - "/api/v3/custom-field"
+      - "/api/v3/customfields/list"
+      - "/api/v3/custom-fields/list"
+    custom_fields_search_endpoint_candidates: []
     contact_lists_endpoint_candidates:
       - "/api/v3/contactlists"
       - "/api/v3/contact-lists"
+    contact_lists_search_endpoint_candidates:
+      - "/api/v3/contactlists/search"
+      - "/api/v3/contact-lists/search"
     system_field_map:
       "E-mail": "emailaddress"
       "Jméno": "name"
