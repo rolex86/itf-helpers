@@ -51,11 +51,12 @@ st.sidebar.header("Nastavení")
 do_split_emails = st.sidebar.checkbox("Rozdělit více emailů na více řádků", value=True)
 do_split_names = st.sidebar.checkbox("Rozdělit jména (tituly/jméno/příjmení)", value=True)
 do_bucket_country = st.sidebar.checkbox("Rozdělit výstup podle země (CZ_SK / DE_AT_CH / EN)", value=True)
-output_encoding = st.sidebar.selectbox(
+output_encoding_label = st.sidebar.selectbox(
     "Kódování výstupních CSV",
-    options=["utf-8", "utf-8-sig", "cp1250"],
-    index=0,
+    options=["utf-8", "utf-8-sig", "cp120"],
+    index=2,
 )
+output_encoding = "cp1250" if output_encoding_label == "cp120" else output_encoding_label
 
 st.markdown("### 1) Schéma sloupců (volitelně upload exportu, jinak uložené schéma)")
 cached_schema = load_cached_schema(SCHEMA_CACHE_PATH)
@@ -207,7 +208,7 @@ if st.button("Vygenerovat importní CSV", type="primary", disabled=(schema is No
 
             zf.writestr("report.csv", dataframe_to_csv_bytes(report_df, sep=";", encoding=output_encoding))
     except UnicodeEncodeError as exc:
-        st.error(f"Vybrané kódování '{output_encoding}' neumí některé znaky v datech: {exc}")
+        st.error(f"Vybrané kódování '{output_encoding_label}' neumí některé znaky v datech: {exc}")
         st.stop()
     except ValueError as exc:
         st.error(str(exc))
