@@ -15,6 +15,7 @@ Aplikace pro přípravu importních CSV do SmartEmailingu:
 - API režimy: `Dry-run`, `Safe import`, `Full import`
 - Safe/Full import mají canary batch, limity a approval gates
 - Full import vyžaduje 4-eyes schválení (operátor + schvalovatel + schvalovací kód)
+- staging list lze vybrat přímo ze seznamu načteného ze SmartEmailingu API
 - app ukládá lokální job history do `config/job_history.jsonl` a zobrazuje alerty
 - exportuje ZIP: import_CZ_SK.csv, import_DE_AT_CH.csv, import_EN.csv + report.csv
 
