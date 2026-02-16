@@ -61,6 +61,28 @@ smartemailing:
     # volitelné aliasy -> cílový kód/sloupec ve SmartEmailing schématu
     code_aliases: {}
 
+  api:
+    list_status: "confirmed"
+    strict_custom_fields: true
+    canary_size: 50
+    batch_size: 500
+    max_contacts_safe: 2000
+    max_contacts_full: 10000
+    required_confirmation_phrase_safe: "SAFE IMPORT DO SMARTEMAILINGU"
+    required_confirmation_phrase_full: "FULL IMPORT DO SMARTEMAILINGU"
+    import_endpoint_candidates:
+      - "/api/v3/import"
+      - "/api/v3/imports"
+      - "/api/v3/import-contacts"
+    system_field_map:
+      "E-mail": "emailaddress"
+      "Jméno": "name"
+      "Příjmení": "surname"
+      "Společnost": "company"
+      "Město": "city"
+      "Země": "country"
+      "Poznámky": "notes"
+
 transforms:
   email:
     split_separators: [",", ";"]

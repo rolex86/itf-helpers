@@ -12,6 +12,10 @@ Aplikace pro přípravu importních CSV do SmartEmailingu:
 - umí zvolit kódování výstupních CSV (`utf-8`, `utf-8-sig`, `cp1250`)
 - umí deduplikovat emaily ve finálním exportu (`bez`, `první`, `poslední`)
 - report obsahuje i summary metriky kvality dat
+- API režimy: `Dry-run`, `Safe import`, `Full import`
+- Safe/Full import mají canary batch, limity a approval gates
+- Full import vyžaduje 4-eyes schválení (operátor + schvalovatel + schvalovací kód)
+- app ukládá lokální job history do `config/job_history.jsonl` a zobrazuje alerty
 - exportuje ZIP: import_CZ_SK.csv, import_DE_AT_CH.csv, import_EN.csv + report.csv
 
 ## Spuštění
@@ -32,6 +36,14 @@ streamlit run app.py
 V UI můžeš zapnout volbu `Načítat schéma přímo ze SmartEmailing API`.
 App používá `username + API key`, umí `ping`, stáhne custom fields a složí z nich cílové schéma.
 CSV upload zůstává jako fallback.
+
+### API import režimy
+
+- `API Dry-run`: validace + preview payloadu, nic neposílá.
+- `API Safe import`: import do staging prostoru, canary (default 50), limity, potvrzovací fráze.
+- `API Full import`: stejné jako Safe + 4-eyes schválení.
+
+M0 spike poznámky a endpoint strategie jsou v `docs/milestones/M0_api_spike.md`.
 
 ### Windows rychlý start
 

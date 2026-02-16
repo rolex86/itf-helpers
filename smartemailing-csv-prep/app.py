@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,11 +23,13 @@ from src.io_utils import clean_columns, read_csv_best_effort
 from src.normalize import detect_source, normalize_df
 from src.reporting import build_report, find_duplicates_from_stats
 from src.schema import Schema, schema_from_export_df
+from src.jobs import append_job_history, load_job_history, summarize_job_alerts
 from src.smartemailing_api import (
     DEFAULT_BASE_URL,
     SmartEmailingApiClient,
     SmartEmailingApiError,
     SmartEmailingCredentials,
+    build_api_contacts_from_import_df,
     combine_schema_columns,
 )
 from src.transforms import (
@@ -133,6 +136,32 @@ def fetch_schema_from_api(username: str, api_key: str, base_url: str) -> tuple[S
         "custom_field_count": len(custom_fields),
     }
     return schema, meta
+
+
+def to_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def api_issues_to_report_df(issues: list[dict[str, Any]]) -> pd.DataFrame:
+    if not issues:
+        return pd.DataFrame(
+            columns=["type", "row_index", "detail", "email_raw", "company", "source_file", "source_row_index"]
+        )
+
+    return pd.DataFrame(
+        {
+            "type": "api_payload_issue",
+            "row_index": [str(x.get("row_index", "")) for x in issues],
+            "detail": [f"{x.get('issue', '')}: {x.get('detail', '')}".strip(": ") for x in issues],
+            "email_raw": "",
+            "company": "",
+            "source_file": "",
+            "source_row_index": "",
+        }
+    )
 
 
 st.sidebar.header("Nastavení")
@@ -317,10 +346,172 @@ else:
 st.markdown("### 2) Nahraj zdrojové CSV soubory (1 nebo více)")
 source_files = st.file_uploader("Zdrojové CSV", type=["csv"], accept_multiple_files=True)
 
-can_load_schema_during_generate = use_api_schema and bool(str(api_username).strip()) and bool(str(api_key).strip())
-generate_disabled = (not source_files) or (schema is None and not can_load_schema_during_generate)
+st.markdown("### 3) Režim běhu")
+execution_mode_label = st.radio(
+    "Vyber akci po transformaci dat",
+    options=[
+        "CSV fallback export",
+        "API Dry-run (jen validace + preview)",
+        "API Safe import (staging + canary)",
+        "API Full import (approval gates + canary)",
+    ],
+    index=0,
+)
+execution_mode = {
+    "CSV fallback export": "csv_fallback",
+    "API Dry-run (jen validace + preview)": "api_dry_run",
+    "API Safe import (staging + canary)": "api_safe_import",
+    "API Full import (approval gates + canary)": "api_full_import",
+}[execution_mode_label]
 
-if st.button("Vygenerovat importní CSV", type="primary", disabled=generate_disabled):
+api_cfg = CFG.get("smartemailing", {}).get("api", {})
+api_mode_enabled = execution_mode != "csv_fallback"
+
+api_import_username = ""
+api_import_key = ""
+api_import_base_url = DEFAULT_BASE_URL
+staging_list_value = ""
+staging_tag = ""
+api_canary_size = to_int(api_cfg.get("canary_size", 50), 50)
+api_batch_size = to_int(api_cfg.get("batch_size", 500), 500)
+api_max_contacts_safe = to_int(api_cfg.get("max_contacts_safe", 2000), 2000)
+api_max_contacts_full = to_int(api_cfg.get("max_contacts_full", 10000), 10000)
+safe_confirm = False
+safe_phrase_input = ""
+full_confirm = False
+full_phrase_input = ""
+full_operator = ""
+full_approver = ""
+full_second_approval_input = ""
+
+if api_mode_enabled:
+    st.markdown("### 4) SmartEmailing API import")
+    if "api_contact_lists_cache" not in st.session_state:
+        st.session_state.api_contact_lists_cache = []
+    if "full_import_approval_code" not in st.session_state:
+        st.session_state.full_import_approval_code = hashlib.sha1(
+            datetime.now(timezone.utc).isoformat().encode("utf-8")
+        ).hexdigest()[:8].upper()
+
+    api_import_username = st.text_input(
+        "API username (pro import)",
+        value=str(api_username).strip() if str(api_username).strip() else "",
+    )
+    api_import_key = st.text_input(
+        "API key (pro import)",
+        value=str(api_key).strip() if str(api_key).strip() else "",
+        type="password",
+    )
+    api_import_base_url = st.text_input(
+        "API base URL (pro import)",
+        value=str(api_base_url).strip() if str(api_base_url).strip() else DEFAULT_BASE_URL,
+    )
+
+    load_lists = st.button("Načíst listy z API")
+    if load_lists:
+        try:
+            list_client = SmartEmailingApiClient(
+                SmartEmailingCredentials(
+                    username=str(api_import_username).strip(),
+                    api_key=str(api_import_key).strip(),
+                    base_url=str(api_import_base_url).strip() or DEFAULT_BASE_URL,
+                )
+            )
+            fetched_lists = list_client.fetch_contact_lists()
+            st.session_state.api_contact_lists_cache = fetched_lists
+            st.success(f"Načteno listů: {len(fetched_lists)}")
+        except Exception as exc:
+            st.error(f"Nepodařilo se načíst listy: {exc}")
+
+    lists_cache = st.session_state.get("api_contact_lists_cache", [])
+    if lists_cache:
+        list_options = [""] + [f"{x.get('name', '')} (id={x.get('id', '')})" for x in lists_cache]
+        selected_list_label = st.selectbox("Staging list (volitelně z cache)", options=list_options, index=0)
+        if selected_list_label:
+            label_to_id = {f"{x.get('name', '')} (id={x.get('id', '')})": str(x.get("id", "")).strip() for x in lists_cache}
+            staging_list_value = label_to_id.get(selected_list_label, "")
+
+    staging_list_value = st.text_input(
+        "Staging list ID nebo název (Safe/Full)",
+        value=staging_list_value,
+        help="Doporučeno: použít staging list, ne produkční list.",
+    )
+    staging_tag = st.text_input(
+        "Staging tag (volitelný)",
+        value="ITF_IMPORT_STAGING",
+        help="Některé účty podporují tagy v import payloadu.",
+    )
+
+    api_canary_size = int(
+        st.number_input(
+            "Canary velikost (první batch)",
+            min_value=0,
+            value=max(0, api_canary_size),
+            step=10,
+        )
+    )
+    api_batch_size = int(
+        st.number_input(
+            "Batch size",
+            min_value=1,
+            value=max(1, api_batch_size),
+            step=100,
+        )
+    )
+
+    if execution_mode == "api_safe_import":
+        safe_phrase_required = str(
+            api_cfg.get("required_confirmation_phrase_safe", "SAFE IMPORT DO SMARTEMAILINGU")
+        )
+        safe_confirm = st.checkbox(
+            "Rozumím dopadu: Safe import běží jen jako append/upsert, bez mazání.",
+            value=False,
+        )
+        safe_phrase_input = st.text_input(f"Opiš potvrzovací frázi: {safe_phrase_required}", value="")
+
+    if execution_mode == "api_full_import":
+        full_phrase_required = str(
+            api_cfg.get("required_confirmation_phrase_full", "FULL IMPORT DO SMARTEMAILINGU")
+        )
+        full_confirm = st.checkbox(
+            "Rozumím dopadu: Full import může přepsat více polí dle policy.",
+            value=False,
+        )
+        full_phrase_input = st.text_input(f"Opiš potvrzovací frázi: {full_phrase_required}", value="")
+        full_operator = st.text_input("Operátor (kdo import spouští)", value="")
+        full_approver = st.text_input("Schvalovatel (4-eyes)", value="")
+        approval_code = st.session_state.full_import_approval_code
+        full_second_approval_input = st.text_input(
+            f"Schvalovací kód (4-eyes): {approval_code}",
+            value="",
+        )
+        api_max_contacts_full = int(
+            st.number_input(
+                "Limit kontaktů pro Full import",
+                min_value=1,
+                value=max(1, api_max_contacts_full),
+                step=100,
+            )
+        )
+
+import_endpoint_candidates = [
+    str(x).strip()
+    for x in api_cfg.get("import_endpoint_candidates", ["/api/v3/import", "/api/v3/imports", "/api/v3/import-contacts"])
+    if str(x).strip()
+]
+strict_custom_fields = bool(api_cfg.get("strict_custom_fields", True))
+list_status = str(api_cfg.get("list_status", "confirmed")).strip() or "confirmed"
+
+can_load_schema_during_generate = use_api_schema and bool(str(api_username).strip()) and bool(str(api_key).strip())
+api_credentials_ready = bool(str(api_import_username).strip()) and bool(str(api_import_key).strip())
+generate_disabled = (not source_files) or (schema is None and not can_load_schema_during_generate) or (
+    api_mode_enabled and not api_credentials_ready
+)
+
+if api_mode_enabled and not api_credentials_ready:
+    st.warning("Pro API režim vyplň API username + API key.")
+
+if st.button("Spustit zpracování", type="primary", disabled=generate_disabled):
     active_schema = schema
     if use_api_schema and refresh_api_schema_on_generate:
         try:
@@ -349,6 +540,7 @@ if st.button("Vygenerovat importní CSV", type="primary", disabled=generate_disa
     if active_schema is None:
         st.error("Nelze pokračovat bez schématu sloupců.")
         st.stop()
+
     all_import_rows = []
     invalid_all = []
     unknown_all = []
@@ -476,21 +668,175 @@ if st.button("Vygenerovat importní CSV", type="primary", disabled=generate_disa
         "output_rows_EN": len(final_parts["EN"]),
         "output_rows_total": len(final_parts["CZ_SK"]) + len(final_parts["DE_AT_CH"]) + len(final_parts["EN"]),
     }
+    summary_metrics["execution_mode"] = execution_mode
+
+    api_contacts: list[dict[str, Any]] = []
+    api_contacts_preview: list[dict[str, Any]] = []
+    api_batch_results: list[dict[str, Any]] = []
+    api_issues: list[dict[str, Any]] = []
+    api_error = ""
+    api_status = "not_requested"
+    api_resolved_list_id = ""
+    api_ping = {}
+    extra_report_frames: list[pd.DataFrame] = []
+
+    if api_mode_enabled:
+        try:
+            client = SmartEmailingApiClient(
+                SmartEmailingCredentials(
+                    username=str(api_import_username).strip(),
+                    api_key=str(api_import_key).strip(),
+                    base_url=str(api_import_base_url).strip() or DEFAULT_BASE_URL,
+                )
+            )
+            api_ping = client.ping()
+            custom_fields = client.fetch_custom_fields()
+            api_resolved_list_id = client.resolve_contact_list_id(staging_list_value) if str(staging_list_value).strip() else ""
+
+            import_for_api = final_import_df.drop(columns=["country_bucket", "__row_order"], errors="ignore")
+            api_contacts, api_issues = build_api_contacts_from_import_df(
+                import_df=import_for_api,
+                api_system_field_map=api_cfg.get("system_field_map", {}),
+                custom_fields=custom_fields,
+                list_id=api_resolved_list_id,
+                list_status=list_status,
+                tag=str(staging_tag).strip(),
+                strict_custom_fields=strict_custom_fields,
+            )
+
+            api_contacts_preview = api_contacts[:50]
+            summary_metrics["api_ping_status"] = str(api_ping.get("status", "")) if isinstance(api_ping, dict) else ""
+            summary_metrics["api_custom_fields"] = len(custom_fields)
+            summary_metrics["api_contacts_prepared"] = len(api_contacts)
+            summary_metrics["api_payload_issues"] = len(api_issues)
+            summary_metrics["api_staging_list_id"] = api_resolved_list_id
+            summary_metrics["api_staging_tag"] = str(staging_tag).strip()
+
+            if api_issues:
+                extra_report_frames.append(api_issues_to_report_df(api_issues))
+
+            if execution_mode == "api_dry_run":
+                api_status = "dry_run_ok"
+            else:
+                max_contacts_limit = api_max_contacts_safe if execution_mode == "api_safe_import" else api_max_contacts_full
+                block_reason = ""
+                if len(api_contacts) == 0:
+                    block_reason = "API import je blokovaný: žádné kontakty k odeslání."
+                elif len(api_contacts) > max_contacts_limit:
+                    block_reason = (
+                        f"API import je blokovaný: počet kontaktů ({len(api_contacts)}) "
+                        f"překračuje limit režimu ({max_contacts_limit})."
+                    )
+                elif execution_mode == "api_safe_import":
+                    safe_phrase_required = str(
+                        api_cfg.get("required_confirmation_phrase_safe", "SAFE IMPORT DO SMARTEMAILINGU")
+                    )
+                    if not safe_confirm:
+                        block_reason = "Safe import je blokovaný: chybí potvrzení dopadu."
+                    elif safe_phrase_input.strip() != safe_phrase_required:
+                        block_reason = "Safe import je blokovaný: špatná potvrzovací fráze."
+                    elif not (api_resolved_list_id or str(staging_tag).strip()):
+                        block_reason = "Safe import je blokovaný: vyplň staging list nebo staging tag."
+                elif execution_mode == "api_full_import":
+                    full_phrase_required = str(
+                        api_cfg.get("required_confirmation_phrase_full", "FULL IMPORT DO SMARTEMAILINGU")
+                    )
+                    approval_code = str(st.session_state.get("full_import_approval_code", "")).strip()
+                    if not full_confirm:
+                        block_reason = "Full import je blokovaný: chybí potvrzení dopadu."
+                    elif full_phrase_input.strip() != full_phrase_required:
+                        block_reason = "Full import je blokovaný: špatná potvrzovací fráze."
+                    elif not full_operator.strip() or not full_approver.strip():
+                        block_reason = "Full import je blokovaný: vyplň operátora i schvalovatele."
+                    elif full_operator.strip().casefold() == full_approver.strip().casefold():
+                        block_reason = "Full import je blokovaný: operátor a schvalovatel musí být různé osoby (4-eyes)."
+                    elif full_second_approval_input.strip() != approval_code:
+                        block_reason = "Full import je blokovaný: neplatný schvalovací kód (4-eyes)."
+                    elif not (api_resolved_list_id or str(staging_tag).strip()):
+                        block_reason = "Full import je blokovaný: vyplň staging list nebo staging tag."
+
+                if block_reason:
+                    api_status = "blocked"
+                    extra_report_frames.append(
+                        pd.DataFrame(
+                            {
+                                "type": "api_blocked",
+                                "row_index": "",
+                                "detail": block_reason,
+                                "email_raw": "",
+                                "company": "",
+                                "source_file": "",
+                                "source_row_index": "",
+                            },
+                            index=[0],
+                        )
+                    )
+                    st.error(block_reason)
+                else:
+                    batch_results = client.import_contacts_canary(
+                        contacts=api_contacts,
+                        canary_size=api_canary_size,
+                        batch_size=api_batch_size,
+                        update_existing=True,
+                        skip_invalid_contacts=True,
+                        endpoint_candidates=import_endpoint_candidates,
+                    )
+                    api_batch_results = [
+                        {
+                            "endpoint": x.endpoint,
+                            "payload_variant": x.payload_variant,
+                            "sent_contacts": x.sent_contacts,
+                            "batch_index": x.batch_index,
+                            "canary": x.canary,
+                            "started_at": x.started_at,
+                            "finished_at": x.finished_at,
+                            "response": x.response,
+                        }
+                        for x in batch_results
+                    ]
+                    api_status = "import_ok"
+                    summary_metrics["api_batches"] = len(api_batch_results)
+                    summary_metrics["api_contacts_sent"] = int(sum(x["sent_contacts"] for x in api_batch_results))
+
+        except Exception as exc:
+            api_status = "failed"
+            api_error = str(exc)
+            summary_metrics["api_error"] = api_error
+            extra_report_frames.append(
+                pd.DataFrame(
+                    {
+                        "type": "api_error",
+                        "row_index": "",
+                        "detail": api_error,
+                        "email_raw": "",
+                        "company": "",
+                        "source_file": "",
+                        "source_row_index": "",
+                    },
+                    index=[0],
+                )
+            )
+            st.error(f"API část selhala: {exc}")
+
+    summary_metrics["api_status"] = api_status
 
     report_df = build_report(invalid_df, unknown_df, duplicates_df, summary_metrics=summary_metrics)
     if file_errors:
-        file_error_df = pd.DataFrame(
-            {
-                "type": "source_file_error",
-                "row_index": "",
-                "detail": [x["error"] for x in file_errors],
-                "email_raw": "",
-                "company": "",
-                "source_file": [x["source_file"] for x in file_errors],
-                "source_row_index": "",
-            }
+        extra_report_frames.append(
+            pd.DataFrame(
+                {
+                    "type": "source_file_error",
+                    "row_index": "",
+                    "detail": [x["error"] for x in file_errors],
+                    "email_raw": "",
+                    "company": "",
+                    "source_file": [x["source_file"] for x in file_errors],
+                    "source_row_index": "",
+                }
+            )
         )
-        report_df = pd.concat([report_df, file_error_df], ignore_index=True)
+    for frame in extra_report_frames:
+        report_df = pd.concat([report_df, frame], ignore_index=True)
 
     if processed_files == 0:
         st.warning("Nepodařilo se úspěšně zpracovat žádný zdrojový soubor. Zkontroluj report.")
@@ -506,6 +852,15 @@ if st.button("Vygenerovat importní CSV", type="primary", disabled=generate_disa
                 zf.writestr(out_name, csv_bytes)
 
             zf.writestr("report.csv", dataframe_to_csv_bytes(report_df, sep=";", encoding=output_encoding))
+            if api_mode_enabled:
+                zf.writestr(
+                    "api_contacts_preview.json",
+                    json.dumps(api_contacts_preview, ensure_ascii=False, indent=2).encode("utf-8"),
+                )
+                zf.writestr(
+                    "api_batch_results.json",
+                    json.dumps(api_batch_results, ensure_ascii=False, indent=2).encode("utf-8"),
+                )
     except UnicodeEncodeError as exc:
         st.error(f"Vybrané kódování '{output_encoding}' neumí některé znaky v datech: {exc}")
         st.stop()
@@ -520,6 +875,62 @@ if st.button("Vygenerovat importní CSV", type="primary", disabled=generate_disa
         file_name="smartemailing_import.zip",
         mime="application/zip",
     )
-
     st.markdown("### Report (náhled)")
     st.dataframe(report_df, use_container_width=True)
+
+    if api_mode_enabled:
+        st.markdown("### API výstup")
+        api_summary = {
+            "status": api_status,
+            "prepared_contacts": len(api_contacts),
+            "sent_contacts": int(sum(x.get("sent_contacts", 0) for x in api_batch_results)) if api_batch_results else 0,
+            "batches": len(api_batch_results),
+            "resolved_staging_list_id": api_resolved_list_id,
+            "staging_tag": str(staging_tag).strip(),
+            "api_error": api_error,
+        }
+        st.json(api_summary)
+        st.markdown("#### Canary/Batch výsledky")
+        st.dataframe(pd.DataFrame(api_batch_results), use_container_width=True)
+        st.markdown("#### Dry-run preview (prvních 50 kontaktů)")
+        st.json(api_contacts_preview)
+
+    try:
+        append_job_history(
+            {
+                "mode": execution_mode,
+                "status": api_status if api_mode_enabled else "csv_export_ok",
+                "schema_origin": schema_origin,
+                "source_files_total": len(source_files),
+                "source_files_processed": processed_files,
+                "source_files_failed": len(file_errors),
+                "output_rows_total": summary_metrics.get("output_rows_total", 0),
+                "api_contacts_prepared": len(api_contacts),
+                "api_contacts_sent": int(sum(x.get("sent_contacts", 0) for x in api_batch_results))
+                if api_batch_results
+                else 0,
+                "api_batches": len(api_batch_results),
+                "api_canary_size": api_canary_size if api_mode_enabled else 0,
+                "api_batch_size": api_batch_size if api_mode_enabled else 0,
+                "api_staging_list_id": api_resolved_list_id,
+                "api_staging_tag": str(staging_tag).strip(),
+                "error": api_error,
+            }
+        )
+    except Exception as exc:
+        st.warning(f"Nepodařilo se uložit job history: {exc}")
+
+st.markdown("### Job history")
+history_rows = load_job_history(limit=50)
+history_alerts = summarize_job_alerts(history_rows)
+if history_alerts["recent_failures"] >= 3:
+    st.error("Alert: posledních 10 jobů obsahuje 3+ failů.")
+elif history_alerts["failure_rate"] >= 0.3 and history_alerts["total"] >= 5:
+    st.warning("Alert: failure rate v historii je >= 30 %. Zkontroluj API konfiguraci a data.")
+else:
+    st.caption("Job history bez kritického alertu.")
+
+if history_rows:
+    st.dataframe(pd.DataFrame(history_rows), use_container_width=True)
+else:
+    st.caption("Job history je zatím prázdná.")
