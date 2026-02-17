@@ -16,7 +16,40 @@ CUSTOM_FIELDS_ENDPOINTS = ["/api/v3/customfields", "/api/v3/custom-fields"]
 CUSTOM_FIELDS_SEARCH_ENDPOINTS = ["/api/v3/customfields/search", "/api/v3/custom-fields/search"]
 CONTACT_LISTS_ENDPOINTS = ["/api/v3/contactlists", "/api/v3/contact-lists"]
 CONTACT_LISTS_SEARCH_ENDPOINTS = ["/api/v3/contactlists/search", "/api/v3/contact-lists/search"]
+CONTACTS_ENDPOINTS = ["/api/v3/contacts", "/api/v3/contact"]
+CONTACTS_SEARCH_ENDPOINTS = ["/api/v3/contacts/search", "/api/v3/contact/search"]
+CONTACT_CUSTOMFIELD_VALUES_ENDPOINTS = [
+    "/api/v3/contact-customfield-values",
+    "/api/v3/contactcustomfieldvalues",
+    "/api/v3/contact-customfields",
+    "/api/v3/contactcustomfields",
+    "/api/v3/customfield-values",
+    "/api/v3/customfieldvalues",
+]
+CONTACT_CUSTOMFIELD_VALUES_SEARCH_ENDPOINTS = [
+    "/api/v3/contact-customfield-values/search",
+    "/api/v3/contactcustomfieldvalues/search",
+    "/api/v3/contact-customfields/search",
+    "/api/v3/contactcustomfields/search",
+    "/api/v3/customfield-values/search",
+    "/api/v3/customfieldvalues/search",
+]
+DEFAULT_MANAGED_EMPTY_CUSTOM_FIELD_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_]{1,}$"
 IMPORT_CONTACTS_ENDPOINTS = ["/api/v3/import"]
+CONTACTS_IN_LIST_ENDPOINT_TEMPLATES = [
+    "/api/v3/contactlists/{list_id}/contacts",
+    "/api/v3/contact-lists/{list_id}/contacts",
+]
+CONTACTS_IN_LIST_SEARCH_ENDPOINT_TEMPLATES = [
+    "/api/v3/contactlists/{list_id}/contacts/search",
+    "/api/v3/contact-lists/{list_id}/contacts/search",
+]
+CONTACT_DETAIL_ENDPOINT_TEMPLATES = [
+    "/api/v3/contacts/{contact_id}",
+    "/api/v3/contacts/{id}",
+    "/api/v3/contact/{contact_id}",
+    "/api/v3/contact/{id}",
+]
 SYSTEM_FIELD_KEY_ALIASES = {
     "city": "town",
 }
@@ -111,6 +144,9 @@ def _extract_items(payload: Any) -> list[dict[str, Any]]:
         if isinstance(single, dict):
             candidates.append([single])
 
+    # Some endpoints return a single object at root level.
+    candidates.append([payload])
+
     for values in candidates:
         if not isinstance(values, list):
             continue
@@ -118,6 +154,21 @@ def _extract_items(payload: Any) -> list[dict[str, Any]]:
         if dict_items:
             return dict_items
     return []
+
+
+def _collect_contact_sources(item: dict[str, Any]) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = [item]
+    attrs = item.get("attributes")
+    if isinstance(attrs, dict):
+        sources.append(attrs)
+    for nested_key in ["data", "item", "contact", "record"]:
+        nested = item.get(nested_key)
+        if isinstance(nested, dict):
+            sources.append(nested)
+            nested_attrs = nested.get("attributes")
+            if isinstance(nested_attrs, dict):
+                sources.append(nested_attrs)
+    return sources
 
 
 def _pick_value(item: dict[str, Any], keys: list[str]) -> str:
@@ -184,6 +235,217 @@ def _pick_id(item: dict[str, Any], keys: list[str]) -> str:
         if as_str:
             return as_str
     return ""
+
+
+def _pick_raw_value(item: dict[str, Any], keys: list[str]) -> Any:
+    attrs = item.get("attributes")
+    attrs_dict = attrs if isinstance(attrs, dict) else {}
+    nested_dicts: list[dict[str, Any]] = []
+    for nested_key in ["data", "customfield", "custom_field", "contactlist", "contact_list", "item", "contact", "record"]:
+        nested = item.get(nested_key)
+        if isinstance(nested, dict):
+            nested_dicts.append(nested)
+    nested_attrs = [
+        nested.get("attributes") for nested in nested_dicts if isinstance(nested.get("attributes"), dict)
+    ]
+    for key in keys:
+        if key in item and item.get(key) not in [None, ""]:
+            return item.get(key)
+        if attrs_dict and key in attrs_dict and attrs_dict.get(key) not in [None, ""]:
+            return attrs_dict.get(key)
+        for nested in nested_dicts:
+            if key in nested and nested.get(key) not in [None, ""]:
+                return nested.get(key)
+        for nested_attr in nested_attrs:
+            if key in nested_attr and nested_attr.get(key) not in [None, ""]:
+                return nested_attr.get(key)
+    return None
+
+
+def _extract_customfields_from_contact_item(item: dict[str, Any]) -> list[dict[str, Any]]:
+    sources = _collect_contact_sources(item)
+
+    containers: list[Any] = []
+    for source in sources:
+        for key in ["customfields", "custom_fields"]:
+            value = source.get(key)
+            if value is not None:
+                containers.append(value)
+
+    custom_by_id: dict[str, Any] = {}
+
+    def add_custom_value(field_id: str, value: Any) -> None:
+        resolved_id = str(field_id).strip()
+        if not resolved_id or value in [None, ""]:
+            return
+        custom_by_id[resolved_id] = value
+
+    for container in containers:
+        if isinstance(container, list):
+            for raw_item in container:
+                if not isinstance(raw_item, dict):
+                    continue
+                field_id = _pick_id(raw_item, ["id", "customfield_id", "custom_field_id"])
+                field_value = _pick_raw_value(
+                    raw_item,
+                    ["value", "values", "customfield_value", "custom_field_value"],
+                )
+                if field_value is None:
+                    continue
+                add_custom_value(field_id, field_value)
+        elif isinstance(container, dict):
+            for key, value in container.items():
+                if isinstance(value, dict):
+                    field_id = _pick_id(value, ["id", "customfield_id", "custom_field_id"]) or str(key).strip()
+                    field_value = _pick_raw_value(
+                        value,
+                        ["value", "values", "customfield_value", "custom_field_value"],
+                    )
+                    if field_value is None:
+                        continue
+                    add_custom_value(field_id, field_value)
+                else:
+                    add_custom_value(str(key).strip(), value)
+
+    return [{"id": field_id, "value": value} for field_id, value in custom_by_id.items()]
+
+
+def _contact_item_has_customfields_key(item: dict[str, Any]) -> bool:
+    for source in _collect_contact_sources(item):
+        if "customfields" in source or "custom_fields" in source:
+            return True
+    return False
+
+
+def _extract_tags_from_contact_item(item: dict[str, Any]) -> list[str]:
+    sources = _collect_contact_sources(item)
+
+    tags: set[str] = set()
+    for source in sources:
+        raw_tags = source.get("tags")
+        if raw_tags is None:
+            continue
+        if isinstance(raw_tags, str):
+            value = raw_tags.strip()
+            if value:
+                tags.add(value)
+            continue
+        if isinstance(raw_tags, list):
+            for raw_tag in raw_tags:
+                if isinstance(raw_tag, dict):
+                    tag_value = _pick_value(raw_tag, ["name", "tag", "value", "title", "label"])
+                    if tag_value:
+                        tags.add(tag_value)
+                else:
+                    value = str(raw_tag).strip()
+                    if value:
+                        tags.add(value)
+    return sorted(tags)
+
+
+def extract_contacts(payload: Any) -> list[dict[str, Any]]:
+    system_keys = [
+        "name",
+        "surname",
+        "titlesbefore",
+        "titlesafter",
+        "company",
+        "town",
+        "city",
+        "country",
+        "notes",
+        "phone",
+        "mobile",
+        "street",
+        "address",
+        "zip",
+        "postalcode",
+        "state",
+    ]
+
+    by_email: dict[str, dict[str, Any]] = {}
+    for item in _extract_items(payload):
+        email = _pick_value(item, ["emailaddress", "email", "email_address"])
+        if not email:
+            continue
+        email_key = str(email).strip().casefold()
+        if not email_key:
+            continue
+
+        row = by_email.get(email_key, {"emailaddress": str(email).strip()})
+        contact_id = _pick_id(item, ["id", "contact_id"])
+        if contact_id and not str(row.get("id", "")).strip():
+            row["id"] = str(contact_id).strip()
+        for key in system_keys:
+            value = _pick_raw_value(item, [key])
+            if value in [None, ""]:
+                continue
+            value_str = str(value).strip()
+            if not value_str:
+                continue
+            resolved_key = SYSTEM_FIELD_KEY_ALIASES.get(key.casefold(), key)
+            if not str(row.get(resolved_key, "")).strip():
+                row[resolved_key] = value_str
+
+        extracted_custom_fields = _extract_customfields_from_contact_item(item)
+        if extracted_custom_fields:
+            merged_custom_map: dict[str, Any] = {
+                str(x.get("id", "")).strip(): x.get("value")
+                for x in row.get("customfields", [])
+                if isinstance(x, dict) and str(x.get("id", "")).strip()
+            }
+            for custom_field in extracted_custom_fields:
+                field_id = str(custom_field.get("id", "")).strip()
+                if not field_id:
+                    continue
+                merged_custom_map[field_id] = custom_field.get("value")
+            row["customfields"] = [{"id": field_id, "value": value} for field_id, value in merged_custom_map.items()]
+        elif _contact_item_has_customfields_key(item) and "customfields" not in row:
+            row["customfields"] = []
+
+        extracted_tags = _extract_tags_from_contact_item(item)
+        if extracted_tags:
+            merged_tags = {str(x).strip() for x in row.get("tags", []) if str(x).strip()}
+            merged_tags.update(extracted_tags)
+            row["tags"] = sorted(merged_tags)
+
+        by_email[email_key] = row
+
+    return list(by_email.values())
+
+
+def extract_contact_custom_field_values(payload: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for item in _extract_items(payload):
+        pair_id = _pick_id(item, ["id", "contact_customfield_value_id", "contactcustomfieldvalue_id"])
+        contact_id = _pick_id(item, ["contact_id", "contactid"])
+        customfield_id = _pick_id(item, ["customfield_id", "custom_field_id", "field_id"])
+        if not contact_id or not customfield_id:
+            continue
+
+        value = _pick_raw_value(item, ["value", "customfield_value", "custom_field_value"])
+        option_id = _pick_id(item, ["customfield_options_id", "custom_field_options_id", "option_id"])
+        if value in [None, ""] and option_id:
+            value = option_id
+        if value is None:
+            value = ""
+
+        dedupe_key = f"{contact_id}:{customfield_id}:{value}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        rows.append(
+            {
+                "pair_id": str(pair_id).strip(),
+                "contact_id": str(contact_id).strip(),
+                "customfield_id": str(customfield_id).strip(),
+                "value": value,
+            }
+        )
+
+    return rows
 
 
 def extract_custom_fields(payload: Any) -> list[dict[str, str]]:
@@ -288,6 +550,7 @@ def build_api_contacts_from_import_df(
     ignore_missing_custom_for_columns: Iterable[str] | None = None,
     array_custom_field_names: Iterable[str] | None = None,
     array_value_split_separators: Iterable[str] | None = None,
+    managed_empty_custom_field_name_pattern: str = DEFAULT_MANAGED_EMPTY_CUSTOM_FIELD_NAME_PATTERN,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Converts final import dataframe to API contact payload list.
@@ -305,6 +568,12 @@ def build_api_contacts_from_import_df(
         if str(x).strip()
     }
     array_value_split_separators_list = [str(x) for x in (array_value_split_separators or [",", ";", "|", "/"]) if str(x)]
+    managed_empty_name_regex = None
+    try:
+        if str(managed_empty_custom_field_name_pattern).strip():
+            managed_empty_name_regex = re.compile(str(managed_empty_custom_field_name_pattern).strip())
+    except Exception:
+        managed_empty_name_regex = None
 
     mapped_source_columns = {str(src).strip() for src in api_system_field_map.keys() if str(src).strip()}
     contacts: list[dict[str, Any]] = []
@@ -312,6 +581,7 @@ def build_api_contacts_from_import_df(
 
     for row_index, row in import_df.iterrows():
         contact: dict[str, Any] = {}
+        managed_custom_field_ids: set[str] = set()
 
         for source_col, api_key in api_system_field_map.items():
             src = str(source_col).strip()
@@ -337,11 +607,11 @@ def build_api_contacts_from_import_df(
         for col in import_df.columns:
             if col in mapped_source_columns:
                 continue
-            value = str(row.get(col, "")).strip()
-            if not value:
-                continue
             field = custom_fields_by_name.get(str(col).strip().casefold())
             if field is None:
+                value = str(row.get(col, "")).strip()
+                if not value:
+                    continue
                 if str(col).strip().casefold() in ignore_missing_custom_for_columns_set:
                     continue
                 if strict_custom_fields:
@@ -355,6 +625,14 @@ def build_api_contacts_from_import_df(
                 continue
 
             field_id = str(field.get("id", "")).strip()
+            value = str(row.get(col, "")).strip()
+            include_in_managed_set = bool(value)
+            if not include_in_managed_set and managed_empty_name_regex is not None:
+                include_in_managed_set = bool(managed_empty_name_regex.fullmatch(str(col).strip()))
+            if field_id and include_in_managed_set:
+                managed_custom_field_ids.add(field_id)
+            if not value:
+                continue
             if field_id:
                 field_value: Any = value
                 if _custom_field_expects_array(field, forced_array_custom_field_names):
@@ -374,6 +652,8 @@ def build_api_contacts_from_import_df(
 
         if custom_values:
             contact["customfields"] = custom_values
+        if managed_custom_field_ids:
+            contact["__managed_custom_field_ids"] = sorted(managed_custom_field_ids)
 
         if list_id:
             contact["contactlists"] = [{"id": list_id, "status": list_status}]
@@ -652,6 +932,302 @@ class SmartEmailingApiClient:
             raise last_error
         raise SmartEmailingApiError("Nepodařilo se načíst contact listy ze SmartEmailing API.")
 
+    def fetch_contacts(
+        self,
+        page_limit: int = 100,
+        max_pages: int = 100,
+        endpoint_candidates: list[str] | None = None,
+        search_endpoint_candidates: list[str] | None = None,
+        email_keys_filter: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        get_endpoints = CONTACTS_ENDPOINTS if endpoint_candidates is None else endpoint_candidates
+        post_endpoints = CONTACTS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
+
+        wanted = {
+            str(x).strip().casefold()
+            for x in (email_keys_filter or set())
+            if str(x).strip()
+        }
+        by_email: dict[str, dict[str, Any]] = {}
+        any_success = False
+        last_error: SmartEmailingApiError | None = None
+
+        def merge_rows(rows: list[dict[str, Any]]) -> None:
+            for row in rows:
+                email_key = str(row.get("emailaddress", "")).strip().casefold()
+                if not email_key:
+                    continue
+                if wanted and email_key not in wanted:
+                    continue
+                existing = by_email.get(email_key)
+                if existing is None:
+                    by_email[email_key] = row
+                    continue
+                existing_has_cf = isinstance(existing.get("customfields"), list)
+                row_has_cf = isinstance(row.get("customfields"), list)
+                if row_has_cf and not existing_has_cf:
+                    by_email[email_key] = row
+                    continue
+                merged = dict(existing)
+                for key, value in row.items():
+                    if value in [None, "", []]:
+                        continue
+                    if key == "customfields" and existing_has_cf and not row_has_cf:
+                        continue
+                    merged[key] = value
+                by_email[email_key] = merged
+
+        for endpoint in get_endpoints:
+            try:
+                rows = self._fetch_paginated_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_contacts,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                merge_rows(rows)
+                any_success = True
+                if wanted and len(by_email) >= len(wanted):
+                    return list(by_email.values())
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                last_error = exc
+                continue
+
+        for endpoint in post_endpoints:
+            try:
+                rows = self._fetch_paginated_post_search_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_contacts,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                merge_rows(rows)
+                any_success = True
+                if wanted and len(by_email) >= len(wanted):
+                    return list(by_email.values())
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                last_error = exc
+                continue
+
+        if any_success:
+            return list(by_email.values())
+        if last_error is not None:
+            raise last_error
+        raise SmartEmailingApiError("Nepodařilo se načíst kontakty ze SmartEmailing API.")
+
+    def fetch_contacts_by_emails(
+        self,
+        email_keys: set[str],
+        endpoint_candidates: list[str] | None = None,
+        search_endpoint_candidates: list[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        get_endpoints = CONTACTS_ENDPOINTS if endpoint_candidates is None else endpoint_candidates
+        post_endpoints = CONTACTS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
+
+        wanted = {
+            str(x).strip().casefold()
+            for x in (email_keys or set())
+            if str(x).strip()
+        }
+        found: dict[str, dict[str, Any]] = {}
+
+        def pick_matching_contact(payload: Any, email_key: str) -> dict[str, Any] | None:
+            rows = extract_contacts(payload)
+            for row in rows:
+                row_email_key = str(row.get("emailaddress", "")).strip().casefold()
+                if row_email_key == email_key:
+                    return row
+            return None
+
+        def search_one_email(email_key: str) -> dict[str, Any] | None:
+            include_variants = [
+                {},
+                {"include": "customfields"},
+                {"expand": "customfields"},
+                {"with": "customfields"},
+                {"customfields": 1},
+            ]
+            query_base_variants = [
+                {"emailaddress": email_key},
+                {"email": email_key},
+                {"search": email_key},
+                {"query": email_key},
+                {"q": email_key},
+            ]
+            for endpoint in get_endpoints:
+                for base_query in query_base_variants:
+                    for include_extra in include_variants:
+                        query = dict(base_query)
+                        query.update(include_extra)
+                        try:
+                            payload = self._request_json("GET", endpoint, query=query)
+                        except SmartEmailingApiError as exc:
+                            if exc.status_code in {401, 403}:
+                                raise
+                            continue
+                        matched = pick_matching_contact(payload, email_key)
+                        if matched is not None:
+                            return matched
+
+            body_base_variants = [
+                {"emailaddress": email_key},
+                {"email": email_key},
+                {"search": {"emailaddress": email_key}},
+                {"search": {"email": email_key}},
+                {"filter": {"emailaddress": email_key}},
+                {"filter": {"email": email_key}},
+                {"where": {"emailaddress": email_key}},
+                {"where": {"email": email_key}},
+                {"query": email_key},
+            ]
+            for endpoint in post_endpoints:
+                for base_body in body_base_variants:
+                    for include_extra in include_variants:
+                        body = dict(base_body)
+                        body.update(include_extra)
+                        try:
+                            payload = self._request_json("POST", endpoint, body=body)
+                        except SmartEmailingApiError as exc:
+                            if exc.status_code in {401, 403}:
+                                raise
+                            continue
+                        matched = pick_matching_contact(payload, email_key)
+                        if matched is not None:
+                            return matched
+            return None
+
+        for email_key in sorted(wanted):
+            if email_key in found:
+                continue
+            matched = search_one_email(email_key)
+            if matched is not None:
+                found[email_key] = matched
+
+        return found
+
+    def fetch_custom_field_values_for_contacts(
+        self,
+        contact_ids: set[str],
+        page_limit: int = 100,
+        max_pages: int = 100,
+        endpoint_candidates: list[str] | None = None,
+        search_endpoint_candidates: list[str] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        wanted_ids = {str(x).strip() for x in (contact_ids or set()) if str(x).strip()}
+        if not wanted_ids:
+            return {}
+
+        get_endpoints = (
+            CONTACT_CUSTOMFIELD_VALUES_ENDPOINTS if endpoint_candidates is None else endpoint_candidates
+        )
+        post_endpoints = (
+            CONTACT_CUSTOMFIELD_VALUES_SEARCH_ENDPOINTS
+            if search_endpoint_candidates is None
+            else search_endpoint_candidates
+        )
+
+        by_contact_id: dict[str, dict[str, dict[str, Any]]] = {contact_id: {} for contact_id in wanted_ids}
+
+        def merge_rows(rows: list[dict[str, Any]]) -> None:
+            for row in rows:
+                contact_id = str(row.get("contact_id", "")).strip()
+                field_id = str(row.get("customfield_id", "")).strip()
+                if not contact_id or not field_id or contact_id not in wanted_ids:
+                    continue
+                value = row.get("value")
+                pair_id = str(row.get("pair_id", "")).strip()
+                by_contact_id.setdefault(contact_id, {})
+                by_contact_id[contact_id][field_id] = {"value": value, "pair_id": pair_id}
+
+        for endpoint in get_endpoints:
+            try:
+                rows = self._fetch_paginated_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_contact_custom_field_values,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                merge_rows(rows)
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                continue
+
+        body_variants_bulk: list[dict[str, Any]] = [
+            {"contact_ids": sorted(wanted_ids)},
+            {"contact_ids": [int(x) for x in sorted(wanted_ids) if str(x).isdigit()]},
+            {"search": {"contact_ids": sorted(wanted_ids)}},
+            {"filter": {"contact_ids": sorted(wanted_ids)}},
+            {"where": {"contact_ids": sorted(wanted_ids)}},
+        ]
+        body_variants_bulk = [x for x in body_variants_bulk if x]
+
+        for endpoint in post_endpoints:
+            for base_body in body_variants_bulk:
+                try:
+                    rows = self._fetch_paginated_post_search_from_endpoint_custom_body(
+                        path=endpoint,
+                        item_extractor=extract_contact_custom_field_values,
+                        page_limit=page_limit,
+                        max_pages=max_pages,
+                        base_body=base_body,
+                    )
+                    merge_rows(rows)
+                except SmartEmailingApiError as exc:
+                    if exc.status_code in {401, 403}:
+                        raise
+                    continue
+
+        missing_ids = [x for x in sorted(wanted_ids) if not by_contact_id.get(x)]
+        if missing_ids:
+            for endpoint in post_endpoints:
+                for contact_id in missing_ids:
+                    body_variants_single: list[dict[str, Any]] = [
+                        {"contact_id": contact_id},
+                        {"contact_id": int(contact_id)} if str(contact_id).isdigit() else {},
+                        {"search": {"contact_id": contact_id}},
+                        {"filter": {"contact_id": contact_id}},
+                        {"where": {"contact_id": contact_id}},
+                    ]
+                    body_variants_single = [x for x in body_variants_single if x]
+                    for base_body in body_variants_single:
+                        try:
+                            rows = self._fetch_paginated_post_search_from_endpoint_custom_body(
+                                path=endpoint,
+                                item_extractor=extract_contact_custom_field_values,
+                                page_limit=page_limit,
+                                max_pages=max_pages,
+                                base_body=base_body,
+                            )
+                            merge_rows(rows)
+                            if by_contact_id.get(contact_id):
+                                break
+                        except SmartEmailingApiError as exc:
+                            if exc.status_code in {401, 403}:
+                                raise
+                            continue
+                    if by_contact_id.get(contact_id):
+                        continue
+
+        result: dict[str, list[dict[str, Any]]] = {}
+        for contact_id, field_map in by_contact_id.items():
+            if not field_map:
+                continue
+            result[contact_id] = [
+                {
+                    "id": str(field_id).strip(),
+                    "value": value_data.get("value"),
+                    "pair_id": str(value_data.get("pair_id", "")).strip(),
+                }
+                for field_id, value_data in field_map.items()
+                if str(field_id).strip()
+            ]
+        return result
+
     def resolve_contact_list_id(
         self,
         list_name_or_id: str,
@@ -672,6 +1248,129 @@ class SmartEmailingApiClient:
             if str(item.get("name", "")).strip().casefold() == lower_wanted:
                 return str(item.get("id", "")).strip()
         return ""
+
+    def fetch_contacts_in_list(
+        self,
+        list_id: str,
+        page_limit: int = 100,
+        max_pages: int = 100,
+        endpoint_templates: list[str] | None = None,
+        search_endpoint_templates: list[str] | None = None,
+        detail_endpoint_templates: list[str] | None = None,
+        enrich_only_email_keys: set[str] | None = None,
+        contacts_endpoint_candidates: list[str] | None = None,
+        contacts_search_endpoint_candidates: list[str] | None = None,
+        custom_field_values_endpoint_candidates: list[str] | None = None,
+        custom_field_values_search_endpoint_candidates: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        resolved_list_id = str(list_id).strip()
+        if not resolved_list_id:
+            return []
+
+        get_templates = (
+            CONTACTS_IN_LIST_ENDPOINT_TEMPLATES if endpoint_templates is None else endpoint_templates
+        )
+        post_templates = (
+            CONTACTS_IN_LIST_SEARCH_ENDPOINT_TEMPLATES
+            if search_endpoint_templates is None
+            else search_endpoint_templates
+        )
+        get_endpoints = self._resolve_list_id_endpoint_templates(get_templates, resolved_list_id)
+        post_endpoints = self._resolve_list_id_endpoint_templates(post_templates, resolved_list_id)
+
+        best_rows: list[dict[str, Any]] = []
+        any_success = False
+        last_error: SmartEmailingApiError | None = None
+
+        for endpoint in get_endpoints:
+            try:
+                rows = self._fetch_paginated_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_contacts,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                any_success = True
+                if len(rows) > len(best_rows):
+                    best_rows = rows
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                last_error = exc
+                continue
+
+        for endpoint in post_endpoints:
+            try:
+                rows = self._fetch_paginated_post_search_from_endpoint(
+                    path=endpoint,
+                    item_extractor=extract_contacts,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                )
+                any_success = True
+                if len(rows) > len(best_rows):
+                    best_rows = rows
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
+                    raise
+                last_error = exc
+                continue
+
+        if any_success:
+            return self._enrich_contacts_with_contact_details(
+                contacts=best_rows,
+                detail_endpoint_templates=detail_endpoint_templates,
+                enrich_only_email_keys=enrich_only_email_keys,
+                page_limit=page_limit,
+                max_pages=max_pages,
+                contacts_endpoint_candidates=contacts_endpoint_candidates,
+                contacts_search_endpoint_candidates=contacts_search_endpoint_candidates,
+                custom_field_values_endpoint_candidates=custom_field_values_endpoint_candidates,
+                custom_field_values_search_endpoint_candidates=custom_field_values_search_endpoint_candidates,
+            )
+        if last_error is not None:
+            raise last_error
+        raise SmartEmailingApiError(
+            f"Nepodařilo se načíst kontakty ze seznamu {resolved_list_id} ze SmartEmailing API."
+        )
+
+    def fetch_contact_details_by_ids(
+        self,
+        contact_ids: list[str],
+        endpoint_templates: list[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        templates = CONTACT_DETAIL_ENDPOINT_TEMPLATES if endpoint_templates is None else endpoint_templates
+        details: dict[str, dict[str, Any]] = {}
+        seen: set[str] = set()
+
+        for raw_contact_id in contact_ids:
+            contact_id = str(raw_contact_id).strip()
+            if not contact_id or contact_id in seen:
+                continue
+            seen.add(contact_id)
+
+            endpoints = self._resolve_contact_id_endpoint_templates(templates, contact_id)
+            for endpoint in endpoints:
+                try:
+                    payload = self._request_json("GET", endpoint)
+                except SmartEmailingApiError as exc:
+                    if exc.status_code in {401, 403}:
+                        raise
+                    if exc.status_code in {404, 405}:
+                        continue
+                    continue
+
+                contacts = extract_contacts(payload)
+                if not contacts:
+                    continue
+                contact = contacts[0]
+                resolved_id = str(contact.get("id", "")).strip() or contact_id
+                contact["id"] = resolved_id
+                details[contact_id] = contact
+                details[resolved_id] = contact
+                break
+
+        return details
 
     def import_contacts_batch(
         self,
@@ -755,6 +1454,8 @@ class SmartEmailingApiClient:
             for key, value in contact.items():
                 key_s = str(key).strip()
                 if not key_s:
+                    continue
+                if key_s.startswith("__"):
                     continue
                 if key_s in {"customfields", "contactlists", "tags"}:
                     continue
@@ -1154,6 +1855,43 @@ class SmartEmailingApiClient:
 
         return rows
 
+    def _fetch_paginated_post_search_from_endpoint_custom_body(
+        self,
+        path: str,
+        item_extractor: Callable[[Any], list[dict[str, Any]]],
+        page_limit: int,
+        max_pages: int,
+        base_body: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for page in range(1, max_pages + 1):
+            body = {"page": page, "limit": page_limit}
+            body.update(base_body or {})
+            payload = self._request_json("POST", path, body=body)
+            page_rows = item_extractor(payload)
+            added_new = False
+            for row in page_rows:
+                dedupe_key = "|".join([str(v).strip() for v in row.values()])
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                rows.append(row)
+                added_new = True
+
+            has_more = self._has_more_pages(payload, current_page=page, limit=page_limit, received_count=len(page_rows))
+            if has_more:
+                continue
+            if self._has_explicit_pagination_meta(payload):
+                break
+            if len(page_rows) == 0:
+                break
+            if not added_new:
+                break
+
+        return rows
+
     @staticmethod
     def _has_more_pages(payload: Any, current_page: int, limit: int, received_count: int) -> bool:
         if isinstance(payload, dict):
@@ -1214,6 +1952,186 @@ class SmartEmailingApiClient:
             out.append(row)
         return out
 
+    def _enrich_contacts_with_contact_details(
+        self,
+        contacts: list[dict[str, Any]],
+        detail_endpoint_templates: list[str] | None = None,
+        enrich_only_email_keys: set[str] | None = None,
+        page_limit: int = 100,
+        max_pages: int = 100,
+        contacts_endpoint_candidates: list[str] | None = None,
+        contacts_search_endpoint_candidates: list[str] | None = None,
+        custom_field_values_endpoint_candidates: list[str] | None = None,
+        custom_field_values_search_endpoint_candidates: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        if not contacts:
+            return contacts
+
+        filter_keys = {
+            str(x).strip().casefold()
+            for x in (enrich_only_email_keys or set())
+            if str(x).strip()
+        }
+        candidates: list[dict[str, Any]] = []
+        for row in contacts:
+            email_key = str(row.get("emailaddress", "")).strip().casefold()
+            if filter_keys and email_key not in filter_keys:
+                continue
+            candidates.append(row)
+
+        email_to_detail: dict[str, dict[str, Any]] = {}
+        for row in candidates:
+            if not isinstance(row.get("customfields"), list):
+                continue
+            email_key = str(row.get("emailaddress", "")).strip().casefold()
+            if email_key and email_key not in email_to_detail:
+                email_to_detail[email_key] = dict(row)
+
+        candidate_ids = [str(row.get("id", "")).strip() for row in candidates if str(row.get("id", "")).strip()]
+        detail_map: dict[str, dict[str, Any]] = {}
+        if candidate_ids:
+            detail_map = self.fetch_contact_details_by_ids(
+                contact_ids=candidate_ids,
+                endpoint_templates=detail_endpoint_templates,
+            )
+        for detail in detail_map.values():
+            email_key = str(detail.get("emailaddress", "")).strip().casefold()
+            if email_key and email_key not in email_to_detail:
+                email_to_detail[email_key] = detail
+
+        unresolved_email_keys = {
+            str(row.get("emailaddress", "")).strip().casefold()
+            for row in candidates
+            if str(row.get("emailaddress", "")).strip()
+            and str(row.get("emailaddress", "")).strip().casefold() not in email_to_detail
+        }
+
+        if unresolved_email_keys:
+            try:
+                targeted_contacts = self.fetch_contacts_by_emails(
+                    email_keys=unresolved_email_keys,
+                    endpoint_candidates=contacts_endpoint_candidates,
+                    search_endpoint_candidates=contacts_search_endpoint_candidates,
+                )
+                for email_key, targeted_contact in targeted_contacts.items():
+                    if email_key:
+                        email_to_detail[email_key] = targeted_contact
+            except Exception:
+                # Best-effort enrichment only.
+                pass
+
+        unresolved_email_keys = {
+            x for x in unresolved_email_keys if x and x not in email_to_detail
+        }
+
+        if unresolved_email_keys:
+            try:
+                fallback_contacts = self.fetch_contacts(
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                    endpoint_candidates=contacts_endpoint_candidates,
+                    search_endpoint_candidates=contacts_search_endpoint_candidates,
+                    email_keys_filter=unresolved_email_keys,
+                )
+                for fallback_contact in fallback_contacts:
+                    email_key = str(fallback_contact.get("emailaddress", "")).strip().casefold()
+                    if email_key:
+                        email_to_detail[email_key] = fallback_contact
+            except Exception:
+                # Best-effort enrichment only.
+                pass
+
+        target_ids: set[str] = set()
+        for row in candidates:
+            row_id = str(row.get("id", "")).strip()
+            if row_id:
+                target_ids.add(row_id)
+        for detail in email_to_detail.values():
+            detail_id = str(detail.get("id", "")).strip()
+            if detail_id:
+                target_ids.add(detail_id)
+
+        if target_ids:
+            try:
+                values_by_contact_id = self.fetch_custom_field_values_for_contacts(
+                    contact_ids=target_ids,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                    endpoint_candidates=custom_field_values_endpoint_candidates,
+                    search_endpoint_candidates=custom_field_values_search_endpoint_candidates,
+                )
+            except Exception:
+                values_by_contact_id = {}
+
+            if values_by_contact_id:
+                for email_key, detail in list(email_to_detail.items()):
+                    detail_id = str(detail.get("id", "")).strip()
+                    if not detail_id:
+                        continue
+                    values = values_by_contact_id.get(detail_id, [])
+                    if not values:
+                        continue
+                    existing_values = detail.get("customfields", [])
+                    merged_map: dict[str, Any] = {}
+                    if isinstance(existing_values, list):
+                        for item in existing_values:
+                            if not isinstance(item, dict):
+                                continue
+                            field_id = str(item.get("id", "")).strip()
+                            if field_id:
+                                merged_map[field_id] = item.get("value")
+                    for item in values:
+                        field_id = str(item.get("id", "")).strip()
+                        if field_id:
+                            merged_map[field_id] = item.get("value")
+                    detail["customfields"] = [
+                        {"id": field_id, "value": value}
+                        for field_id, value in merged_map.items()
+                        if str(field_id).strip()
+                    ]
+                    email_to_detail[email_key] = detail
+
+        if not email_to_detail:
+            return contacts
+
+        merged: list[dict[str, Any]] = []
+        for row in contacts:
+            row_id = str(row.get("id", "")).strip()
+            row_email_key = str(row.get("emailaddress", "")).strip().casefold()
+            detail = detail_map.get(row_id)
+            if not detail:
+                detail = email_to_detail.get(row_email_key)
+            if not detail:
+                merged.append(row)
+                continue
+            merged_row = dict(row)
+            for key in [
+                "customfields",
+                "tags",
+                "name",
+                "surname",
+                "titlesbefore",
+                "titlesafter",
+                "company",
+                "town",
+                "country",
+                "notes",
+                "phone",
+                "mobile",
+                "street",
+                "address",
+                "zip",
+                "postalcode",
+                "state",
+            ]:
+                value = detail.get(key)
+                if value in [None, "", []]:
+                    continue
+                merged_row[key] = value
+            merged.append(merged_row)
+
+        return merged
+
     @staticmethod
     def _has_explicit_pagination_meta(payload: Any) -> bool:
         if not isinstance(payload, dict):
@@ -1223,3 +2141,35 @@ class SmartEmailingApiClient:
             return False
         keys = {"total_pages", "page_count", "last_page", "next_page", "total_count", "total"}
         return any(key in meta for key in keys)
+
+    @staticmethod
+    def _resolve_list_id_endpoint_templates(templates: Iterable[str], list_id: str) -> list[str]:
+        safe_list_id = parse.quote(str(list_id).strip(), safe="")
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for template in templates:
+            template_str = str(template).strip()
+            if not template_str:
+                continue
+            path = template_str.replace("{list_id}", safe_list_id)
+            if path in seen:
+                continue
+            seen.add(path)
+            resolved.append(path)
+        return resolved
+
+    @staticmethod
+    def _resolve_contact_id_endpoint_templates(templates: Iterable[str], contact_id: str) -> list[str]:
+        safe_contact_id = parse.quote(str(contact_id).strip(), safe="")
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for template in templates:
+            template_str = str(template).strip()
+            if not template_str:
+                continue
+            path = template_str.replace("{contact_id}", safe_contact_id).replace("{id}", safe_contact_id)
+            if path in seen:
+                continue
+            seen.add(path)
+            resolved.append(path)
+        return resolved

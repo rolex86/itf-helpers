@@ -69,6 +69,12 @@ smartemailing:
     batch_size: 500
     max_contacts_safe: 2000
     max_contacts_full: 10000
+    diff_preflight_enabled: true
+    diff_send_only_changes: true
+    diff_fallback_send_all_on_error: true
+    clear_removed_program_custom_fields_enabled: true
+    diff_page_limit: 100
+    diff_max_pages: 100
     required_confirmation_phrase_full: "FULL IMPORT DO SMARTEMAILINGU"
     import_endpoint_candidates:
       - "/api/v3/import"
@@ -96,6 +102,38 @@ smartemailing:
     contact_lists_search_endpoint_candidates:
       - "/api/v3/contactlists/search"
       - "/api/v3/contact-lists/search"
+    contacts_in_list_endpoint_templates:
+      - "/api/v3/contactlists/{list_id}/contacts"
+      - "/api/v3/contact-lists/{list_id}/contacts"
+    contacts_in_list_search_endpoint_templates:
+      - "/api/v3/contactlists/{list_id}/contacts/search"
+      - "/api/v3/contact-lists/{list_id}/contacts/search"
+    contacts_detail_endpoint_templates:
+      - "/api/v3/contacts/{contact_id}"
+      - "/api/v3/contacts/{id}"
+      - "/api/v3/contact/{contact_id}"
+      - "/api/v3/contact/{id}"
+    contacts_endpoint_candidates:
+      - "/api/v3/contacts"
+      - "/api/v3/contact"
+    contacts_search_endpoint_candidates:
+      - "/api/v3/contacts/search"
+      - "/api/v3/contact/search"
+    contact_custom_field_values_endpoint_candidates:
+      - "/api/v3/contact-customfield-values"
+      - "/api/v3/contactcustomfieldvalues"
+      - "/api/v3/contact-customfields"
+      - "/api/v3/contactcustomfields"
+      - "/api/v3/customfield-values"
+      - "/api/v3/customfieldvalues"
+    contact_custom_field_values_search_endpoint_candidates:
+      - "/api/v3/contact-customfield-values/search"
+      - "/api/v3/contactcustomfieldvalues/search"
+      - "/api/v3/contact-customfields/search"
+      - "/api/v3/contactcustomfields/search"
+      - "/api/v3/customfield-values/search"
+      - "/api/v3/customfieldvalues/search"
+    managed_empty_custom_field_name_pattern: "^[A-Za-z][A-Za-z0-9_]{1,}$"
     system_field_map:
       "E-mail": "emailaddress"
       "Jméno": "name"
