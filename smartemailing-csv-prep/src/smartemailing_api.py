@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, List
@@ -356,11 +357,13 @@ def extract_contacts(payload: Any) -> list[dict[str, Any]]:
         "notes",
         "phone",
         "mobile",
+        "cellphone",
         "street",
         "address",
         "zip",
         "postalcode",
         "state",
+        "blacklisted",
     ]
 
     by_email: dict[str, dict[str, Any]] = {}
@@ -503,6 +506,46 @@ def combine_schema_columns(system_columns: Iterable[str], custom_field_columns: 
     return out
 
 
+def _unique_ordered(values: Iterable[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = str(raw).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _reorder_preferred(values: list[str], preferred: str) -> list[str]:
+    out = _unique_ordered(values)
+    preferred_value = str(preferred).strip()
+    if preferred_value and preferred_value in out:
+        out.remove(preferred_value)
+        out.insert(0, preferred_value)
+    return out
+
+
+def _chunked(values: list[str], chunk_size: int) -> list[list[str]]:
+    size = max(1, int(chunk_size))
+    return [values[i : i + size] for i in range(0, len(values), size)]
+
+
+def _is_truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return int(value) != 0
+        except Exception:
+            return bool(value)
+    normalized = str(value).strip().casefold()
+    if not normalized:
+        return False
+    return normalized in {"1", "true", "yes", "y", "on", "ano", "blacklisted", "blocked"}
+
+
 def _custom_field_expects_array(
     field: dict[str, str],
     forced_array_custom_field_names: set[str],
@@ -551,6 +594,7 @@ def build_api_contacts_from_import_df(
     array_custom_field_names: Iterable[str] | None = None,
     array_value_split_separators: Iterable[str] | None = None,
     managed_empty_custom_field_name_pattern: str = DEFAULT_MANAGED_EMPTY_CUSTOM_FIELD_NAME_PATTERN,
+    managed_custom_field_ids_allowlist: Iterable[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Converts final import dataframe to API contact payload list.
@@ -565,6 +609,12 @@ def build_api_contacts_from_import_df(
     forced_array_custom_field_names = {
         str(x).strip().casefold()
         for x in (array_custom_field_names or [])
+        if str(x).strip()
+    }
+    has_managed_allowlist = managed_custom_field_ids_allowlist is not None
+    managed_custom_field_allowlist_ids = {
+        str(x).strip()
+        for x in (managed_custom_field_ids_allowlist or [])
         if str(x).strip()
     }
     array_value_split_separators_list = [str(x) for x in (array_value_split_separators or [",", ";", "|", "/"]) if str(x)]
@@ -626,9 +676,13 @@ def build_api_contacts_from_import_df(
 
             field_id = str(field.get("id", "")).strip()
             value = str(row.get(col, "")).strip()
-            include_in_managed_set = bool(value)
-            if not include_in_managed_set and managed_empty_name_regex is not None:
-                include_in_managed_set = bool(managed_empty_name_regex.fullmatch(str(col).strip()))
+            include_in_managed_set = False
+            if has_managed_allowlist:
+                include_in_managed_set = bool(field_id and field_id in managed_custom_field_allowlist_ids)
+            else:
+                include_in_managed_set = bool(value)
+                if not include_in_managed_set and managed_empty_name_regex is not None:
+                    include_in_managed_set = bool(managed_empty_name_regex.fullmatch(str(col).strip()))
             if field_id and include_in_managed_set:
                 managed_custom_field_ids.add(field_id)
             if not value:
@@ -672,6 +726,16 @@ class SmartEmailingApiClient:
         self.credentials = credentials
         self.base_url = normalize_base_url(credentials.base_url)
         self.timeout_sec = int(timeout_sec)
+        self._import_preferred_endpoint: str = ""
+        self._import_preferred_payload_variant: str = ""
+        self._contacts_lookup_preferred_get_endpoint: str = ""
+        self._contacts_lookup_preferred_post_endpoint: str = ""
+        self._contacts_lookup_preferred_query_key: str = ""
+        self._contacts_lookup_preferred_include_key: str = ""
+        self._contacts_lookup_preferred_body_variant: str = ""
+        self._contacts_in_list_targeted_preferred_endpoint: str = ""
+        self._contacts_in_list_targeted_preferred_body_variant: str = ""
+        self._contacts_in_list_targeted_preferred_include_variant: str = ""
 
     def _request_json(
         self,
@@ -1024,9 +1088,18 @@ class SmartEmailingApiClient:
         email_keys: set[str],
         endpoint_candidates: list[str] | None = None,
         search_endpoint_candidates: list[str] | None = None,
+        max_workers: int = 6,
     ) -> dict[str, dict[str, Any]]:
-        get_endpoints = CONTACTS_ENDPOINTS if endpoint_candidates is None else endpoint_candidates
-        post_endpoints = CONTACTS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
+        get_endpoints_raw = CONTACTS_ENDPOINTS if endpoint_candidates is None else endpoint_candidates
+        post_endpoints_raw = CONTACTS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
+        get_endpoints = _reorder_preferred(
+            [str(x).strip() for x in get_endpoints_raw if str(x).strip()],
+            self._contacts_lookup_preferred_get_endpoint,
+        )
+        post_endpoints = _reorder_preferred(
+            [str(x).strip() for x in post_endpoints_raw if str(x).strip()],
+            self._contacts_lookup_preferred_post_endpoint,
+        )
 
         wanted = {
             str(x).strip().casefold()
@@ -1034,6 +1107,8 @@ class SmartEmailingApiClient:
             if str(x).strip()
         }
         found: dict[str, dict[str, Any]] = {}
+        if not wanted:
+            return found
 
         def pick_matching_contact(payload: Any, email_key: str) -> dict[str, Any] | None:
             rows = extract_contacts(payload)
@@ -1043,26 +1118,108 @@ class SmartEmailingApiClient:
                     return row
             return None
 
+        def build_include_extra(include_key: str) -> dict[str, Any]:
+            key = str(include_key).strip()
+            if key == "include":
+                return {"include": "customfields"}
+            if key == "expand":
+                return {"expand": "customfields"}
+            if key == "with":
+                return {"with": "customfields"}
+            if key == "customfields":
+                return {"customfields": 1}
+            return {}
+
+        def build_query_base(variant_key: str, email_key: str) -> dict[str, Any]:
+            key = str(variant_key).strip()
+            if key == "emailaddress":
+                return {"emailaddress": email_key}
+            if key == "email":
+                return {"email": email_key}
+            if key == "search":
+                return {"search": email_key}
+            if key == "query":
+                return {"query": email_key}
+            if key == "q":
+                return {"q": email_key}
+            return {}
+
+        def build_body_base(variant_key: str, email_key: str) -> dict[str, Any]:
+            key = str(variant_key).strip()
+            if key == "emailaddress":
+                return {"emailaddress": email_key}
+            if key == "email":
+                return {"email": email_key}
+            if key == "search_emailaddress":
+                return {"search": {"emailaddress": email_key}}
+            if key == "search_email":
+                return {"search": {"email": email_key}}
+            if key == "filter_emailaddress":
+                return {"filter": {"emailaddress": email_key}}
+            if key == "filter_email":
+                return {"filter": {"email": email_key}}
+            if key == "where_emailaddress":
+                return {"where": {"emailaddress": email_key}}
+            if key == "where_email":
+                return {"where": {"email": email_key}}
+            if key == "query":
+                return {"query": email_key}
+            return {}
+
+        include_variant_keys = ["", "include", "expand", "with", "customfields"]
+        query_variant_keys = ["emailaddress", "email", "search", "query", "q"]
+        body_variant_keys = [
+            "emailaddress",
+            "email",
+            "search_emailaddress",
+            "search_email",
+            "filter_emailaddress",
+            "filter_email",
+            "where_emailaddress",
+            "where_email",
+            "query",
+        ]
+
         def search_one_email(email_key: str) -> dict[str, Any] | None:
-            include_variants = [
-                {},
-                {"include": "customfields"},
-                {"expand": "customfields"},
-                {"with": "customfields"},
-                {"customfields": 1},
-            ]
-            query_base_variants = [
-                {"emailaddress": email_key},
-                {"email": email_key},
-                {"search": email_key},
-                {"query": email_key},
-                {"q": email_key},
-            ]
+            preferred_get_endpoint = str(self._contacts_lookup_preferred_get_endpoint).strip()
+            preferred_query_key = str(self._contacts_lookup_preferred_query_key).strip()
+            preferred_include_key = str(self._contacts_lookup_preferred_include_key).strip()
+            if preferred_get_endpoint and preferred_query_key:
+                query = build_query_base(preferred_query_key, email_key)
+                query.update(build_include_extra(preferred_include_key))
+                if query:
+                    try:
+                        payload = self._request_json("GET", preferred_get_endpoint, query=query)
+                        matched = pick_matching_contact(payload, email_key)
+                        if matched is not None:
+                            return matched
+                    except SmartEmailingApiError as exc:
+                        if exc.status_code in {401, 403}:
+                            raise
+
+            preferred_post_endpoint = str(self._contacts_lookup_preferred_post_endpoint).strip()
+            preferred_body_variant = str(self._contacts_lookup_preferred_body_variant).strip()
+            preferred_include_key = str(self._contacts_lookup_preferred_include_key).strip()
+            if preferred_post_endpoint and preferred_body_variant:
+                body = build_body_base(preferred_body_variant, email_key)
+                body.update(build_include_extra(preferred_include_key))
+                if body:
+                    try:
+                        payload = self._request_json("POST", preferred_post_endpoint, body=body)
+                        matched = pick_matching_contact(payload, email_key)
+                        if matched is not None:
+                            return matched
+                    except SmartEmailingApiError as exc:
+                        if exc.status_code in {401, 403}:
+                            raise
+
             for endpoint in get_endpoints:
-                for base_query in query_base_variants:
-                    for include_extra in include_variants:
-                        query = dict(base_query)
-                        query.update(include_extra)
+                for query_key in query_variant_keys:
+                    for include_key in include_variant_keys:
+                        query = build_query_base(query_key, email_key)
+                        if not query:
+                            continue
+                        query.update(build_include_extra(include_key))
                         try:
                             payload = self._request_json("GET", endpoint, query=query)
                         except SmartEmailingApiError as exc:
@@ -1071,24 +1228,18 @@ class SmartEmailingApiClient:
                             continue
                         matched = pick_matching_contact(payload, email_key)
                         if matched is not None:
+                            self._contacts_lookup_preferred_get_endpoint = endpoint
+                            self._contacts_lookup_preferred_query_key = query_key
+                            self._contacts_lookup_preferred_include_key = include_key
                             return matched
 
-            body_base_variants = [
-                {"emailaddress": email_key},
-                {"email": email_key},
-                {"search": {"emailaddress": email_key}},
-                {"search": {"email": email_key}},
-                {"filter": {"emailaddress": email_key}},
-                {"filter": {"email": email_key}},
-                {"where": {"emailaddress": email_key}},
-                {"where": {"email": email_key}},
-                {"query": email_key},
-            ]
             for endpoint in post_endpoints:
-                for base_body in body_base_variants:
-                    for include_extra in include_variants:
-                        body = dict(base_body)
-                        body.update(include_extra)
+                for body_variant in body_variant_keys:
+                    for include_key in include_variant_keys:
+                        body = build_body_base(body_variant, email_key)
+                        if not body:
+                            continue
+                        body.update(build_include_extra(include_key))
                         try:
                             payload = self._request_json("POST", endpoint, body=body)
                         except SmartEmailingApiError as exc:
@@ -1097,17 +1248,63 @@ class SmartEmailingApiClient:
                             continue
                         matched = pick_matching_contact(payload, email_key)
                         if matched is not None:
+                            self._contacts_lookup_preferred_post_endpoint = endpoint
+                            self._contacts_lookup_preferred_body_variant = body_variant
+                            self._contacts_lookup_preferred_include_key = include_key
                             return matched
             return None
 
-        for email_key in sorted(wanted):
-            if email_key in found:
-                continue
-            matched = search_one_email(email_key)
-            if matched is not None:
-                found[email_key] = matched
+        wanted_list = sorted(wanted)
+        resolved_max_workers = max(1, int(max_workers))
+        if resolved_max_workers == 1 or len(wanted_list) <= 1:
+            for email_key in wanted_list:
+                matched = search_one_email(email_key)
+                if matched is not None:
+                    found[email_key] = matched
+            return found
+
+        with ThreadPoolExecutor(max_workers=min(resolved_max_workers, len(wanted_list))) as pool:
+            future_to_email = {pool.submit(search_one_email, email_key): email_key for email_key in wanted_list}
+            for future in as_completed(future_to_email):
+                email_key = future_to_email[future]
+                try:
+                    matched = future.result()
+                except SmartEmailingApiError as exc:
+                    if exc.status_code in {401, 403}:
+                        raise
+                    continue
+                except Exception:
+                    continue
+                if matched is not None:
+                    found[email_key] = matched
 
         return found
+
+    def fetch_blacklisted_email_keys(
+        self,
+        email_keys: set[str],
+        endpoint_candidates: list[str] | None = None,
+        search_endpoint_candidates: list[str] | None = None,
+        max_workers: int = 6,
+    ) -> set[str]:
+        wanted = {
+            str(x).strip().casefold()
+            for x in (email_keys or set())
+            if str(x).strip()
+        }
+        if not wanted:
+            return set()
+        rows_by_email = self.fetch_contacts_by_emails(
+            email_keys=wanted,
+            endpoint_candidates=endpoint_candidates,
+            search_endpoint_candidates=search_endpoint_candidates,
+            max_workers=max_workers,
+        )
+        blacklisted: set[str] = set()
+        for email_key, row in rows_by_email.items():
+            if _is_truthy_flag(row.get("blacklisted")):
+                blacklisted.add(str(email_key).strip().casefold())
+        return blacklisted
 
     def fetch_custom_field_values_for_contacts(
         self,
@@ -1262,6 +1459,9 @@ class SmartEmailingApiClient:
         contacts_search_endpoint_candidates: list[str] | None = None,
         custom_field_values_endpoint_candidates: list[str] | None = None,
         custom_field_values_search_endpoint_candidates: list[str] | None = None,
+        target_email_batch_size: int = 50,
+        read_parallel_workers: int = 6,
+        prefer_targeted_search: bool = True,
     ) -> list[dict[str, Any]]:
         resolved_list_id = str(list_id).strip()
         if not resolved_list_id:
@@ -1277,6 +1477,36 @@ class SmartEmailingApiClient:
         )
         get_endpoints = self._resolve_list_id_endpoint_templates(get_templates, resolved_list_id)
         post_endpoints = self._resolve_list_id_endpoint_templates(post_templates, resolved_list_id)
+
+        target_email_keys = {
+            str(x).strip().casefold()
+            for x in (enrich_only_email_keys or set())
+            if str(x).strip()
+        }
+
+        if prefer_targeted_search and target_email_keys:
+            targeted_contacts, targeted_supported = self._fetch_contacts_in_list_targeted_by_emails(
+                list_id=resolved_list_id,
+                target_email_keys=target_email_keys,
+                search_endpoints=post_endpoints,
+                page_limit=page_limit,
+                max_pages=max_pages,
+                target_email_batch_size=target_email_batch_size,
+                read_parallel_workers=read_parallel_workers,
+            )
+            if targeted_supported:
+                return self._enrich_contacts_with_contact_details(
+                    contacts=targeted_contacts,
+                    detail_endpoint_templates=detail_endpoint_templates,
+                    enrich_only_email_keys=target_email_keys,
+                    page_limit=page_limit,
+                    max_pages=max_pages,
+                    contacts_endpoint_candidates=contacts_endpoint_candidates,
+                    contacts_search_endpoint_candidates=contacts_search_endpoint_candidates,
+                    custom_field_values_endpoint_candidates=custom_field_values_endpoint_candidates,
+                    custom_field_values_search_endpoint_candidates=custom_field_values_search_endpoint_candidates,
+                    read_parallel_workers=read_parallel_workers,
+                )
 
         best_rows: list[dict[str, Any]] = []
         any_success = False
@@ -1327,6 +1557,7 @@ class SmartEmailingApiClient:
                 contacts_search_endpoint_candidates=contacts_search_endpoint_candidates,
                 custom_field_values_endpoint_candidates=custom_field_values_endpoint_candidates,
                 custom_field_values_search_endpoint_candidates=custom_field_values_search_endpoint_candidates,
+                read_parallel_workers=read_parallel_workers,
             )
         if last_error is not None:
             raise last_error
@@ -1334,21 +1565,198 @@ class SmartEmailingApiClient:
             f"Nepodařilo se načíst kontakty ze seznamu {resolved_list_id} ze SmartEmailing API."
         )
 
+    def _fetch_contacts_in_list_targeted_by_emails(
+        self,
+        list_id: str,
+        target_email_keys: set[str],
+        search_endpoints: list[str],
+        page_limit: int = 100,
+        max_pages: int = 100,
+        target_email_batch_size: int = 50,
+        read_parallel_workers: int = 6,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        targets = sorted({str(x).strip().casefold() for x in (target_email_keys or set()) if str(x).strip()})
+        if not targets:
+            return [], True
+        endpoints = _unique_ordered([str(x).strip() for x in search_endpoints if str(x).strip()])
+        if not endpoints:
+            return [], False
+
+        preferred_endpoint = str(self._contacts_in_list_targeted_preferred_endpoint).strip()
+        endpoints = _reorder_preferred(endpoints, preferred_endpoint)
+
+        batches = _chunked(targets, max(1, int(target_email_batch_size)))
+        out_by_email: dict[str, dict[str, Any]] = {}
+        success_count = 0
+        failed_batches = 0
+        last_error: SmartEmailingApiError | None = None
+
+        def merge_target_row(row: dict[str, Any]) -> None:
+            email_key = str(row.get("emailaddress", "")).strip().casefold()
+            if not email_key:
+                return
+            existing = out_by_email.get(email_key)
+            if existing is None:
+                out_by_email[email_key] = row
+                return
+            existing_has_cf = isinstance(existing.get("customfields"), list)
+            row_has_cf = isinstance(row.get("customfields"), list)
+            if row_has_cf and not existing_has_cf:
+                out_by_email[email_key] = row
+                return
+            merged = dict(existing)
+            for key, value in row.items():
+                if value in [None, "", []]:
+                    continue
+                if key == "customfields" and existing_has_cf and not row_has_cf:
+                    continue
+                merged[key] = value
+            out_by_email[email_key] = merged
+
+        def query_one_batch(batch: list[str]) -> list[dict[str, Any]]:
+            rows_out: list[dict[str, Any]] = []
+            batch_values = [str(x).strip().casefold() for x in batch if str(x).strip()]
+            batch_values = [x for x in _unique_ordered(batch_values) if x]
+            batch_set = set(batch_values)
+            if not batch_set:
+                return rows_out
+
+            body_variants: list[tuple[str, dict[str, Any]]] = [
+                ("search_emailaddress_list", {"search": {"emailaddress": list(batch_values)}}),
+                ("search_email_list", {"search": {"email": list(batch_values)}}),
+                ("filter_emailaddress_list", {"filter": {"emailaddress": list(batch_values)}}),
+                ("filter_email_list", {"filter": {"email": list(batch_values)}}),
+                ("where_emailaddress_list", {"where": {"emailaddress": list(batch_values)}}),
+                ("where_email_list", {"where": {"email": list(batch_values)}}),
+                ("emails_list", {"emails": list(batch_values)}),
+                ("emailaddress_list", {"emailaddress": list(batch_values)}),
+            ]
+            if len(batch_values) == 1:
+                single = batch_values[0]
+                body_variants.extend(
+                    [
+                        ("search_emailaddress_single", {"search": {"emailaddress": single}}),
+                        ("search_email_single", {"search": {"email": single}}),
+                        ("filter_emailaddress_single", {"filter": {"emailaddress": single}}),
+                        ("filter_email_single", {"filter": {"email": single}}),
+                        ("where_emailaddress_single", {"where": {"emailaddress": single}}),
+                        ("where_email_single", {"where": {"email": single}}),
+                        ("emailaddress_single", {"emailaddress": single}),
+                        ("email_single", {"email": single}),
+                    ]
+                )
+
+            include_variants: list[tuple[str, dict[str, Any]]] = [
+                ("none", {}),
+                ("include", {"include": "customfields"}),
+                ("expand", {"expand": "customfields"}),
+                ("with", {"with": "customfields"}),
+                ("customfields", {"customfields": 1}),
+            ]
+
+            preferred_body = str(self._contacts_in_list_targeted_preferred_body_variant).strip()
+            if preferred_body:
+                body_variants = sorted(
+                    body_variants,
+                    key=lambda item: 0 if str(item[0]).strip() == preferred_body else 1,
+                )
+            preferred_include = str(self._contacts_in_list_targeted_preferred_include_variant).strip()
+            if preferred_include:
+                include_variants = sorted(
+                    include_variants,
+                    key=lambda item: 0 if str(item[0]).strip() == preferred_include else 1,
+                )
+
+            local_success = 0
+            local_last_error: SmartEmailingApiError | None = None
+            for endpoint in endpoints:
+                for body_variant_name, base_body in body_variants:
+                    for include_variant_name, include_extra in include_variants:
+                        body = dict(base_body)
+                        body.update(include_extra)
+                        body.setdefault("page", 1)
+                        body.setdefault("limit", page_limit)
+                        try:
+                            payload = self._request_json("POST", endpoint, body=body)
+                        except SmartEmailingApiError as exc:
+                            if exc.status_code in {401, 403}:
+                                raise
+                            if exc.status_code in {404, 405}:
+                                local_last_error = exc
+                                continue
+                            local_last_error = exc
+                            continue
+                        local_success += 1
+                        rows = extract_contacts(payload)
+                        for row in rows:
+                            email_key = str(row.get("emailaddress", "")).strip().casefold()
+                            if email_key and email_key in batch_set:
+                                rows_out.append(row)
+                        if rows_out:
+                            self._contacts_in_list_targeted_preferred_endpoint = endpoint
+                            self._contacts_in_list_targeted_preferred_body_variant = body_variant_name
+                            self._contacts_in_list_targeted_preferred_include_variant = include_variant_name
+                            return rows_out
+            if local_success == 0 and local_last_error is not None:
+                raise local_last_error
+            return rows_out
+
+        resolved_workers = max(1, int(read_parallel_workers))
+        if resolved_workers == 1 or len(batches) <= 1:
+            for batch in batches:
+                try:
+                    rows = query_one_batch(batch)
+                    success_count += 1
+                    for row in rows:
+                        merge_target_row(row)
+                except SmartEmailingApiError as exc:
+                    if exc.status_code in {401, 403}:
+                        raise
+                    failed_batches += 1
+                    last_error = exc
+                    continue
+        else:
+            with ThreadPoolExecutor(max_workers=min(resolved_workers, len(batches))) as pool:
+                future_to_batch = {pool.submit(query_one_batch, batch): batch for batch in batches}
+                for future in as_completed(future_to_batch):
+                    try:
+                        rows = future.result()
+                        success_count += 1
+                        for row in rows:
+                            merge_target_row(row)
+                    except SmartEmailingApiError as exc:
+                        if exc.status_code in {401, 403}:
+                            raise
+                        failed_batches += 1
+                        last_error = exc
+                        continue
+                    except Exception:
+                        failed_batches += 1
+                        continue
+
+        if failed_batches > 0:
+            return [], False
+        if success_count > 0:
+            return list(out_by_email.values()), True
+        if last_error is not None:
+            return [], False
+        return [], False
+
     def fetch_contact_details_by_ids(
         self,
         contact_ids: list[str],
         endpoint_templates: list[str] | None = None,
+        read_parallel_workers: int = 6,
     ) -> dict[str, dict[str, Any]]:
         templates = CONTACT_DETAIL_ENDPOINT_TEMPLATES if endpoint_templates is None else endpoint_templates
+        unique_ids = [
+            x
+            for x in _unique_ordered([str(raw_contact_id).strip() for raw_contact_id in contact_ids])
+            if x
+        ]
         details: dict[str, dict[str, Any]] = {}
-        seen: set[str] = set()
 
-        for raw_contact_id in contact_ids:
-            contact_id = str(raw_contact_id).strip()
-            if not contact_id or contact_id in seen:
-                continue
-            seen.add(contact_id)
-
+        def fetch_one_contact(contact_id: str) -> tuple[str, dict[str, Any] | None]:
             endpoints = self._resolve_contact_id_endpoint_templates(templates, contact_id)
             for endpoint in endpoints:
                 try:
@@ -1366,9 +1774,39 @@ class SmartEmailingApiClient:
                 contact = contacts[0]
                 resolved_id = str(contact.get("id", "")).strip() or contact_id
                 contact["id"] = resolved_id
-                details[contact_id] = contact
+                return contact_id, contact
+            return contact_id, None
+
+        resolved_workers = max(1, int(read_parallel_workers))
+        if resolved_workers == 1 or len(unique_ids) <= 1:
+            for contact_id in unique_ids:
+                lookup_id, contact = fetch_one_contact(contact_id)
+                if contact is None:
+                    continue
+                resolved_id = str(contact.get("id", "")).strip() or lookup_id
+                details[lookup_id] = contact
                 details[resolved_id] = contact
-                break
+            return details
+
+        with ThreadPoolExecutor(max_workers=min(resolved_workers, len(unique_ids))) as pool:
+            future_to_contact_id = {
+                pool.submit(fetch_one_contact, contact_id): contact_id for contact_id in unique_ids
+            }
+            for future in as_completed(future_to_contact_id):
+                lookup_id = future_to_contact_id[future]
+                try:
+                    _, contact = future.result()
+                except SmartEmailingApiError as exc:
+                    if exc.status_code in {401, 403}:
+                        raise
+                    continue
+                except Exception:
+                    continue
+                if contact is None:
+                    continue
+                resolved_id = str(contact.get("id", "")).strip() or lookup_id
+                details[lookup_id] = contact
+                details[resolved_id] = contact
 
         return details
 
@@ -1384,6 +1822,10 @@ class SmartEmailingApiClient:
         Returns (response_payload, endpoint, payload_variant).
         """
         endpoints = endpoint_candidates or IMPORT_CONTACTS_ENDPOINTS
+        endpoints = _reorder_preferred(
+            [str(x).strip() for x in endpoints if str(x).strip()],
+            self._import_preferred_endpoint,
+        )
         import_rows = self._to_import_rows(contacts)
         settings = {
             "update": bool(update_existing),
@@ -1395,23 +1837,50 @@ class SmartEmailingApiClient:
 
         import_payload_no_settings = {"data": import_rows}
         payload_variants.append(("import_data_no_settings", import_payload_no_settings))
+        if self._import_preferred_payload_variant:
+            preferred_name = str(self._import_preferred_payload_variant).strip()
+            payload_variants = sorted(
+                payload_variants,
+                key=lambda item: 0 if str(item[0]).strip() == preferred_name else 1,
+            )
 
-        fallback_errors: list[tuple[str, str, SmartEmailingApiError]] = []
+        attempt_pairs: list[tuple[str, str, dict[str, Any]]] = []
+        seen_attempts: set[str] = set()
+
+        preferred_endpoint = str(self._import_preferred_endpoint).strip()
+        preferred_variant = str(self._import_preferred_payload_variant).strip()
+        if preferred_endpoint and preferred_variant:
+            preferred_payload = next((x[1] for x in payload_variants if str(x[0]).strip() == preferred_variant), None)
+            if preferred_payload is not None and preferred_endpoint in endpoints:
+                dedupe_key = f"{preferred_endpoint}|{preferred_variant}"
+                attempt_pairs.append((preferred_endpoint, preferred_variant, preferred_payload))
+                seen_attempts.add(dedupe_key)
+
         for variant_name, payload in payload_variants:
             for endpoint in endpoints:
-                try:
-                    response_payload = self._request_json("POST", endpoint, body=payload)
-                    if not isinstance(response_payload, dict):
-                        raise SmartEmailingApiError("Import endpoint vrátil neočekávaný typ odpovědi.")
-                    return response_payload, endpoint, variant_name
-                except SmartEmailingApiError as exc:
-                    if exc.status_code in {401, 403}:
-                        raise
-                    # Endpoint/payload mismatch => continue trying.
-                    if exc.status_code in {400, 404, 405, 415, 422}:
-                        fallback_errors.append((endpoint, variant_name, exc))
-                        continue
+                dedupe_key = f"{endpoint}|{variant_name}"
+                if dedupe_key in seen_attempts:
+                    continue
+                seen_attempts.add(dedupe_key)
+                attempt_pairs.append((endpoint, variant_name, payload))
+
+        fallback_errors: list[tuple[str, str, SmartEmailingApiError]] = []
+        for endpoint, variant_name, payload in attempt_pairs:
+            try:
+                response_payload = self._request_json("POST", endpoint, body=payload)
+                if not isinstance(response_payload, dict):
+                    raise SmartEmailingApiError("Import endpoint vrátil neočekávaný typ odpovědi.")
+                self._import_preferred_endpoint = endpoint
+                self._import_preferred_payload_variant = variant_name
+                return response_payload, endpoint, variant_name
+            except SmartEmailingApiError as exc:
+                if exc.status_code in {401, 403}:
                     raise
+                # Endpoint/payload mismatch => continue trying.
+                if exc.status_code in {400, 404, 405, 415, 422}:
+                    fallback_errors.append((endpoint, variant_name, exc))
+                    continue
+                raise
 
         if fallback_errors:
             non_404 = [x for x in fallback_errors if x[2].status_code not in {404, 405}]
@@ -1963,6 +2432,7 @@ class SmartEmailingApiClient:
         contacts_search_endpoint_candidates: list[str] | None = None,
         custom_field_values_endpoint_candidates: list[str] | None = None,
         custom_field_values_search_endpoint_candidates: list[str] | None = None,
+        read_parallel_workers: int = 6,
     ) -> list[dict[str, Any]]:
         if not contacts:
             return contacts
@@ -1993,6 +2463,7 @@ class SmartEmailingApiClient:
             detail_map = self.fetch_contact_details_by_ids(
                 contact_ids=candidate_ids,
                 endpoint_templates=detail_endpoint_templates,
+                read_parallel_workers=read_parallel_workers,
             )
         for detail in detail_map.values():
             email_key = str(detail.get("emailaddress", "")).strip().casefold()
@@ -2012,6 +2483,7 @@ class SmartEmailingApiClient:
                     email_keys=unresolved_email_keys,
                     endpoint_candidates=contacts_endpoint_candidates,
                     search_endpoint_candidates=contacts_search_endpoint_candidates,
+                    max_workers=read_parallel_workers,
                 )
                 for email_key, targeted_contact in targeted_contacts.items():
                     if email_key:

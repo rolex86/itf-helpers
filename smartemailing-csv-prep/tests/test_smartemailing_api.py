@@ -196,6 +196,31 @@ class ContactByEmailSearchFakeApiClient(SmartEmailingApiClient):
         raise SmartEmailingApiError("not found", status_code=404)
 
 
+class ContactBlacklistedLookupFakeApiClient(SmartEmailingApiClient):
+    def __init__(self) -> None:
+        super().__init__(SmartEmailingCredentials(username="user", api_key="key"))
+        self.calls: list[tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]] = []
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        self.calls.append((method, path, query, body))
+
+        if method == "GET" and path == "/api/v3/contacts":
+            email = str((query or {}).get("emailaddress", "")).strip().casefold()
+            if email == "black@example.com":
+                return {"data": {"items": [{"emailaddress": "black@example.com", "blacklisted": 1}]}}
+            if email == "ok@example.com":
+                return {"data": {"items": [{"emailaddress": "ok@example.com", "blacklisted": 0}]}}
+            return {"data": {"items": []}}
+
+        raise SmartEmailingApiError("not found", status_code=404)
+
+
 class ContactCustomFieldValuesFakeApiClient(SmartEmailingApiClient):
     def __init__(self) -> None:
         super().__init__(SmartEmailingCredentials(username="user", api_key="key"))
@@ -234,6 +259,82 @@ class ContactCustomFieldValuesFakeApiClient(SmartEmailingApiClient):
                 ],
                 "status": "ok",
                 "meta": {"total_count": 3, "displayed_count": 3, "offset": 0},
+            }
+
+        raise SmartEmailingApiError("not found", status_code=404)
+
+
+class TargetedListSearchPartialFailureFakeApiClient(SmartEmailingApiClient):
+    def __init__(self) -> None:
+        super().__init__(SmartEmailingCredentials(username="user", api_key="key"))
+        self.calls: list[tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]] = []
+
+    @staticmethod
+    def _extract_requested_emails_from_body(body: dict[str, Any] | None) -> set[str]:
+        if not isinstance(body, dict):
+            return set()
+        candidates: list[Any] = []
+        for key in ["search", "filter", "where"]:
+            nested = body.get(key)
+            if isinstance(nested, dict):
+                candidates.append(nested.get("emailaddress"))
+                candidates.append(nested.get("email"))
+        candidates.append(body.get("emailaddress"))
+        candidates.append(body.get("email"))
+        candidates.append(body.get("emails"))
+        out: set[str] = set()
+        for raw in candidates:
+            if isinstance(raw, list):
+                for item in raw:
+                    value = str(item).strip().casefold()
+                    if value:
+                        out.add(value)
+            else:
+                value = str(raw).strip().casefold()
+                if value:
+                    out.add(value)
+        return out
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        self.calls.append((method, path, query, body))
+
+        if method == "POST" and path == "/api/v3/contactlists/422/contacts/search":
+            requested = self._extract_requested_emails_from_body(body)
+            if "broken@example.com" in requested:
+                raise SmartEmailingApiError("not found", status_code=404)
+            items = []
+            if "ok@example.com" in requested:
+                items.append(
+                    {
+                        "id": 101,
+                        "emailaddress": "ok@example.com",
+                        "customfields": [{"id": 10, "value": "A"}],
+                    }
+                )
+            return {"data": {"items": items}}
+
+        if method == "GET" and path == "/api/v3/contactlists/422/contacts":
+            return {
+                "data": {
+                    "items": [
+                        {
+                            "id": 101,
+                            "emailaddress": "ok@example.com",
+                            "customfields": [{"id": 10, "value": "A"}],
+                        },
+                        {
+                            "id": 102,
+                            "emailaddress": "broken@example.com",
+                            "customfields": [{"id": 11, "value": "B"}],
+                        },
+                    ]
+                }
             }
 
         raise SmartEmailingApiError("not found", status_code=404)
@@ -390,6 +491,7 @@ class SmartEmailingApiTests(unittest.TestCase):
                         "emailaddress": "a@example.com",
                         "name": "Jan",
                         "surname": "Novák",
+                        "blacklisted": 1,
                         "town": "Brno",
                         "customfields": [{"id": 10, "value": "A"}, {"id": "11", "value": ["X", "Y"]}],
                         "tags": ["SYNC"],
@@ -405,6 +507,7 @@ class SmartEmailingApiTests(unittest.TestCase):
         self.assertEqual(contacts[0]["emailaddress"], "a@example.com")
         self.assertEqual(contacts[0]["name"], "Jan")
         self.assertEqual(contacts[0]["surname"], "Novák")
+        self.assertEqual(contacts[0]["blacklisted"], "1")
         self.assertEqual(contacts[0]["town"], "Brno")
         self.assertEqual(
             contacts[0]["customfields"],
@@ -539,6 +642,55 @@ class SmartEmailingApiTests(unittest.TestCase):
         self.assertEqual(contacts[0]["town"], "Brno")
         self.assertEqual(contacts[0]["company"], "Acme")
         self.assertEqual(contacts[0]["country"], "CZ")
+
+    def test_build_api_contacts_managed_ids_respect_allowlist(self) -> None:
+        frame = MiniImportFrame(
+            [
+                {
+                    "E-mail": "a@example.com",
+                    "Program A": "",
+                    "Neprogramove pole": "X",
+                }
+            ]
+        )
+        contacts, issues = build_api_contacts_from_import_df(
+            import_df=frame,
+            api_system_field_map={"E-mail": "emailaddress"},
+            custom_fields=[
+                {"id": "7", "name": "Program A", "type": "text"},
+                {"id": "8", "name": "Neprogramove pole", "type": "text"},
+            ],
+            strict_custom_fields=True,
+            managed_custom_field_ids_allowlist={"7"},
+        )
+
+        self.assertEqual(len(issues), 0)
+        self.assertEqual(len(contacts), 1)
+        self.assertEqual(contacts[0].get("__managed_custom_field_ids"), ["7"])
+        self.assertEqual(contacts[0].get("customfields"), [{"id": "8", "value": "X"}])
+
+    def test_build_api_contacts_managed_ids_empty_allowlist_disables_managed(self) -> None:
+        frame = MiniImportFrame(
+            [
+                {
+                    "E-mail": "a@example.com",
+                    "Program A": "",
+                }
+            ]
+        )
+        contacts, issues = build_api_contacts_from_import_df(
+            import_df=frame,
+            api_system_field_map={"E-mail": "emailaddress"},
+            custom_fields=[
+                {"id": "7", "name": "Program A", "type": "text"},
+            ],
+            strict_custom_fields=True,
+            managed_custom_field_ids_allowlist=set(),
+        )
+
+        self.assertEqual(len(issues), 0)
+        self.assertEqual(len(contacts), 1)
+        self.assertNotIn("__managed_custom_field_ids", contacts[0])
 
     def test_build_api_contacts_ignores_selected_missing_custom_fields(self) -> None:
         frame = MiniImportFrame(
@@ -785,6 +937,38 @@ class SmartEmailingApiTests(unittest.TestCase):
         self.assertEqual(found["user@example.com"]["customfields"], [{"id": "10", "value": "A"}])
         called = [(method, path) for method, path, _, _ in client.calls]
         self.assertIn(("POST", "/api/v3/contacts/search"), called)
+
+    def test_fetch_blacklisted_email_keys(self) -> None:
+        client = ContactBlacklistedLookupFakeApiClient()
+
+        blacklisted = client.fetch_blacklisted_email_keys(
+            email_keys={"black@example.com", "ok@example.com"},
+            endpoint_candidates=["/api/v3/contacts"],
+            search_endpoint_candidates=[],
+            max_workers=1,
+        )
+
+        self.assertEqual(blacklisted, {"black@example.com"})
+
+    def test_fetch_contacts_in_list_targeted_partial_failure_falls_back_to_full_list(self) -> None:
+        client = TargetedListSearchPartialFailureFakeApiClient()
+
+        contacts = client.fetch_contacts_in_list(
+            list_id="422",
+            endpoint_templates=["/api/v3/contactlists/{list_id}/contacts"],
+            search_endpoint_templates=["/api/v3/contactlists/{list_id}/contacts/search"],
+            detail_endpoint_templates=[],
+            enrich_only_email_keys={"ok@example.com", "broken@example.com"},
+            target_email_batch_size=1,
+            read_parallel_workers=1,
+            prefer_targeted_search=True,
+        )
+
+        emails = sorted([str(x.get("emailaddress", "")).strip().casefold() for x in contacts])
+        self.assertEqual(emails, ["broken@example.com", "ok@example.com"])
+        called = [(method, path) for method, path, _, _ in client.calls]
+        self.assertIn(("POST", "/api/v3/contactlists/422/contacts/search"), called)
+        self.assertIn(("GET", "/api/v3/contactlists/422/contacts"), called)
 
     def test_fetch_custom_field_values_for_contacts(self) -> None:
         client = ContactCustomFieldValuesFakeApiClient()

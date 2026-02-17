@@ -72,13 +72,17 @@ smartemailing:
     diff_preflight_enabled: true
     diff_send_only_changes: true
     diff_fallback_send_all_on_error: true
+    skip_blacklisted_contacts: true
     clear_removed_program_custom_fields_enabled: true
     diff_page_limit: 100
     diff_max_pages: 100
+    diff_target_email_batch_size: 50
+    api_read_parallel_workers: 6
     required_confirmation_phrase_full: "FULL IMPORT DO SMARTEMAILINGU"
     import_endpoint_candidates:
       - "/api/v3/import"
     auto_create_unknown_program_fields: true
+    auto_add_created_program_fields_to_allowlist: true
     auto_create_program_field_type: "text"
     custom_field_create_endpoint_candidates:
       - "/api/v3/customfields"

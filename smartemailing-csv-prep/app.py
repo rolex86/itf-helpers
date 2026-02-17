@@ -87,6 +87,7 @@ SCHEMA_CACHE_PATH = Path("config/schema_cache.yaml")
 API_SCHEMA_CACHE_PATH = Path("config/schema_cache_api.yaml")
 API_CREDENTIALS_PATH = Path("config/se_api_credentials.local")
 API_LIST_FAVORITES_PATH = Path("config/se_list_favorites.local")
+PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH = Path("config/program_custom_fields_allowlist.local")
 
 
 def schema_hash(columns: list[str]) -> str:
@@ -198,6 +199,30 @@ def save_api_list_favorites(path: Path, favorite_ids: set[str]) -> None:
             {str(x).strip() for x in favorite_ids if str(x).strip()},
             key=_sort_key,
         ),
+    }
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
+
+
+def load_program_custom_fields_allowlist(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        raw_ids = data.get("custom_field_ids", [])
+        if not isinstance(raw_ids, list):
+            return set()
+        return {str(x).strip() for x in raw_ids if str(x).strip()}
+    except Exception:
+        return set()
+
+
+def save_program_custom_fields_allowlist(path: Path, custom_field_ids: set[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "custom_field_ids": sorted({str(x).strip() for x in custom_field_ids if str(x).strip()}),
     }
     with path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
@@ -519,6 +544,21 @@ def normalize_custom_value_for_diff(value: Any, separators: list[str], split_sca
     return tuple(sorted({x for x in flattened if x}))
 
 
+def to_streamlit_safe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    for col in out.columns:
+        if out[col].dtype != "object":
+            continue
+        out[col] = out[col].map(
+            lambda value: json.dumps(value, ensure_ascii=False)
+            if isinstance(value, (dict, list, tuple, set))
+            else value
+        )
+    return out
+
+
 def split_contact_for_diff(contact: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     system_fields: dict[str, Any] = {}
     custom_fields: dict[str, Any] = {}
@@ -561,23 +601,44 @@ def diff_api_contacts(
     clearable_custom_field_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     existing_by_email: dict[str, dict[str, Any]] = {}
+    existing_split_by_email: dict[str, tuple[dict[str, Any], dict[str, Any], list[str]]] = {}
     for existing_contact in existing_contacts:
         email_key = normalize_email_key(existing_contact.get("emailaddress", ""))
         if not email_key:
             continue
         if email_key not in existing_by_email:
             existing_by_email[email_key] = existing_contact
+            existing_split_by_email[email_key] = split_contact_for_diff(existing_contact)
+
+    prepared_import_rows: list[
+        tuple[
+            dict[str, Any],
+            str,
+            str,
+            dict[str, Any],
+            dict[str, Any],
+            list[str],
+        ]
+    ] = []
+    import_has_custom_fields = False
+    for import_contact in import_contacts:
+        email = normalize_scalar_for_diff(import_contact.get("emailaddress", ""))
+        email_key = normalize_email_key(email)
+        if not email_key:
+            continue
+        import_system, import_custom, import_tags = split_contact_for_diff(import_contact)
+        if import_custom:
+            import_has_custom_fields = True
+        prepared_import_rows.append(
+            (import_contact, email, email_key, import_system, import_custom, import_tags)
+        )
 
     existing_contacts_with_custom_fields = 0
-    for existing_contact in existing_by_email.values():
-        _, existing_custom_fields, _ = split_contact_for_diff(existing_contact)
+    for _, existing_custom_fields, _ in existing_split_by_email.values():
         if existing_custom_fields:
             existing_contacts_with_custom_fields += 1
     existing_contacts_with_customfields_key = sum(
         1 for existing_contact in existing_by_email.values() if "customfields" in existing_contact
-    )
-    import_has_custom_fields = any(
-        bool(split_contact_for_diff(import_contact)[1]) for import_contact in import_contacts
     )
     custom_fields_compare_enabled = (
         len(existing_by_email) == 0
@@ -585,18 +646,6 @@ def diff_api_contacts(
         or existing_contacts_with_custom_fields > 0
         or existing_contacts_with_customfields_key > 0
     )
-    managed_custom_field_ids: set[str] = set()
-    for import_contact in import_contacts:
-        _, import_custom_fields, _ = split_contact_for_diff(import_contact)
-        managed_custom_field_ids.update({str(field_id).strip() for field_id in import_custom_fields.keys() if str(field_id).strip()})
-        managed_custom_field_ids.update(
-            {
-                str(field_id).strip()
-                for field_id in import_contact.get("__managed_custom_field_ids", [])
-                if str(field_id).strip()
-            }
-        )
-
     new_contacts: list[dict[str, Any]] = []
     updated_contacts: list[dict[str, Any]] = []
     unchanged_contacts: list[dict[str, Any]] = []
@@ -608,20 +657,17 @@ def diff_api_contacts(
     clear_operations: list[dict[str, str]] = []
     clearable_ids = {str(x).strip() for x in (clearable_custom_field_ids or set()) if str(x).strip()}
 
-    for contact in import_contacts:
-        email = normalize_scalar_for_diff(contact.get("emailaddress", ""))
-        email_key = normalize_email_key(email)
-        if not email_key:
-            continue
-
+    for contact, email, email_key, import_system, import_custom, import_tags in prepared_import_rows:
         existing_contact = existing_by_email.get(email_key)
         if existing_contact is None:
             new_contacts.append(contact)
             contacts_to_send.append(contact)
             continue
 
-        import_system, import_custom, import_tags = split_contact_for_diff(contact)
-        existing_system, existing_custom, existing_tags = split_contact_for_diff(existing_contact)
+        existing_system, existing_custom, existing_tags = existing_split_by_email.get(
+            email_key,
+            ({}, {}, []),
+        )
 
         changed_fields: list[str] = []
         for field_name, import_value in import_system.items():
@@ -629,14 +675,39 @@ def diff_api_contacts(
             if normalize_scalar_for_diff(import_value) != normalize_scalar_for_diff(existing_value):
                 changed_fields.append(field_name)
 
-        if custom_fields_compare_enabled:
-            contact_managed_custom_field_ids = {
-                str(field_id).strip()
-                for field_id in contact.get("__managed_custom_field_ids", [])
-                if str(field_id).strip()
-            }
-            fields_to_compare = sorted(contact_managed_custom_field_ids or managed_custom_field_ids)
-            contact_clearable_ids = set(clearable_ids) | set(contact_managed_custom_field_ids)
+        if import_tags:
+            existing_tags_set = {normalize_scalar_for_diff(x) for x in existing_tags}
+            import_tags_set = {normalize_scalar_for_diff(x) for x in import_tags}
+            if not import_tags_set.issubset(existing_tags_set):
+                changed_fields.append("tags")
+
+        contact_managed_custom_field_ids = {
+            str(field_id).strip()
+            for field_id in contact.get("__managed_custom_field_ids", [])
+            if str(field_id).strip()
+        }
+        contact_clearable_ids = set(clearable_ids) | set(contact_managed_custom_field_ids)
+        fields_to_compare_set = {
+            str(field_id).strip() for field_id in import_custom.keys() if str(field_id).strip()
+        }
+        if contact_clearable_ids:
+            fields_to_compare_set.update(
+                {
+                    str(field_id).strip()
+                    for field_id in existing_custom.keys()
+                    if str(field_id).strip() and str(field_id).strip() in contact_clearable_ids
+                }
+            )
+        requires_custom_compare_for_clear = bool(contact_clearable_ids.intersection(set(existing_custom.keys())))
+        has_custom_fields_to_compare = bool(fields_to_compare_set)
+        should_compare_custom = (
+            custom_fields_compare_enabled
+            and has_custom_fields_to_compare
+            and (not changed_fields or requires_custom_compare_for_clear)
+        )
+
+        if should_compare_custom:
+            fields_to_compare = sorted(fields_to_compare_set)
             removed_clearable_fields: list[str] = []
             removed_nonclearable_fields: list[str] = []
             for field_id in fields_to_compare:
@@ -674,12 +745,6 @@ def diff_api_contacts(
                     )
             if removed_nonclearable_fields:
                 removed_nonclearable_custom_fields_by_email[email_key] = sorted(set(removed_nonclearable_fields))
-
-        if import_tags:
-            existing_tags_set = {normalize_scalar_for_diff(x) for x in existing_tags}
-            import_tags_set = {normalize_scalar_for_diff(x) for x in import_tags}
-            if not import_tags_set.issubset(existing_tags_set):
-                changed_fields.append("tags")
 
         if changed_fields:
             updated_contacts.append(contact)
@@ -1015,7 +1080,7 @@ with st.expander("Nastavení schématu (volitelné)", expanded=False):
                         search_endpoint_candidates=custom_fields_search_endpoint_candidates,
                     )
                     st.markdown("#### Diagnostika endpointů vlastních polí")
-                    st.dataframe(pd.DataFrame(probe_rows), use_container_width=True)
+                    st.dataframe(to_streamlit_safe_dataframe(pd.DataFrame(probe_rows)), use_container_width=True)
                 except Exception as exc:
                     st.error(f"Nepodařilo se provést diagnostiku endpointů vlastních polí: {exc}")
     
@@ -1223,6 +1288,7 @@ configured_ignore_missing_custom = [
 ignore_missing_custom_for_columns = list(
     dict.fromkeys(default_ignore_missing_custom + configured_ignore_missing_custom)
 )
+program_custom_field_allowlist_ids = load_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
 
 api_import_username = ""
 api_import_key = ""
@@ -1236,14 +1302,18 @@ api_max_contacts_full = to_int(api_cfg.get("max_contacts_full", 10000), 10000)
 diff_preflight_enabled_default = bool(api_cfg.get("diff_preflight_enabled", True))
 diff_send_only_changes_default = bool(api_cfg.get("diff_send_only_changes", True))
 diff_fallback_send_all_on_error_default = bool(api_cfg.get("diff_fallback_send_all_on_error", True))
+skip_blacklisted_contacts_default = bool(api_cfg.get("skip_blacklisted_contacts", True))
 clear_removed_program_custom_fields_default = bool(
     api_cfg.get("clear_removed_program_custom_fields_enabled", True)
 )
 diff_page_limit = to_int(api_cfg.get("diff_page_limit", 100), 100)
 diff_max_pages = to_int(api_cfg.get("diff_max_pages", 100), 100)
+diff_target_email_batch_size = to_int(api_cfg.get("diff_target_email_batch_size", 50), 50)
+api_read_parallel_workers = to_int(api_cfg.get("api_read_parallel_workers", 6), 6)
 diff_preflight_enabled = diff_preflight_enabled_default
 diff_send_only_changes = diff_send_only_changes_default
 diff_fallback_send_all_on_error = diff_fallback_send_all_on_error_default
+skip_blacklisted_contacts = skip_blacklisted_contacts_default
 clear_removed_program_custom_fields = clear_removed_program_custom_fields_default
 safe_confirm = False
 full_confirm = False
@@ -1252,12 +1322,21 @@ full_operator = ""
 full_approver = ""
 full_second_approval_input = ""
 auto_create_unknown_program_fields = auto_create_unknown_program_fields_default
+auto_add_created_program_fields_to_allowlist = bool(
+    api_cfg.get("auto_add_created_program_fields_to_allowlist", True)
+)
 
 if api_mode_enabled:
     if "api_contact_lists_cache" not in st.session_state:
         st.session_state.api_contact_lists_cache = []
     if "api_list_favorite_ids" not in st.session_state:
         st.session_state.api_list_favorite_ids = sorted(load_api_list_favorites(API_LIST_FAVORITES_PATH))
+    if "program_custom_fields_allowlist_ids" not in st.session_state:
+        st.session_state.program_custom_fields_allowlist_ids = sorted(program_custom_field_allowlist_ids)
+    if "program_custom_fields_catalog" not in st.session_state:
+        st.session_state.program_custom_fields_catalog = []
+    if "program_custom_fields_catalog_meta" not in st.session_state:
+        st.session_state.program_custom_fields_catalog_meta = {}
     if "full_import_approval_code" not in st.session_state:
         st.session_state.full_import_approval_code = hashlib.sha1(
             datetime.now(timezone.utc).isoformat().encode("utf-8")
@@ -1325,6 +1404,132 @@ if api_mode_enabled:
                 step=100,
             )
         )
+        st.markdown("#### Správa aplikačních custom fields (allowlist)")
+        st.caption(
+            "Bezpečnostní pravidlo: diff/clear odebraných kódů aplikací se aplikuje jen na custom field ID z tohoto seznamu."
+        )
+        load_program_custom_fields_catalog = st.button(
+            "Načíst custom fields z API (pro allowlist)",
+            key="load_program_custom_fields_catalog_btn",
+        )
+        if load_program_custom_fields_catalog:
+            if not (str(api_import_username).strip() and str(api_import_key).strip()):
+                st.error("Pro načtení custom fields vyplň API uživatelské jméno a API klíč.")
+            else:
+                try:
+                    catalog_client = SmartEmailingApiClient(
+                        SmartEmailingCredentials(
+                            username=str(api_import_username).strip(),
+                            api_key=str(api_import_key).strip(),
+                            base_url=str(api_import_base_url).strip() or DEFAULT_BASE_URL,
+                        )
+                    )
+                    fetched_catalog = catalog_client.fetch_custom_fields(
+                        endpoint_candidates=custom_fields_endpoint_candidates,
+                        search_endpoint_candidates=custom_fields_search_endpoint_candidates,
+                    )
+                    st.session_state.program_custom_fields_catalog = fetched_catalog
+                    st.session_state.program_custom_fields_catalog_meta = {
+                        "loaded_at": datetime.now(timezone.utc).isoformat(),
+                        "count": len(fetched_catalog),
+                    }
+                    st.success(f"Načteno custom fields pro allowlist: {len(fetched_catalog)}")
+                except Exception as exc:
+                    st.error(f"Nepodařilo se načíst custom fields pro allowlist: {exc}")
+
+        catalog_rows = st.session_state.get("program_custom_fields_catalog", [])
+        allowlist_ids_current = {
+            str(x).strip()
+            for x in st.session_state.get("program_custom_fields_allowlist_ids", [])
+            if str(x).strip()
+        }
+        id_to_label: dict[str, str] = {}
+        for item in catalog_rows:
+            field_id = str(item.get("id", "")).strip()
+            field_name = str(item.get("name", "")).strip() or "(bez názvu)"
+            if not field_id:
+                continue
+            id_to_label[field_id] = f"{field_name} (id={field_id})"
+
+        option_ids = sorted(
+            set(id_to_label.keys()) | set(allowlist_ids_current),
+            key=lambda raw_id: (0, -int(raw_id), raw_id.casefold()) if str(raw_id).isdigit() else (1, 0, str(raw_id).casefold()),
+        )
+        if option_ids:
+            allowlist_checkbox_seed = int(st.session_state.get("program_custom_fields_allowlist_checkbox_seed", 0))
+            fallback_filter = st.text_input(
+                "Filtr seznamu allowlist (název nebo ID)",
+                key=f"program_custom_fields_allowlist_filter_{allowlist_checkbox_seed}",
+            ).strip().casefold()
+            shown_count = 0
+            for field_id in option_ids:
+                field_id_str = str(field_id).strip()
+                label = id_to_label.get(field_id_str, f"(nenačtené) id={field_id_str}")
+                checkbox_key = f"program_custom_fields_allowlist_checkbox_{allowlist_checkbox_seed}_{field_id_str}"
+                if checkbox_key not in st.session_state:
+                    st.session_state[checkbox_key] = field_id_str in allowlist_ids_current
+                match_text = f"{label} {field_id_str}".casefold()
+                if fallback_filter and fallback_filter not in match_text:
+                    continue
+                st.checkbox(label, key=checkbox_key)
+                shown_count += 1
+            if fallback_filter:
+                st.caption(f"Filtrováno: {shown_count} položek z {len(option_ids)}.")
+            selected_allowlist_ids = []
+            for field_id in option_ids:
+                field_id_str = str(field_id).strip()
+                checkbox_key = f"program_custom_fields_allowlist_checkbox_{allowlist_checkbox_seed}_{field_id_str}"
+                if bool(st.session_state.get(checkbox_key)):
+                    selected_allowlist_ids.append(field_id_str)
+            st.session_state.program_custom_fields_allowlist_ids = sorted(
+                {str(x).strip() for x in selected_allowlist_ids if str(x).strip()}
+            )
+        else:
+            st.caption("Seznam custom fields pro allowlist zatím není načtený.")
+
+        program_allowlist_cols = st.columns(2)
+        with program_allowlist_cols[0]:
+            if st.button("Uložit allowlist na disk", key="save_program_custom_fields_allowlist_btn"):
+                try:
+                    allowlist_to_save = {
+                        str(x).strip()
+                        for x in st.session_state.get("program_custom_fields_allowlist_ids", [])
+                        if str(x).strip()
+                    }
+                    save_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH, allowlist_to_save)
+                    st.success(
+                        f"Allowlist uložen: {len(allowlist_to_save)} položek "
+                        f"(`{PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH}`)"
+                    )
+                except Exception as exc:
+                    st.error(f"Nepodařilo se uložit allowlist: {exc}")
+        with program_allowlist_cols[1]:
+            if st.button("Načíst allowlist z disku", key="reload_program_custom_fields_allowlist_btn"):
+                loaded_ids = load_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
+                st.session_state.program_custom_fields_allowlist_ids = sorted(loaded_ids)
+                st.session_state["program_custom_fields_allowlist_checkbox_seed"] = (
+                    int(st.session_state.get("program_custom_fields_allowlist_checkbox_seed", 0)) + 1
+                )
+                st.success(f"Allowlist načten z disku: {len(loaded_ids)} položek.")
+                st.rerun()
+
+        current_allowlist_count = len(
+            {
+                str(x).strip()
+                for x in st.session_state.get("program_custom_fields_allowlist_ids", [])
+                if str(x).strip()
+            }
+        )
+        st.caption(
+            f"Aktivní allowlist: {current_allowlist_count} custom field ID "
+            f"(`{PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH}`)."
+        )
+
+    program_custom_field_allowlist_ids = {
+        str(x).strip()
+        for x in st.session_state.get("program_custom_fields_allowlist_ids", [])
+        if str(x).strip()
+    }
 
     with api_step_container:
         st.markdown("### 3) Import do SmartEmailingu přes API")
@@ -1500,14 +1705,20 @@ if api_mode_enabled:
             key="diff_fallback_send_all_on_error_main",
             disabled=not diff_preflight_enabled,
         )
+        skip_blacklisted_contacts = st.checkbox(
+            "Přeskočit kontakty, které jsou ve SmartEmailingu na blacklistu",
+            value=skip_blacklisted_contacts_default,
+            key="skip_blacklisted_contacts_main",
+            help="Kontakty s `blacklisted=1` se vyřadí ještě před diffem a importem.",
+        )
         clear_removed_program_custom_fields = st.checkbox(
             "Při diffu mazat odebrané kódy aplikací (jen programové custom fields)",
             value=clear_removed_program_custom_fields_default,
             key="clear_removed_program_custom_fields_main",
             disabled=not diff_preflight_enabled,
             help=(
-                "Bezpečnostní režim: maže jen custom fieldy odpovídající patternu programových kódů "
-                "(např. PABC, PHAT). Ostatních custom fields se nedotýká."
+                "Bezpečnostní režim: maže jen custom fieldy z explicitního allowlistu aplikačních polí. "
+                "Ostatních custom fields se nedotýká."
             ),
         )
         diff_page_limit = int(
@@ -1527,6 +1738,26 @@ if api_mode_enabled:
                 value=max(1, diff_max_pages),
                 step=5,
                 key="diff_max_pages_main",
+                disabled=not diff_preflight_enabled,
+            )
+        )
+        diff_target_email_batch_size = int(
+            st.number_input(
+                "Diff: velikost batch pro cílené vyhledání emailů ve staging seznamu",
+                min_value=1,
+                value=max(1, diff_target_email_batch_size),
+                step=10,
+                key="diff_target_email_batch_size_main",
+                disabled=not diff_preflight_enabled,
+            )
+        )
+        api_read_parallel_workers = int(
+            st.number_input(
+                "API čtení: paralelní vlákna",
+                min_value=1,
+                value=max(1, api_read_parallel_workers),
+                step=1,
+                key="api_read_parallel_workers_main",
                 disabled=not diff_preflight_enabled,
             )
         )
@@ -1566,6 +1797,12 @@ if api_mode_enabled:
             value=auto_create_unknown_program_fields_default,
             key="auto_create_unknown_program_fields_main",
             help=f"Vytvoří nové custom fieldy v SmartEmailingu jako typ '{auto_create_program_field_type}'.",
+        )
+        auto_add_created_program_fields_to_allowlist = st.checkbox(
+            "Automaticky přidat nově vytvořená aplikační pole do allowlistu",
+            value=auto_add_created_program_fields_to_allowlist,
+            key="auto_add_created_program_fields_to_allowlist_main",
+            help="Po vytvoření pole pro nový kód aplikace se jeho custom field ID uloží do allowlistu.",
         )
 
         if execution_mode == "api_safe_import":
@@ -1777,7 +2014,7 @@ with run_step_container:
         if preview_error:
             st.warning(preview_error)
         if preview_rows:
-            st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, height=320)
+            st.dataframe(to_streamlit_safe_dataframe(pd.DataFrame(preview_rows)), use_container_width=True, height=320)
 
     diff_preview_clicked = False
     run_button_col, preview_button_col = st.columns(2)
@@ -2026,17 +2263,43 @@ if run_clicked or diff_preview_clicked:
                     st.rerun()
                 st.session_state["approved_custom_fields_fingerprint"] = ""
             created_codes: list[str] = []
+            created_field_ids: set[str] = set()
             create_errors: list[str] = []
             for code in codes_to_create:
                 try:
-                    auto_client.create_custom_field(
+                    created_field = auto_client.create_custom_field(
                         name=code,
                         field_type=auto_create_program_field_type,
                         endpoint_candidates=custom_field_create_endpoint_candidates,
                     )
                     created_codes.append(code)
+                    created_field_id = str(created_field.get("id", "")).strip() if isinstance(created_field, dict) else ""
+                    if created_field_id:
+                        created_field_ids.add(created_field_id)
                 except Exception as exc:
                     create_errors.append(f"{code}: {exc}")
+
+            if auto_add_created_program_fields_to_allowlist and created_field_ids:
+                updated_allowlist_ids = set(program_custom_field_allowlist_ids) | set(created_field_ids)
+                program_custom_field_allowlist_ids = set(updated_allowlist_ids)
+                st.session_state.program_custom_fields_allowlist_ids = sorted(updated_allowlist_ids)
+                st.session_state["program_custom_fields_allowlist_checkbox_seed"] = (
+                    int(st.session_state.get("program_custom_fields_allowlist_checkbox_seed", 0)) + 1
+                )
+                try:
+                    save_program_custom_fields_allowlist(
+                        PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH,
+                        updated_allowlist_ids,
+                    )
+                    run_status_box.info(
+                        "Nově vytvořená aplikační pole byla přidána do allowlistu: "
+                        f"{len(created_field_ids)}."
+                    )
+                except Exception as exc:
+                    run_status_box.warning(
+                        "Nově vytvořená pole vznikla, ale nepodařilo se uložit allowlist: "
+                        f"{exc}"
+                    )
 
             resolved_codes = {
                 str(code).strip().casefold()
@@ -2187,11 +2450,18 @@ if run_clicked or diff_preview_clicked:
                 array_custom_field_names=array_custom_field_names,
                 array_value_split_separators=array_value_split_separators,
                 managed_empty_custom_field_name_pattern=managed_empty_custom_field_name_pattern,
+                managed_custom_field_ids_allowlist=program_custom_field_allowlist_ids,
             )
 
             summary_metrics["api_diff_enabled"] = int(bool(diff_preflight_enabled))
             summary_metrics["api_diff_send_only_changes"] = int(bool(diff_send_only_changes))
             summary_metrics["api_diff_fallback_on_error"] = int(bool(diff_fallback_send_all_on_error))
+            summary_metrics["api_diff_target_email_batch_size"] = int(max(1, diff_target_email_batch_size))
+            summary_metrics["api_read_parallel_workers"] = int(max(1, api_read_parallel_workers))
+            summary_metrics["api_skip_blacklisted_contacts_enabled"] = int(bool(skip_blacklisted_contacts))
+            summary_metrics["api_blacklisted_lookup_status"] = "disabled"
+            summary_metrics["api_blacklisted_contacts_found"] = 0
+            summary_metrics["api_blacklisted_contacts_skipped"] = 0
             summary_metrics["api_clear_removed_program_custom_fields_enabled"] = int(
                 bool(clear_removed_program_custom_fields)
             )
@@ -2203,18 +2473,91 @@ if run_clicked or diff_preview_clicked:
             summary_metrics["api_diff_removed_program_custom_fields"] = 0
             summary_metrics["api_diff_removed_nonclearable_custom_fields"] = 0
             summary_metrics["api_diff_status"] = "disabled"
+            summary_metrics["api_program_allowlist_total"] = int(len(program_custom_field_allowlist_ids))
 
+            available_custom_field_ids = {
+                str(field.get("id", "")).strip()
+                for field in custom_fields
+                if str(field.get("id", "")).strip()
+            }
             program_custom_field_ids_for_clear: set[str] = set()
             if clear_removed_program_custom_fields:
+                program_custom_field_ids_for_clear = (
+                    set(program_custom_field_allowlist_ids) & set(available_custom_field_ids)
+                )
+                missing_allowlist_ids = sorted(
+                    set(program_custom_field_allowlist_ids) - set(available_custom_field_ids)
+                )
+                summary_metrics["api_program_allowlist_active"] = int(len(program_custom_field_ids_for_clear))
+                summary_metrics["api_program_allowlist_missing"] = int(len(missing_allowlist_ids))
+                if not program_custom_field_ids_for_clear:
+                    run_status_box.warning(
+                        "Mazání odebraných kódů aplikací je zapnuté, ale allowlist aplikačních polí je prázdný "
+                        "nebo neodpovídá aktuálním custom fields v SmartEmailingu."
+                    )
+                elif missing_allowlist_ids:
+                    run_status_box.warning(
+                        "Část allowlist ID nebyla nalezena v aktuálním API schématu custom fields. "
+                        f"Neaktivních ID: {len(missing_allowlist_ids)}."
+                    )
+            else:
+                summary_metrics["api_program_allowlist_active"] = 0
+                summary_metrics["api_program_allowlist_missing"] = 0
+
+            if skip_blacklisted_contacts and api_contacts:
                 try:
-                    program_name_regex = re.compile(managed_empty_custom_field_name_pattern)
-                    for field in custom_fields:
-                        field_id = str(field.get("id", "")).strip()
-                        field_name = str(field.get("name", "")).strip()
-                        if field_id and field_name and program_name_regex.fullmatch(field_name):
-                            program_custom_field_ids_for_clear.add(field_id)
-                except Exception:
-                    program_custom_field_ids_for_clear = set()
+                    import_email_keys_for_blacklist = {
+                        normalize_email_key(contact.get("emailaddress", ""))
+                        for contact in api_contacts
+                        if normalize_email_key(contact.get("emailaddress", ""))
+                    }
+                    blacklisted_email_keys = client.fetch_blacklisted_email_keys(
+                        email_keys=import_email_keys_for_blacklist,
+                        endpoint_candidates=contacts_endpoint_candidates,
+                        search_endpoint_candidates=contacts_search_endpoint_candidates,
+                        max_workers=api_read_parallel_workers,
+                    )
+                    summary_metrics["api_blacklisted_lookup_status"] = "ok"
+                    summary_metrics["api_blacklisted_contacts_found"] = int(len(blacklisted_email_keys))
+                    if blacklisted_email_keys:
+                        blacklisted_emails_preview = sorted(
+                            {
+                                normalize_scalar_for_diff(contact.get("emailaddress", ""))
+                                for contact in api_contacts
+                                if normalize_email_key(contact.get("emailaddress", "")) in blacklisted_email_keys
+                            }
+                        )[:200]
+                        before_blacklist_filter = len(api_contacts)
+                        api_contacts = [
+                            contact
+                            for contact in api_contacts
+                            if normalize_email_key(contact.get("emailaddress", "")) not in blacklisted_email_keys
+                        ]
+                        skipped_blacklisted = before_blacklist_filter - len(api_contacts)
+                        summary_metrics["api_blacklisted_contacts_skipped"] = int(skipped_blacklisted)
+                        extra_report_frames.append(
+                            pd.DataFrame(
+                                {
+                                    "type": "api_blacklisted_skipped",
+                                    "row_index": "",
+                                    "detail": "kontakt přeskočen (blacklisted=1)",
+                                    "email_raw": blacklisted_emails_preview,
+                                    "company": "",
+                                    "source_file": "",
+                                    "source_row_index": "",
+                                }
+                            )
+                        )
+                        run_status_box.info(
+                            "Blacklist filtr: přeskočeno kontaktů "
+                            f"{skipped_blacklisted} (blacklisted=1)."
+                        )
+                except Exception as exc:
+                    summary_metrics["api_blacklisted_lookup_status"] = "error"
+                    summary_metrics["api_blacklisted_lookup_error"] = str(exc)
+                    run_status_box.warning(
+                        f"Nepodařilo se ověřit blacklist kontakty přes API, pokračuji bez filtru. Detail: {exc}"
+                    )
 
             if diff_preflight_enabled and api_resolved_list_id:
                 try:
@@ -2235,6 +2578,9 @@ if run_clicked or diff_preview_clicked:
                         contacts_search_endpoint_candidates=contacts_search_endpoint_candidates,
                         custom_field_values_endpoint_candidates=contact_custom_field_values_endpoint_candidates,
                         custom_field_values_search_endpoint_candidates=contact_custom_field_values_search_endpoint_candidates,
+                        target_email_batch_size=diff_target_email_batch_size,
+                        read_parallel_workers=api_read_parallel_workers,
+                        prefer_targeted_search=True,
                     )
                     api_diff_summary = diff_api_contacts(
                         import_contacts=api_contacts,
@@ -2314,7 +2660,7 @@ if run_clicked or diff_preview_clicked:
                         summary_metrics.get("api_diff_removed_nonclearable_custom_fields", 0)
                     ) > 0:
                         run_status_box.warning(
-                            "Diff detekoval i odebrané custom fields mimo povolený pattern pro programové kódy. "
+                            "Diff detekoval i odebrané custom fields mimo allowlist aplikačních polí. "
                             f"Tyto změny se nemažou: {int(summary_metrics.get('api_diff_removed_nonclearable_custom_fields', 0))}."
                         )
 
@@ -2835,6 +3181,9 @@ if run_clicked or diff_preview_clicked:
             "diff_odstranene_customfields_mimo_pattern": summary_metrics.get(
                 "api_diff_removed_nonclearable_custom_fields", 0
             ),
+            "diff_odstranene_customfields_mimo_allowlist": summary_metrics.get(
+                "api_diff_removed_nonclearable_custom_fields", 0
+            ),
             "diff_cisteni_odstranenych_kodu_zapnuto": int(bool(clear_removed_program_custom_fields)),
             "api_cisteni_custom_field_requested": summary_metrics.get("api_custom_field_clear_requested", 0),
             "api_cisteni_custom_field_done": summary_metrics.get("api_custom_field_clear_done", 0),
@@ -2842,6 +3191,13 @@ if run_clicked or diff_preview_clicked:
             "api_cisteni_custom_field_error_detail": summary_metrics.get("api_custom_field_clear_error_detail", ""),
             "api_cisteni_kontaktu_odeslano": api_contacts_sent_clear,
             "api_cisteni_davky": len(api_clear_batch_results),
+            "allowlist_aplikacnich_poli_total": summary_metrics.get("api_program_allowlist_total", 0),
+            "allowlist_aplikacnich_poli_aktivni": summary_metrics.get("api_program_allowlist_active", 0),
+            "allowlist_aplikacnich_poli_chybejici": summary_metrics.get("api_program_allowlist_missing", 0),
+            "blacklist_filtr_zapnut": int(bool(skip_blacklisted_contacts)),
+            "blacklist_lookup_status": summary_metrics.get("api_blacklisted_lookup_status", ""),
+            "blacklist_nalezeno": summary_metrics.get("api_blacklisted_contacts_found", 0),
+            "blacklist_preskoceno": summary_metrics.get("api_blacklisted_contacts_skipped", 0),
             "diff_chyba": api_diff_error,
         }
         st.json(api_summary)
@@ -2849,9 +3205,12 @@ if run_clicked or diff_preview_clicked:
             updated_details = api_diff_summary.get("updated_details", [])
             if updated_details:
                 st.markdown("#### Diff: aktualizované kontakty (náhled)")
-                st.dataframe(pd.DataFrame(updated_details[:100]), use_container_width=True)
+                st.dataframe(
+                    to_streamlit_safe_dataframe(pd.DataFrame(updated_details[:100])),
+                    use_container_width=True,
+                )
         st.markdown("#### Výsledky testovací dávky a dalších dávek")
-        st.dataframe(pd.DataFrame(api_batch_results), use_container_width=True)
+        st.dataframe(to_streamlit_safe_dataframe(pd.DataFrame(api_batch_results)), use_container_width=True)
         st.markdown("#### Náhled kontrolního běhu (prvních 50 kontaktů)")
         st.json(api_contacts_preview)
 
@@ -2890,6 +3249,15 @@ if run_clicked or diff_preview_clicked:
                 "api_custom_field_clear_requested": summary_metrics.get("api_custom_field_clear_requested", 0),
                 "api_custom_field_clear_done": summary_metrics.get("api_custom_field_clear_done", 0),
                 "api_custom_field_clear_errors": summary_metrics.get("api_custom_field_clear_errors", 0),
+                "api_program_allowlist_total": summary_metrics.get("api_program_allowlist_total", 0),
+                "api_program_allowlist_active": summary_metrics.get("api_program_allowlist_active", 0),
+                "api_program_allowlist_missing": summary_metrics.get("api_program_allowlist_missing", 0),
+                "api_skip_blacklisted_contacts_enabled": summary_metrics.get(
+                    "api_skip_blacklisted_contacts_enabled", 0
+                ),
+                "api_blacklisted_lookup_status": summary_metrics.get("api_blacklisted_lookup_status", ""),
+                "api_blacklisted_contacts_found": summary_metrics.get("api_blacklisted_contacts_found", 0),
+                "api_blacklisted_contacts_skipped": summary_metrics.get("api_blacklisted_contacts_skipped", 0),
                 "error": api_error,
             }
         )
@@ -2918,6 +3286,6 @@ else:
     st.caption("Historie běhů bez kritického alertu.")
 
 if history_rows:
-    st.dataframe(pd.DataFrame(history_rows), use_container_width=True)
+    st.dataframe(to_streamlit_safe_dataframe(pd.DataFrame(history_rows)), use_container_width=True)
 else:
     st.caption("Historie běhů je zatím prázdná.")
