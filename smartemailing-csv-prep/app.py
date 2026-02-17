@@ -925,11 +925,46 @@ generate_disabled = (not source_files) or (schema is None and not can_load_schem
     api_mode_enabled and not api_credentials_ready
 )
 
+if "pending_custom_fields_to_create" not in st.session_state:
+    st.session_state["pending_custom_fields_to_create"] = []
+if "pending_custom_fields_fingerprint" not in st.session_state:
+    st.session_state["pending_custom_fields_fingerprint"] = ""
+if "approved_custom_fields_fingerprint" not in st.session_state:
+    st.session_state["approved_custom_fields_fingerprint"] = ""
+if "auto_resume_run_after_custom_fields_confirm" not in st.session_state:
+    st.session_state["auto_resume_run_after_custom_fields_confirm"] = False
+
 with run_step_container:
     run_status_box = st.empty()
     if api_mode_enabled and not api_credentials_ready:
         st.warning("Pro API režim vyplň API uživatelské jméno + API klíč.")
+    pending_fields = [str(x).strip() for x in st.session_state.get("pending_custom_fields_to_create", []) if str(x).strip()]
+    pending_fingerprint = str(st.session_state.get("pending_custom_fields_fingerprint", "")).strip()
+    if pending_fields and pending_fingerprint:
+        st.warning(
+            "Běh čeká na potvrzení vytvoření nových vlastních polí ve SmartEmailingu. "
+            "Zkontroluj seznam níže a potvrď pokračování."
+        )
+        st.code("\n".join([f"- {x}" for x in pending_fields]), language="text")
+        confirm_col, cancel_col = st.columns(2)
+        with confirm_col:
+            if st.button("Potvrdit vytvoření a pokračovat", key="confirm_custom_fields_create"):
+                st.session_state["approved_custom_fields_fingerprint"] = pending_fingerprint
+                st.session_state["auto_resume_run_after_custom_fields_confirm"] = True
+                st.session_state["pending_custom_fields_to_create"] = []
+                st.session_state["pending_custom_fields_fingerprint"] = ""
+                st.rerun()
+        with cancel_col:
+            if st.button("Zrušit vytvoření polí", key="cancel_custom_fields_create"):
+                st.session_state["approved_custom_fields_fingerprint"] = ""
+                st.session_state["auto_resume_run_after_custom_fields_confirm"] = False
+                st.session_state["pending_custom_fields_to_create"] = []
+                st.session_state["pending_custom_fields_fingerprint"] = ""
+                run_status_box.warning("Vytvoření nových vlastních polí bylo zrušeno.")
     run_clicked = st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
+    if bool(st.session_state.get("auto_resume_run_after_custom_fields_confirm", False)):
+        run_clicked = True
+        st.session_state["auto_resume_run_after_custom_fields_confirm"] = False
 
 if run_clicked:
     if execution_mode == "api_safe_import" and not safe_confirm:
@@ -1128,6 +1163,18 @@ if run_clicked:
                 }
             )
             codes_to_create = [code for code in unknown_codes if code.casefold() not in existing_custom_field_names]
+            if codes_to_create:
+                create_fingerprint = hashlib.sha256("\n".join(codes_to_create).encode("utf-8")).hexdigest()
+                approved_fingerprint = str(st.session_state.get("approved_custom_fields_fingerprint", "")).strip()
+                if approved_fingerprint != create_fingerprint:
+                    st.session_state["pending_custom_fields_to_create"] = codes_to_create
+                    st.session_state["pending_custom_fields_fingerprint"] = create_fingerprint
+                    run_status_box.warning(
+                        "Před pokračováním potvrď vytvoření nových vlastních polí "
+                        "(zobrazeno nad tlačítkem Spustit zpracování)."
+                    )
+                    st.rerun()
+                st.session_state["approved_custom_fields_fingerprint"] = ""
             created_codes: list[str] = []
             create_errors: list[str] = []
             for code in codes_to_create:
