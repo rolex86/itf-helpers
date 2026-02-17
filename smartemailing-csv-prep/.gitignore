@@ -61,6 +61,8 @@ credentials*.json
 
 # Generated / local data (may include personal data)
 config/schema_cache.yaml
+config/schema_cache_api.yaml
+config/job_history.jsonl
 smartemailing_import.zip
 report.csv
 import_*.csv
