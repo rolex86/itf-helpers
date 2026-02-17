@@ -538,6 +538,58 @@ class SmartEmailingApiClient:
             )
         ]
 
+    def create_custom_field(
+        self,
+        name: str,
+        field_type: str = "text",
+        endpoint_candidates: list[str] | None = None,
+    ) -> dict[str, str]:
+        field_name = str(name).strip()
+        resolved_type = str(field_type).strip() or "text"
+        if not field_name:
+            raise ValueError("Název custom fieldu nesmí být prázdný.")
+
+        endpoints = endpoint_candidates or CUSTOM_FIELDS_ENDPOINTS
+        payload_variants: list[tuple[str, dict[str, Any]]] = [
+            ("flat", {"name": field_name, "type": resolved_type}),
+            ("data_wrap", {"data": {"name": field_name, "type": resolved_type}}),
+            ("customfield_wrap", {"customfield": {"name": field_name, "type": resolved_type}}),
+        ]
+
+        fallback_errors: list[tuple[str, str, SmartEmailingApiError]] = []
+        for endpoint in endpoints:
+            for payload_variant, payload in payload_variants:
+                try:
+                    response_payload = self._request_json("POST", endpoint, body=payload)
+                    created = extract_custom_fields(response_payload)
+                    if created:
+                        return created[0]
+                    return {"id": "", "name": field_name, "type": resolved_type}
+                except SmartEmailingApiError as exc:
+                    if exc.status_code in {401, 403}:
+                        raise
+                    message_lc = str(exc).casefold()
+                    body_lc = str(exc.body or "").casefold()
+                    if exc.status_code == 409 or "exist" in message_lc or "exist" in body_lc:
+                        return {"id": "", "name": field_name, "type": resolved_type}
+                    if exc.status_code in {400, 404, 405, 415, 422}:
+                        fallback_errors.append((endpoint, payload_variant, exc))
+                        continue
+                    raise
+
+        if fallback_errors:
+            non_404 = [x for x in fallback_errors if x[2].status_code not in {404, 405}]
+            chosen_endpoint, chosen_variant, chosen_error = (non_404[0] if non_404 else fallback_errors[-1])
+            detail = chosen_error.body.strip()
+            detail_preview = f" Detail API: {detail[:300]}" if detail else ""
+            raise SmartEmailingApiError(
+                f"Nepodařilo se vytvořit custom field '{field_name}': {chosen_error}. "
+                f"Vybraná chyba: {chosen_endpoint} ({chosen_variant}).{detail_preview}",
+                status_code=chosen_error.status_code,
+                body=chosen_error.body,
+            )
+        raise SmartEmailingApiError(f"Nepodařilo se vytvořit custom field '{field_name}'.")
+
     def fetch_contact_lists(
         self,
         page_limit: int = 100,

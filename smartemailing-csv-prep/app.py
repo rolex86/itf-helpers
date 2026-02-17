@@ -614,6 +614,23 @@ contact_lists_search_endpoint_candidates = [
 ]
 strict_custom_fields = bool(api_cfg.get("strict_custom_fields", True))
 list_status = str(api_cfg.get("list_status", "confirmed")).strip() or "confirmed"
+auto_create_unknown_program_fields_default = bool(api_cfg.get("auto_create_unknown_program_fields", True))
+auto_create_program_field_type = str(api_cfg.get("auto_create_program_field_type", "text")).strip() or "text"
+custom_field_create_endpoint_candidates = [
+    str(x).strip()
+    for x in api_cfg.get("custom_field_create_endpoint_candidates", ["/api/v3/customfields", "/api/v3/custom-fields"])
+    if str(x).strip()
+]
+array_custom_field_names = [
+    str(x).strip()
+    for x in api_cfg.get("array_custom_field_names", [])
+    if str(x).strip()
+]
+array_value_split_separators = [
+    str(x).strip()
+    for x in api_cfg.get("array_value_split_separators", [",", ";", "|", "/"])
+    if str(x).strip()
+]
 field_map_cfg = CFG.get("smartemailing", {}).get("field_map", {})
 api_system_field_map_cfg = api_cfg.get("system_field_map", {})
 programs_cfg = CFG.get("smartemailing", {}).get("programs", {})
@@ -659,6 +676,7 @@ full_phrase_input = ""
 full_operator = ""
 full_approver = ""
 full_second_approval_input = ""
+auto_create_unknown_program_fields = auto_create_unknown_program_fields_default
 
 if api_mode_enabled:
     if "api_contact_lists_cache" not in st.session_state:
@@ -854,6 +872,12 @@ if api_mode_enabled:
                     key="full_import_limit_main",
                 )
             )
+        auto_create_unknown_program_fields = st.checkbox(
+            "Automaticky vytvořit chybějící vlastní pole pro nové kódy aplikací",
+            value=auto_create_unknown_program_fields_default,
+            key="auto_create_unknown_program_fields_main",
+            help=f"Vytvoří nové custom fieldy v SmartEmailingu jako typ '{auto_create_program_field_type}'.",
+        )
 
         if execution_mode == "api_safe_import":
             st.markdown("#### Povinné potvrzení pro bezpečný import")
@@ -1025,6 +1049,14 @@ if run_clicked:
             import_df, unknown = build_import_df(expanded, active_schema, CFG)
             unknown_all.append(unknown)
             import_df["country_bucket"] = expanded.get("country_bucket", pd.Series(["EN"] * len(expanded), index=expanded.index)).tolist()
+            import_df["__source_file"] = expanded.get(
+                "source_file",
+                pd.Series([sf.name] * len(expanded), index=expanded.index),
+            ).tolist()
+            import_df["__source_row_index"] = expanded.get(
+                "source_row_index",
+                pd.Series([""] * len(expanded), index=expanded.index),
+            ).tolist()
             import_df["__row_order"] = pd.Series(range(row_order_counter, row_order_counter + len(import_df)), index=import_df.index)
             row_order_counter += len(import_df)
             all_import_rows.append(import_df)
@@ -1064,6 +1096,108 @@ if run_clicked:
     invalid_df = pd.concat(invalid_frames, ignore_index=True) if invalid_frames else pd.DataFrame()
     unknown_frames = [u for u in unknown_all if len(u) > 0]
     unknown_df = pd.concat(unknown_frames, ignore_index=True) if unknown_frames else pd.DataFrame()
+
+    if (
+        api_mode_enabled
+        and execution_mode in {"api_safe_import", "api_full_import"}
+        and auto_create_unknown_program_fields
+        and len(unknown_df) > 0
+    ):
+        try:
+            auto_client = SmartEmailingApiClient(
+                SmartEmailingCredentials(
+                    username=str(api_import_username).strip(),
+                    api_key=str(api_import_key).strip(),
+                    base_url=str(api_import_base_url).strip() or DEFAULT_BASE_URL,
+                )
+            )
+            existing_custom_fields = auto_client.fetch_custom_fields(
+                endpoint_candidates=custom_fields_endpoint_candidates,
+                search_endpoint_candidates=custom_fields_search_endpoint_candidates,
+            )
+            existing_custom_field_names = {
+                str(x.get("name", "")).strip().casefold()
+                for x in existing_custom_fields
+                if str(x.get("name", "")).strip()
+            }
+            unknown_codes = sorted(
+                {
+                    str(x).strip()
+                    for x in unknown_df.get("unknown_code", pd.Series(dtype=str)).tolist()
+                    if str(x).strip()
+                }
+            )
+            codes_to_create = [code for code in unknown_codes if code.casefold() not in existing_custom_field_names]
+            created_codes: list[str] = []
+            create_errors: list[str] = []
+            for code in codes_to_create:
+                try:
+                    auto_client.create_custom_field(
+                        name=code,
+                        field_type=auto_create_program_field_type,
+                        endpoint_candidates=custom_field_create_endpoint_candidates,
+                    )
+                    created_codes.append(code)
+                except Exception as exc:
+                    create_errors.append(f"{code}: {exc}")
+
+            resolved_codes = {
+                str(code).strip().casefold()
+                for code in (set(created_codes) | (set(unknown_codes) - set(codes_to_create)))
+                if str(code).strip()
+            }
+            if resolved_codes and {"__source_file", "__source_row_index"}.issubset(set(final_import_df.columns)):
+                fill_value_tpl = str(CFG.get("smartemailing", {}).get("programs", {}).get("fill_value", "{code}"))
+                fill_value_tpl = fill_value_tpl or "{code}"
+                for code in sorted({str(x).strip() for x in unknown_codes if str(x).strip()}):
+                    if code.casefold() in resolved_codes and code not in final_import_df.columns:
+                        final_import_df[code] = ""
+                resolved_mask = (
+                    unknown_df.get("unknown_code", pd.Series(dtype=str))
+                    .astype(str)
+                    .str.strip()
+                    .str.casefold()
+                    .isin(resolved_codes)
+                )
+                for _, unknown_row in unknown_df.loc[resolved_mask].iterrows():
+                    code = str(unknown_row.get("unknown_code", "")).strip()
+                    if not code:
+                        continue
+                    source_file = str(unknown_row.get("source_file", "")).strip()
+                    source_row_index = str(unknown_row.get("source_row_index", "")).strip()
+                    mask = (
+                        final_import_df["__source_file"].astype(str).str.strip().eq(source_file)
+                        & final_import_df["__source_row_index"].astype(str).str.strip().eq(source_row_index)
+                    )
+                    final_import_df.loc[mask, code] = fill_value_tpl.format(code=code)
+
+                unknown_df = unknown_df.loc[~resolved_mask].reset_index(drop=True)
+
+            if created_codes:
+                run_status_box.info(
+                    "Automaticky vytvořena nová vlastní pole pro kódy aplikací: "
+                    + ", ".join(created_codes[:10])
+                    + ("..." if len(created_codes) > 10 else "")
+                )
+            if create_errors:
+                run_status_box.warning(
+                    "Některá vlastní pole se nepodařilo vytvořit: "
+                    + " | ".join(create_errors[:3])
+                    + (" ..." if len(create_errors) > 3 else "")
+                )
+        except Exception as exc:
+            run_status_box.warning(f"Automatické vytváření vlastních polí selhalo: {exc}")
+
+    if len(final_import_df) > 0:
+        bucket_series = final_import_df.get(
+            "country_bucket",
+            pd.Series(["EN"] * len(final_import_df), index=final_import_df.index),
+        )
+        import_only_df = final_import_df.drop(columns=["country_bucket", "__source_file", "__source_row_index"], errors="ignore")
+        final_parts = split_by_bucket(import_only_df, bucket_series)
+    else:
+        final_parts = {"CZ_SK": pd.DataFrame(), "DE_AT_CH": pd.DataFrame(), "EN": pd.DataFrame()}
+
     duplicates_df = find_duplicates_from_stats(email_counts, email_source_files)
     duplicate_extra_rows = int((duplicates_df["count"] - 1).clip(lower=0).sum()) if len(duplicates_df) > 0 else 0
 
@@ -1131,7 +1265,10 @@ if run_clicked:
                 else ""
             )
 
-            import_for_api = final_import_df.drop(columns=["country_bucket", "__row_order"], errors="ignore")
+            import_for_api = final_import_df.drop(
+                columns=["country_bucket", "__row_order", "__source_file", "__source_row_index"],
+                errors="ignore",
+            )
             if exclude_columns_from_api_import:
                 import_for_api = import_for_api.drop(columns=exclude_columns_from_api_import, errors="ignore")
             api_contacts, api_issues = build_api_contacts_from_import_df(
@@ -1143,6 +1280,8 @@ if run_clicked:
                 tag=str(staging_tag).strip(),
                 strict_custom_fields=strict_custom_fields,
                 ignore_missing_custom_for_columns=ignore_missing_custom_for_columns,
+                array_custom_field_names=array_custom_field_names,
+                array_value_split_separators=array_value_split_separators,
             )
 
             api_contacts_preview = api_contacts[:50]

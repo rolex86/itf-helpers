@@ -153,6 +153,26 @@ class ContactListPostSearchFakeApiClient(SmartEmailingApiClient):
         raise SmartEmailingApiError("unexpected call", status_code=400)
 
 
+class CreateCustomFieldFakeApiClient(SmartEmailingApiClient):
+    def __init__(self) -> None:
+        super().__init__(SmartEmailingCredentials(username="user", api_key="key"))
+        self.calls: list[tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]] = []
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        self.calls.append((method, path, query, body))
+        if method == "POST" and path == "/api/v3/customfields":
+            if isinstance(body, dict) and str(body.get("name", "")).strip():
+                return {"data": {"id": 999, "name": body.get("name"), "type": body.get("type", "text")}}
+            raise SmartEmailingApiError("bad payload", status_code=400)
+        raise SmartEmailingApiError("not found", status_code=404)
+
+
 class SmartEmailingApiTests(unittest.TestCase):
     def test_build_basic_auth_header(self) -> None:
         header = build_basic_auth_header("my-user", "my-key")
@@ -353,6 +373,16 @@ class SmartEmailingApiTests(unittest.TestCase):
         self.assertEqual(lists, [{"id": "101", "name": "Stage A"}])
         called = [(m, p) for m, p, _, _ in client.calls]
         self.assertIn(("POST", "/api/v3/contactlists/search"), called)
+
+    def test_create_custom_field(self) -> None:
+        client = CreateCustomFieldFakeApiClient()
+        created = client.create_custom_field(
+            name="PNEW_APP",
+            field_type="text",
+            endpoint_candidates=["/api/v3/customfields"],
+        )
+        self.assertEqual(created.get("name"), "PNEW_APP")
+        self.assertEqual(created.get("type"), "text")
 
 
 if __name__ == "__main__":
