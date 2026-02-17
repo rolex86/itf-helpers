@@ -64,17 +64,39 @@ class ImportFakeApiClient(SmartEmailingApiClient):
     ) -> Any:
         self.calls.append((method, path, query, body))
 
-        if method == "POST":
-            if path == "/api/v3/import":
-                raise SmartEmailingApiError("not found", status_code=404)
+        if method == "POST" and path == "/api/v3/import":
+            if isinstance(body, dict) and isinstance(body.get("data"), list):
+                rows = body.get("data", [])
+                if rows and isinstance(rows[0], dict) and str(rows[0].get("emailaddress", "")).strip():
+                    return {"status": "ok", "sent": len(rows)}
+            raise SmartEmailingApiError("Missing key: emailaddress", status_code=422)
 
-            if path == "/api/v3/imports":
-                # accept only the "flat" payload variant
-                if isinstance(body, dict) and "settings" in body and "contacts" in body:
-                    return {"status": "ok", "sent": len(body.get("contacts", []))}
-                raise SmartEmailingApiError("bad payload", status_code=400)
+        raise SmartEmailingApiError("not found", status_code=404)
 
-        return {"status": "ok"}
+
+class ImportDataFakeApiClient(SmartEmailingApiClient):
+    def __init__(self) -> None:
+        super().__init__(SmartEmailingCredentials(username="user", api_key="key"))
+        self.calls: list[tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]] = []
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        self.calls.append((method, path, query, body))
+        if method == "POST" and path == "/api/v3/import":
+            if isinstance(body, dict) and isinstance(body.get("data"), list):
+                rows = body.get("data", [])
+                if rows and isinstance(rows[0], dict) and str(rows[0].get("emailaddress", "")).strip():
+                    contactlists = rows[0].get("contactlists", [])
+                    if not isinstance(contactlists, list) or not contactlists:
+                        raise SmartEmailingApiError("Missing key: contactlists", status_code=422)
+                    return {"status": "ok", "sent": len(rows)}
+            raise SmartEmailingApiError("Missing key: emailaddress", status_code=422)
+        raise SmartEmailingApiError("not found", status_code=404)
 
 
 class PostSearchFakeApiClient(SmartEmailingApiClient):
@@ -194,6 +216,30 @@ class SmartEmailingApiTests(unittest.TestCase):
         self.assertTrue(any(x["issue"] == "missing_custom_field" for x in issues))
         self.assertTrue(any(x["issue"] == "missing_emailaddress" for x in issues))
 
+    def test_build_api_contacts_ignores_selected_missing_custom_fields(self) -> None:
+        frame = MiniImportFrame(
+            [
+                {
+                    "E-mail": "a@example.com",
+                    "Jméno": "Jan",
+                    "Tituly před jménem": "Ing.",
+                    "Unknown X": "V1",
+                },
+            ]
+        )
+        contacts, issues = build_api_contacts_from_import_df(
+            import_df=frame,
+            api_system_field_map={"E-mail": "emailaddress", "Jméno": "name"},
+            custom_fields=[],
+            strict_custom_fields=True,
+            ignore_missing_custom_for_columns=["Tituly před jménem"],
+        )
+
+        self.assertEqual(len(contacts), 1)
+        missing_custom_details = [str(x.get("detail", "")) for x in issues if x.get("issue") == "missing_custom_field"]
+        self.assertIn("Unknown X", missing_custom_details)
+        self.assertNotIn("Tituly před jménem", missing_custom_details)
+
     def test_fetch_custom_field_names_uses_fallback_endpoint(self) -> None:
         responses = {
             ("/api/v3/customfields", 1): SmartEmailingApiError("404", status_code=404),
@@ -248,11 +294,11 @@ class SmartEmailingApiTests(unittest.TestCase):
 
         response, endpoint, payload_variant = client.import_contacts_batch(
             contacts=[{"emailaddress": "a@example.com"}],
-            endpoint_candidates=["/api/v3/import", "/api/v3/imports"],
+            endpoint_candidates=["/api/v3/import"],
         )
 
-        self.assertEqual(endpoint, "/api/v3/imports")
-        self.assertEqual(payload_variant, "flat")
+        self.assertEqual(endpoint, "/api/v3/import")
+        self.assertEqual(payload_variant, "import_data")
         self.assertEqual(response.get("status"), "ok")
 
     def test_import_contacts_canary_batches(self) -> None:
@@ -263,13 +309,32 @@ class SmartEmailingApiTests(unittest.TestCase):
             contacts=contacts,
             canary_size=50,
             batch_size=40,
-            endpoint_candidates=["/api/v3/imports"],
+            endpoint_candidates=["/api/v3/import"],
         )
 
         self.assertEqual(len(results), 3)  # 50 + 40 + 30
         self.assertTrue(results[0].canary)
         self.assertFalse(results[1].canary)
         self.assertEqual(sum(x.sent_contacts for x in results), 120)
+
+    def test_import_contacts_batch_prefers_import_data_payload(self) -> None:
+        client = ImportDataFakeApiClient()
+
+        response, endpoint, payload_variant = client.import_contacts_batch(
+            contacts=[
+                {
+                    "emailaddress": "a@example.com",
+                    "name": "Alice",
+                    "customfields": [{"id": "7", "value": "CF1"}],
+                    "contactlists": [{"id": "123", "status": "confirmed"}],
+                }
+            ],
+            endpoint_candidates=["/api/v3/import"],
+        )
+
+        self.assertEqual(endpoint, "/api/v3/import")
+        self.assertEqual(payload_variant, "import_data")
+        self.assertEqual(response.get("status"), "ok")
 
     def test_fetch_custom_fields_falls_back_to_post_search(self) -> None:
         client = PostSearchFakeApiClient()

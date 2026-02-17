@@ -271,7 +271,7 @@ output_encoding = st.sidebar.selectbox(
 dedup_label = st.sidebar.selectbox(
     "Deduplikace emailů ve výstupu",
     options=["Bez deduplikace", "Ponechat první výskyt", "Ponechat poslední výskyt"],
-    index=0,
+    index=2,
 )
 dedup_keep = {
     "Bez deduplikace": "none",
@@ -296,275 +296,285 @@ if st.sidebar.button("Smazat uložené SE API údaje"):
 st.markdown("### 1) Nahraj zdrojové CSV soubory (1 nebo více)")
 source_files = st.file_uploader("Zdrojové CSV", type=["csv"], accept_multiple_files=True)
 
-st.markdown("### 2) Schéma sloupců (CSV záloha)")
-cached_schema, cached_schema_meta = load_cached_schema(SCHEMA_CACHE_PATH)
-use_cached_schema = st.checkbox(
-    "Použít uložené schéma z CSV zálohy (bez nahrávání exportu)",
-    value=(cached_schema is not None),
-    disabled=(cached_schema is None),
-    help="Použije se jen jako záloha. Pokud je aktivní API schéma, má přednost.",
-)
-export_file = None
-with st.expander("Detaily CSV záložního schématu", expanded=False):
-    if cached_schema is None:
-        st.caption("Uložené CSV schéma zatím neexistuje.")
-    else:
-        st.caption(f"Uložené CSV schéma: {len(cached_schema.columns)} sloupců (`{SCHEMA_CACHE_PATH}`)")
-        st.caption(
-            "Metadata: "
-            f"verze={cached_schema_meta.get('version', '?')}, "
-            f"uloženo={cached_schema_meta.get('saved_at', '')}, "
-            f"zdroj={cached_schema_meta.get('source_file', '')}"
-        )
-        if st.button("Smazat uložené CSV schéma"):
-            try:
-                if SCHEMA_CACHE_PATH.exists():
-                    SCHEMA_CACHE_PATH.unlink()
-                st.success("Uložené CSV schéma bylo smazáno.")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Nepodařilo se smazat uložené CSV schéma: {exc}")
+mode_step_container = st.container()
+api_step_container = st.container()
+run_step_container = st.container()
 
-    export_file = st.file_uploader(
-        "Volitelně nahraj SmartEmailing export CSV (záložní schéma pro tento běh)",
-        type=["csv"],
-        accept_multiple_files=False,
+with st.expander("Nastavení schématu (volitelné)", expanded=False):
+    st.markdown("### Nastavení schématu (volitelné)")
+    st.caption("Tato sekce není součást běžného flow. Používá se hlavně jako fallback při výpadku API.")
+    st.markdown("#### Schéma sloupců (CSV záloha)")
+    cached_schema, cached_schema_meta = load_cached_schema(SCHEMA_CACHE_PATH)
+    use_cached_schema = st.checkbox(
+        "Použít uložené schéma z CSV zálohy (bez nahrávání exportu)",
+        value=(cached_schema is not None),
+        disabled=(cached_schema is None),
+        help="Použije se jen jako záloha. Pokud je aktivní API schéma, má přednost.",
     )
-
-csv_schema = None
-if export_file is not None:
-    try:
-        rr = read_csv_best_effort(export_file.getvalue())
-        export_df = clean_columns(rr.df)
-        csv_schema = schema_from_export_df(export_df)
-        st.success(
-            f"Načteno CSV schéma z nahraného souboru: {len(csv_schema.columns)} sloupců "
-            f"(oddělovač '{rr.delimiter}', kódování '{rr.encoding}')"
-        )
-        save_uploaded_schema = st.checkbox("Uložit nahrané CSV schéma jako výchozí pro příště", value=True)
-        if save_uploaded_schema:
-            try:
-                save_cached_schema(
-                    SCHEMA_CACHE_PATH,
-                    csv_schema,
-                    source_file=export_file.name,
-                    source_kind="csv_upload",
-                )
-                st.caption(f"CSV schéma uloženo do `{SCHEMA_CACHE_PATH}`.")
-            except Exception as exc:
-                st.error(f"Nepodařilo se uložit CSV schéma: {exc}")
-    except Exception as exc:
-        st.error(f"Nepodařilo se načíst exportní CSV pro záložní schéma: {exc}")
-
-if csv_schema is None and use_cached_schema and cached_schema is not None:
-    csv_schema = cached_schema
-    st.success(f"Použito uložené CSV záložní schéma: {len(csv_schema.columns)} sloupců")
-
-schema = csv_schema
-schema_origin = "csv_fallback" if csv_schema is not None else "none"
-
-schema_api_cfg = CFG.get("smartemailing", {}).get("api", {})
-required_min_custom_fields = to_int(schema_api_cfg.get("required_min_custom_fields", 1), 1)
-custom_fields_endpoint_candidates = [
-    str(x).strip()
-    for x in schema_api_cfg.get("custom_fields_endpoint_candidates", ["/api/v3/customfields", "/api/v3/custom-fields"])
-    if str(x).strip()
-]
-custom_fields_search_endpoint_candidates = [
-    str(x).strip()
-    for x in schema_api_cfg.get(
-        "custom_fields_search_endpoint_candidates",
-        [],
-    )
-    if str(x).strip()
-]
-
-st.markdown("### 2b) Schéma ze SmartEmailing API (doporučeno)")
-cached_api_schema, cached_api_schema_meta = load_cached_schema(API_SCHEMA_CACHE_PATH)
-use_api_schema = st.checkbox(
-    "Načítat schéma přímo ze SmartEmailing API",
-    value=True,
-)
-api_username = ""
-api_key = ""
-api_base_url = str(saved_api_credentials.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
-refresh_api_schema_on_generate = True
-use_api_cache_on_error = True
-api_schema_for_run = None
-api_schema_fetch_attempted = False
-api_schema_fetch_error = ""
-api_schema_from_cache_preview = False
-
-if use_api_schema:
-    with st.expander("Detaily API schématu", expanded=False):
-        api_username = st.text_input(
-            "SmartEmailing uživatelské jméno",
-            value=str(saved_api_credentials.get("username", "")).strip(),
-            key="schema_api_username",
-        )
-        api_key = st.text_input(
-            "SmartEmailing API klíč",
-            value=str(saved_api_credentials.get("api_key", "")).strip(),
-            type="password",
-            key="schema_api_key",
-        )
-        api_base_url = st.text_input(
-            "API základní URL",
-            value=str(saved_api_credentials.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL,
-            key="schema_api_base_url",
-        )
-        save_schema_api_credentials = st.button("Uložit API údaje na disk", key="save_api_credentials_schema")
-        refresh_api_schema_on_generate = st.checkbox("Před exportem načíst schéma z API znovu", value=True)
-        use_api_cache_on_error = st.checkbox("Při chybě API použít schéma z API mezipaměti", value=True)
-
-        if save_schema_api_credentials:
-            if str(api_username).strip() and str(api_key).strip():
-                try:
-                    save_api_credentials(API_CREDENTIALS_PATH, api_username, api_key, api_base_url)
-                    st.success(f"API údaje byly uloženy do `{API_CREDENTIALS_PATH}`.")
-                except Exception as exc:
-                    st.error(f"Nepodařilo se uložit API údaje: {exc}")
-            else:
-                st.error("Pro uložení vyplň uživatelské jméno i API klíč.")
-
-        if remember_api_credentials and str(api_username).strip() and str(api_key).strip():
-            try:
-                save_api_credentials(API_CREDENTIALS_PATH, api_username, api_key, api_base_url)
-            except Exception as exc:
-                st.warning(f"Nepodařilo se uložit API údaje lokálně: {exc}")
-
-        if cached_api_schema is None:
-            st.caption("Uložená API mezipaměť schématu zatím neexistuje.")
+    export_file = None
+    st.markdown("##### Detaily CSV záložního schématu")
+    with st.container():
+        if cached_schema is None:
+            st.caption("Uložené CSV schéma zatím neexistuje.")
         else:
-            st.caption(f"Uložené API schéma: {len(cached_api_schema.columns)} sloupců (`{API_SCHEMA_CACHE_PATH}`)")
+            st.caption(f"Uložené CSV schéma: {len(cached_schema.columns)} sloupců (`{SCHEMA_CACHE_PATH}`)")
             st.caption(
                 "Metadata: "
-                f"verze={cached_api_schema_meta.get('version', '?')}, "
-                f"uloženo={cached_api_schema_meta.get('saved_at', '')}, "
-                f"zdroj={cached_api_schema_meta.get('source_file', '')}, "
-                f"vlastní_pole={cached_api_schema_meta.get('custom_field_count', '?')}"
+                f"verze={cached_schema_meta.get('version', '?')}, "
+                f"uloženo={cached_schema_meta.get('saved_at', '')}, "
+                f"zdroj={cached_schema_meta.get('source_file', '')}"
             )
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            test_ping = st.button("Test API (ping)")
-        with c2:
-            fetch_api_schema_now = st.button("Načíst schéma z API teď")
-        with c3:
-            clear_api_cache = st.button("Smazat API mezipaměť schématu")
-        probe_custom_fields_now = st.button("Diagnostika endpointů vlastních polí")
-
-        if clear_api_cache:
-            try:
-                if API_SCHEMA_CACHE_PATH.exists():
-                    API_SCHEMA_CACHE_PATH.unlink()
-                st.success("API mezipaměť schématu byla smazána.")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Nepodařilo se smazat API mezipaměť schématu: {exc}")
-
-        if test_ping:
-            try:
-                ping_client = SmartEmailingApiClient(
-                    SmartEmailingCredentials(
-                        username=str(api_username).strip(),
-                        api_key=str(api_key).strip(),
-                        base_url=str(api_base_url).strip() or DEFAULT_BASE_URL,
-                    )
-                )
-                ping_data = ping_client.ping()
-                st.success(f"API ping OK: {ping_data}")
-            except Exception as exc:
-                st.error(f"API ping selhal: {exc}")
-
-        if fetch_api_schema_now:
-            api_schema_fetch_attempted = True
-            try:
-                api_schema_for_run, api_meta = fetch_schema_from_api(api_username, api_key, api_base_url)
-                save_cached_schema(
-                    API_SCHEMA_CACHE_PATH,
-                    api_schema_for_run,
-                    source_file="smartemailing_api",
-                    source_kind="api_live",
-                    extra_meta=api_meta,
-                )
-                st.success(
-                    f"Načteno API schéma: {len(api_schema_for_run.columns)} sloupců "
-                    f"(vlastní pole: {api_meta.get('custom_field_count', 0)})"
-                )
-            except Exception as exc:
-                api_schema_fetch_error = str(exc)
-                st.error(f"Nepodařilo se načíst schéma z API: {exc}")
-
-        if probe_custom_fields_now:
-            try:
-                probe_client = SmartEmailingApiClient(
-                    SmartEmailingCredentials(
-                        username=str(api_username).strip(),
-                        api_key=str(api_key).strip(),
-                        base_url=str(api_base_url).strip() or DEFAULT_BASE_URL,
-                    )
-                )
-                probe_rows = probe_client.probe_custom_fields_endpoints(
-                    endpoint_candidates=custom_fields_endpoint_candidates,
-                    search_endpoint_candidates=custom_fields_search_endpoint_candidates,
-                )
-                st.markdown("#### Diagnostika endpointů vlastních polí")
-                st.dataframe(pd.DataFrame(probe_rows), use_container_width=True)
-            except Exception as exc:
-                st.error(f"Nepodařilo se provést diagnostiku endpointů vlastních polí: {exc}")
-
-        # Pro běžný náhled použij naposledy načtené API schéma (pokud je validní).
-        # Při spuštění se stejně načte čerstvé, pokud je zapnuté refresh_api_schema_on_generate.
-        if api_schema_for_run is None and cached_api_schema is not None:
-            cached_custom_fields = to_int(cached_api_schema_meta.get("custom_field_count", 0), 0)
-            if cached_custom_fields >= required_min_custom_fields:
-                api_schema_for_run = cached_api_schema
-                api_schema_from_cache_preview = True
-                st.caption(f"Použito uložené API schéma z mezipaměti: {len(api_schema_for_run.columns)} sloupců")
-            elif api_schema_fetch_attempted:
-                st.warning(
-                    "API mezipaměť má příliš málo vlastních polí "
-                    f"({cached_custom_fields} < {required_min_custom_fields}), ignoruji ji."
-                )
-
-if api_schema_for_run is not None:
-    schema = api_schema_for_run
-    schema_origin = "smartemailing_api_cache" if api_schema_from_cache_preview else "smartemailing_api"
-elif use_api_schema and schema is not None:
-    if api_schema_fetch_attempted and api_schema_fetch_error:
-        st.warning(
-            "Schéma z API se nepodařilo načíst, pokračuje se s CSV záložním schématem. "
-            f"Detail: {api_schema_fetch_error}"
+            if st.button("Smazat uložené CSV schéma"):
+                try:
+                    if SCHEMA_CACHE_PATH.exists():
+                        SCHEMA_CACHE_PATH.unlink()
+                    st.success("Uložené CSV schéma bylo smazáno.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Nepodařilo se smazat uložené CSV schéma: {exc}")
+    
+        export_file = st.file_uploader(
+            "Volitelně nahraj SmartEmailing export CSV (záložní schéma pro tento běh)",
+            type=["csv"],
+            accept_multiple_files=False,
         )
-    elif not refresh_api_schema_on_generate:
-        st.info(
-            "Aktivní je CSV záložní schéma. Pro přepnutí na API schéma klikni na "
-            "`Načíst schéma z API teď`."
+    
+    csv_schema = None
+    if export_file is not None:
+        try:
+            rr = read_csv_best_effort(export_file.getvalue())
+            export_df = clean_columns(rr.df)
+            csv_schema = schema_from_export_df(export_df)
+            st.success(
+                f"Načteno CSV schéma z nahraného souboru: {len(csv_schema.columns)} sloupců "
+                f"(oddělovač '{rr.delimiter}', kódování '{rr.encoding}')"
+            )
+            save_uploaded_schema = st.checkbox("Uložit nahrané CSV schéma jako výchozí pro příště", value=True)
+            if save_uploaded_schema:
+                try:
+                    save_cached_schema(
+                        SCHEMA_CACHE_PATH,
+                        csv_schema,
+                        source_file=export_file.name,
+                        source_kind="csv_upload",
+                    )
+                    st.caption(f"CSV schéma uloženo do `{SCHEMA_CACHE_PATH}`.")
+                except Exception as exc:
+                    st.error(f"Nepodařilo se uložit CSV schéma: {exc}")
+        except Exception as exc:
+            st.error(f"Nepodařilo se načíst exportní CSV pro záložní schéma: {exc}")
+    
+    if csv_schema is None and use_cached_schema and cached_schema is not None:
+        csv_schema = cached_schema
+        st.success(f"Použito uložené CSV záložní schéma: {len(csv_schema.columns)} sloupců")
+    
+    schema = csv_schema
+    schema_origin = "csv_fallback" if csv_schema is not None else "none"
+    
+    schema_api_cfg = CFG.get("smartemailing", {}).get("api", {})
+    required_min_custom_fields = to_int(schema_api_cfg.get("required_min_custom_fields", 1), 1)
+    custom_fields_endpoint_candidates = [
+        str(x).strip()
+        for x in schema_api_cfg.get("custom_fields_endpoint_candidates", ["/api/v3/customfields", "/api/v3/custom-fields"])
+        if str(x).strip()
+    ]
+    custom_fields_search_endpoint_candidates = [
+        str(x).strip()
+        for x in schema_api_cfg.get(
+            "custom_fields_search_endpoint_candidates",
+            [],
         )
-
-if schema is not None:
-    schema_origin_label = {
-        "csv_fallback": "CSV záloha",
-        "smartemailing_api": "SmartEmailing API",
-        "smartemailing_api_cache": "SmartEmailing API (mezipaměť)",
-        "none": "bez schématu",
-    }.get(schema_origin, str(schema_origin))
-    st.caption(f"Aktivní schéma: {len(schema.columns)} sloupců (`{schema_origin_label}`)")
-else:
-    st.warning("Není načtené žádné schéma. Nahraj export CSV nebo zapni načítání schématu z API.")
-
-st.markdown("### 3) Režim běhu")
-execution_mode_label = st.radio(
-    "Vyber akci po transformaci dat",
-    options=[
-        "CSV export (záloha)",
-        "API kontrolní běh (jen validace + náhled)",
-        "API bezpečný import (staging + testovací dávka)",
-        "API plný import (schvalování + testovací dávka)",
-    ],
-    index=0,
-)
+        if str(x).strip()
+    ]
+    
+    st.markdown("#### Schéma ze SmartEmailing API (doporučeno)")
+    cached_api_schema, cached_api_schema_meta = load_cached_schema(API_SCHEMA_CACHE_PATH)
+    use_api_schema = st.checkbox(
+        "Načítat schéma přímo ze SmartEmailing API",
+        value=True,
+    )
+    api_username = ""
+    api_key = ""
+    api_base_url = str(saved_api_credentials.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
+    refresh_api_schema_on_generate = True
+    use_api_cache_on_error = True
+    api_schema_for_run = None
+    api_schema_fetch_attempted = False
+    api_schema_fetch_error = ""
+    api_schema_from_cache_preview = False
+    
+    if use_api_schema:
+        st.markdown("##### Detaily API schématu")
+        with st.container():
+            api_username = st.text_input(
+                "SmartEmailing uživatelské jméno",
+                value=str(saved_api_credentials.get("username", "")).strip(),
+                key="schema_api_username",
+            )
+            api_key = st.text_input(
+                "SmartEmailing API klíč",
+                value=str(saved_api_credentials.get("api_key", "")).strip(),
+                type="password",
+                key="schema_api_key",
+            )
+            api_base_url = st.text_input(
+                "API základní URL",
+                value=str(saved_api_credentials.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL,
+                key="schema_api_base_url",
+            )
+            save_schema_api_credentials = st.button("Uložit API údaje na disk", key="save_api_credentials_schema")
+            refresh_api_schema_on_generate = st.checkbox("Před exportem načíst schéma z API znovu", value=True)
+            use_api_cache_on_error = st.checkbox("Při chybě API použít schéma z API mezipaměti", value=True)
+    
+            if save_schema_api_credentials:
+                if str(api_username).strip() and str(api_key).strip():
+                    try:
+                        save_api_credentials(API_CREDENTIALS_PATH, api_username, api_key, api_base_url)
+                        st.success(f"API údaje byly uloženy do `{API_CREDENTIALS_PATH}`.")
+                    except Exception as exc:
+                        st.error(f"Nepodařilo se uložit API údaje: {exc}")
+                else:
+                    st.error("Pro uložení vyplň uživatelské jméno i API klíč.")
+    
+            if remember_api_credentials and str(api_username).strip() and str(api_key).strip():
+                try:
+                    save_api_credentials(API_CREDENTIALS_PATH, api_username, api_key, api_base_url)
+                except Exception as exc:
+                    st.warning(f"Nepodařilo se uložit API údaje lokálně: {exc}")
+    
+            if cached_api_schema is None:
+                st.caption("Uložená API mezipaměť schématu zatím neexistuje.")
+            else:
+                st.caption(f"Uložené API schéma: {len(cached_api_schema.columns)} sloupců (`{API_SCHEMA_CACHE_PATH}`)")
+                st.caption(
+                    "Metadata: "
+                    f"verze={cached_api_schema_meta.get('version', '?')}, "
+                    f"uloženo={cached_api_schema_meta.get('saved_at', '')}, "
+                    f"zdroj={cached_api_schema_meta.get('source_file', '')}, "
+                    f"vlastní_pole={cached_api_schema_meta.get('custom_field_count', '?')}"
+                )
+    
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                test_ping = st.button("Test API (ping)")
+            with c2:
+                fetch_api_schema_now = st.button("Načíst schéma z API teď")
+            with c3:
+                clear_api_cache = st.button("Smazat API mezipaměť schématu")
+            probe_custom_fields_now = st.button("Diagnostika endpointů vlastních polí")
+    
+            if clear_api_cache:
+                try:
+                    if API_SCHEMA_CACHE_PATH.exists():
+                        API_SCHEMA_CACHE_PATH.unlink()
+                    st.success("API mezipaměť schématu byla smazána.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Nepodařilo se smazat API mezipaměť schématu: {exc}")
+    
+            if test_ping:
+                try:
+                    ping_client = SmartEmailingApiClient(
+                        SmartEmailingCredentials(
+                            username=str(api_username).strip(),
+                            api_key=str(api_key).strip(),
+                            base_url=str(api_base_url).strip() or DEFAULT_BASE_URL,
+                        )
+                    )
+                    ping_data = ping_client.ping()
+                    st.success(f"API ping OK: {ping_data}")
+                except Exception as exc:
+                    st.error(f"API ping selhal: {exc}")
+    
+            if fetch_api_schema_now:
+                api_schema_fetch_attempted = True
+                try:
+                    api_schema_for_run, api_meta = fetch_schema_from_api(api_username, api_key, api_base_url)
+                    save_cached_schema(
+                        API_SCHEMA_CACHE_PATH,
+                        api_schema_for_run,
+                        source_file="smartemailing_api",
+                        source_kind="api_live",
+                        extra_meta=api_meta,
+                    )
+                    st.success(
+                        f"Načteno API schéma: {len(api_schema_for_run.columns)} sloupců "
+                        f"(vlastní pole: {api_meta.get('custom_field_count', 0)})"
+                    )
+                except Exception as exc:
+                    api_schema_fetch_error = str(exc)
+                    st.error(f"Nepodařilo se načíst schéma z API: {exc}")
+    
+            if probe_custom_fields_now:
+                try:
+                    probe_client = SmartEmailingApiClient(
+                        SmartEmailingCredentials(
+                            username=str(api_username).strip(),
+                            api_key=str(api_key).strip(),
+                            base_url=str(api_base_url).strip() or DEFAULT_BASE_URL,
+                        )
+                    )
+                    probe_rows = probe_client.probe_custom_fields_endpoints(
+                        endpoint_candidates=custom_fields_endpoint_candidates,
+                        search_endpoint_candidates=custom_fields_search_endpoint_candidates,
+                    )
+                    st.markdown("#### Diagnostika endpointů vlastních polí")
+                    st.dataframe(pd.DataFrame(probe_rows), use_container_width=True)
+                except Exception as exc:
+                    st.error(f"Nepodařilo se provést diagnostiku endpointů vlastních polí: {exc}")
+    
+            # Pro běžný náhled použij naposledy načtené API schéma (pokud je validní).
+            # Při spuštění se stejně načte čerstvé, pokud je zapnuté refresh_api_schema_on_generate.
+            if api_schema_for_run is None and cached_api_schema is not None:
+                cached_custom_fields = to_int(cached_api_schema_meta.get("custom_field_count", 0), 0)
+                if cached_custom_fields >= required_min_custom_fields:
+                    api_schema_for_run = cached_api_schema
+                    api_schema_from_cache_preview = True
+                    st.caption(f"Použito uložené API schéma z mezipaměti: {len(api_schema_for_run.columns)} sloupců")
+                elif api_schema_fetch_attempted:
+                    st.warning(
+                        "API mezipaměť má příliš málo vlastních polí "
+                        f"({cached_custom_fields} < {required_min_custom_fields}), ignoruji ji."
+                    )
+    
+    if api_schema_for_run is not None:
+        schema = api_schema_for_run
+        schema_origin = "smartemailing_api_cache" if api_schema_from_cache_preview else "smartemailing_api"
+    elif use_api_schema and schema is not None:
+        if api_schema_fetch_attempted and api_schema_fetch_error:
+            st.warning(
+                "Schéma z API se nepodařilo načíst, pokračuje se s CSV záložním schématem. "
+                f"Detail: {api_schema_fetch_error}"
+            )
+        elif not refresh_api_schema_on_generate:
+            st.info(
+                "Aktivní je CSV záložní schéma. Pro přepnutí na API schéma klikni na "
+                "`Načíst schéma z API teď`."
+            )
+    
+    if schema is not None:
+        schema_origin_label = {
+            "csv_fallback": "CSV záloha",
+            "smartemailing_api": "SmartEmailing API",
+            "smartemailing_api_cache": "SmartEmailing API (mezipaměť)",
+            "none": "bez schématu",
+        }.get(schema_origin, str(schema_origin))
+        st.caption(f"Aktivní schéma: {len(schema.columns)} sloupců (`{schema_origin_label}`)")
+    else:
+        st.warning("Není načtené žádné schéma. Nahraj export CSV nebo zapni načítání schématu z API.")
+    
+with mode_step_container:
+    st.markdown("### 2) Režim běhu")
+    execution_mode_label = st.radio(
+        "Vyber akci po transformaci dat",
+        options=[
+            "CSV export (záloha)",
+            "API kontrolní běh (jen validace + náhled)",
+            "API bezpečný import (staging + testovací dávka)",
+            "API plný import (schvalování + testovací dávka)",
+        ],
+        index=0,
+    )
 execution_mode = {
     "CSV export (záloha)": "csv_fallback",
     "API kontrolní běh (jen validace + náhled)": "api_dry_run",
@@ -576,7 +586,7 @@ api_cfg = CFG.get("smartemailing", {}).get("api", {})
 api_mode_enabled = execution_mode != "csv_fallback"
 import_endpoint_candidates = [
     str(x).strip()
-    for x in api_cfg.get("import_endpoint_candidates", ["/api/v3/import", "/api/v3/imports", "/api/v3/import-contacts"])
+    for x in api_cfg.get("import_endpoint_candidates", ["/api/v3/import"])
     if str(x).strip()
 ]
 custom_fields_endpoint_candidates = [
@@ -604,6 +614,35 @@ contact_lists_search_endpoint_candidates = [
 ]
 strict_custom_fields = bool(api_cfg.get("strict_custom_fields", True))
 list_status = str(api_cfg.get("list_status", "confirmed")).strip() or "confirmed"
+field_map_cfg = CFG.get("smartemailing", {}).get("field_map", {})
+api_system_field_map_cfg = api_cfg.get("system_field_map", {})
+programs_cfg = CFG.get("smartemailing", {}).get("programs", {})
+default_exclude_columns_from_api_import: list[str] = []
+combined_field_name = str(programs_cfg.get("combined_field_name", "")).strip()
+if programs_cfg.get("also_fill_combined_field") and combined_field_name:
+    default_exclude_columns_from_api_import.append(combined_field_name)
+configured_exclude_columns_from_api_import = [
+    str(col).strip()
+    for col in api_cfg.get("exclude_columns_from_api_import", [])
+    if str(col).strip()
+]
+exclude_columns_from_api_import = list(
+    dict.fromkeys(default_exclude_columns_from_api_import + configured_exclude_columns_from_api_import)
+)
+default_ignore_missing_custom = [
+    str(col).strip()
+    for col in field_map_cfg.keys()
+    if str(col).strip()
+    and str(col).strip().casefold() not in {str(x).strip().casefold() for x in api_system_field_map_cfg.keys()}
+]
+configured_ignore_missing_custom = [
+    str(col).strip()
+    for col in api_cfg.get("ignore_missing_custom_for_columns", [])
+    if str(col).strip()
+]
+ignore_missing_custom_for_columns = list(
+    dict.fromkeys(default_ignore_missing_custom + configured_ignore_missing_custom)
+)
 
 api_import_username = ""
 api_import_key = ""
@@ -615,7 +654,6 @@ api_batch_size = to_int(api_cfg.get("batch_size", 500), 500)
 api_max_contacts_safe = to_int(api_cfg.get("max_contacts_safe", 2000), 2000)
 api_max_contacts_full = to_int(api_cfg.get("max_contacts_full", 10000), 10000)
 safe_confirm = False
-safe_phrase_input = ""
 full_confirm = False
 full_phrase_input = ""
 full_operator = ""
@@ -623,199 +661,239 @@ full_approver = ""
 full_second_approval_input = ""
 
 if api_mode_enabled:
-    st.markdown("### 4) Import do SmartEmailingu přes API")
     if "api_contact_lists_cache" not in st.session_state:
         st.session_state.api_contact_lists_cache = []
     if "full_import_approval_code" not in st.session_state:
         st.session_state.full_import_approval_code = hashlib.sha1(
             datetime.now(timezone.utc).isoformat().encode("utf-8")
         ).hexdigest()[:8].upper()
+    with st.expander("Detaily API importu a bezpečnostních voleb", expanded=False):
+        api_import_username = st.text_input(
+            "API uživatelské jméno (pro import)",
+            value=(
+                str(api_username).strip()
+                if str(api_username).strip()
+                else str(saved_api_credentials.get("username", "")).strip()
+            ),
+            key="import_api_username",
+        )
+        api_import_key = st.text_input(
+            "API klíč (pro import)",
+            value=(
+                str(api_key).strip()
+                if str(api_key).strip()
+                else str(saved_api_credentials.get("api_key", "")).strip()
+            ),
+            type="password",
+            key="import_api_key",
+        )
+        api_import_base_url = st.text_input(
+            "API základní URL (pro import)",
+            value=(
+                str(api_base_url).strip()
+                if str(api_base_url).strip()
+                else str(saved_api_credentials.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
+            ),
+            key="import_api_base_url",
+        )
+        save_import_api_credentials = st.button("Uložit API údaje na disk", key="save_api_credentials_import")
 
-    api_import_username = st.text_input(
-        "API uživatelské jméno (pro import)",
-        value=(
-            str(api_username).strip()
-            if str(api_username).strip()
-            else str(saved_api_credentials.get("username", "")).strip()
-        ),
-        key="import_api_username",
-    )
-    api_import_key = st.text_input(
-        "API klíč (pro import)",
-        value=(
-            str(api_key).strip()
-            if str(api_key).strip()
-            else str(saved_api_credentials.get("api_key", "")).strip()
-        ),
-        type="password",
-        key="import_api_key",
-    )
-    api_import_base_url = st.text_input(
-        "API základní URL (pro import)",
-        value=(
-            str(api_base_url).strip()
-            if str(api_base_url).strip()
-            else str(saved_api_credentials.get("base_url", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
-        ),
-        key="import_api_base_url",
-    )
-    save_import_api_credentials = st.button("Uložit API údaje na disk", key="save_api_credentials_import")
+        if save_import_api_credentials:
+            if str(api_import_username).strip() and str(api_import_key).strip():
+                try:
+                    save_api_credentials(API_CREDENTIALS_PATH, api_import_username, api_import_key, api_import_base_url)
+                    st.success(f"API údaje byly uloženy do `{API_CREDENTIALS_PATH}`.")
+                except Exception as exc:
+                    st.error(f"Nepodařilo se uložit API údaje: {exc}")
+            else:
+                st.error("Pro uložení vyplň uživatelské jméno i API klíč.")
 
-    if save_import_api_credentials:
-        if str(api_import_username).strip() and str(api_import_key).strip():
+        if remember_api_credentials and str(api_import_username).strip() and str(api_import_key).strip():
             try:
                 save_api_credentials(API_CREDENTIALS_PATH, api_import_username, api_import_key, api_import_base_url)
-                st.success(f"API údaje byly uloženy do `{API_CREDENTIALS_PATH}`.")
             except Exception as exc:
-                st.error(f"Nepodařilo se uložit API údaje: {exc}")
-        else:
-            st.error("Pro uložení vyplň uživatelské jméno i API klíč.")
+                st.warning(f"Nepodařilo se uložit API údaje lokálně: {exc}")
 
-    if remember_api_credentials and str(api_import_username).strip() and str(api_import_key).strip():
-        try:
-            save_api_credentials(API_CREDENTIALS_PATH, api_import_username, api_import_key, api_import_base_url)
-        except Exception as exc:
-            st.warning(f"Nepodařilo se uložit API údaje lokálně: {exc}")
-
-    if "api_contact_lists_cache_meta" not in st.session_state:
-        st.session_state.api_contact_lists_cache_meta = {}
-    if "staging_list_manual" not in st.session_state:
-        st.session_state.staging_list_manual = ""
-    if "staging_list_select" not in st.session_state:
-        st.session_state.staging_list_select = "(ručně)"
-
-    auto_load_lists = st.checkbox(
-        "Načítat listy z API automaticky po vyplnění přihlášení",
-        value=True,
-        key="auto_load_api_lists",
-    )
-    load_lists = st.button("Obnovit listy z API")
-
-    credentials_ready_for_lists = bool(str(api_import_username).strip()) and bool(str(api_import_key).strip())
-    lists_fingerprint = hashlib.sha256(
-        (
-            f"{str(api_import_username).strip()}|"
-            f"{str(api_import_key).strip()}|"
-            f"{str(api_import_base_url).strip() or DEFAULT_BASE_URL}"
-        ).encode("utf-8")
-    ).hexdigest()
-    cached_fingerprint = str(st.session_state.get("api_contact_lists_cache_meta", {}).get("fingerprint", ""))
-    should_auto_load = auto_load_lists and credentials_ready_for_lists and cached_fingerprint != lists_fingerprint
-
-    if (load_lists or should_auto_load) and credentials_ready_for_lists:
-        try:
-            list_client = SmartEmailingApiClient(
-                SmartEmailingCredentials(
-                    username=str(api_import_username).strip(),
-                    api_key=str(api_import_key).strip(),
-                    base_url=str(api_import_base_url).strip() or DEFAULT_BASE_URL,
-                )
-            )
-            fetched_lists = list_client.fetch_contact_lists(
-                endpoint_candidates=contact_lists_endpoint_candidates,
-                search_endpoint_candidates=contact_lists_search_endpoint_candidates,
-            )
-            st.session_state.api_contact_lists_cache = fetched_lists
-            st.session_state.api_contact_lists_cache_meta = {
-                "fingerprint": lists_fingerprint,
-                "loaded_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if load_lists:
-                st.success(f"Načteno listů: {len(fetched_lists)}")
-        except Exception as exc:
-            st.error(f"Nepodařilo se načíst listy: {exc}")
-
-    lists_cache = st.session_state.get("api_contact_lists_cache", [])
-    if lists_cache:
-        label_to_list: dict[str, dict[str, str]] = {}
-        labels = []
-        for item in lists_cache:
-            list_id = str(item.get("id", "")).strip()
-            list_name = str(item.get("name", "")).strip() or "(bez názvu)"
-            label = f"{list_name} (id={list_id})"
-            labels.append(label)
-            label_to_list[label] = {"id": list_id, "name": list_name}
-
-        list_options = ["(ručně)"] + labels
-        if st.session_state.get("staging_list_select") not in list_options:
-            st.session_state["staging_list_select"] = "(ručně)"
-        selected_list_label = st.selectbox(
-            "Vyber staging seznam ze SmartEmailingu",
-            options=list_options,
-            key="staging_list_select",
-        )
-        if selected_list_label != "(ručně)":
-            selected = label_to_list.get(selected_list_label, {"id": "", "name": ""})
-            selected_id = str(selected.get("id", "")).strip()
-            selected_name = str(selected.get("name", "")).strip()
-            if selected_id:
-                st.session_state["staging_list_manual"] = selected_id
-                st.caption(f"Vybraný staging seznam: `{selected_name}` (id `{selected_id}`)")
-    else:
-        st.caption("Listy zatím nejsou načtené. Vyplň API údaje a klikni na `Obnovit listy z API`.")
-
-    staging_list_value = st.text_input(
-        "Staging seznam ID nebo název (bezpečný/plný režim)",
-        key="staging_list_manual",
-        help="Doporučeno: použít staging seznam, ne produkční seznam.",
-    )
-    staging_tag = st.text_input(
-        "Staging štítek (volitelný)",
-        value="ITF_IMPORT_STAGING",
-        help="Některé účty podporují tagy v importních datech.",
-    )
-
-    api_canary_size = int(
-        st.number_input(
-            "Velikost testovací dávky (první dávka)",
-            min_value=0,
-            value=max(0, api_canary_size),
-            step=10,
-        )
-    )
-    api_batch_size = int(
-        st.number_input(
-            "Velikost dávky",
-            min_value=1,
-            value=max(1, api_batch_size),
-            step=100,
-        )
-    )
-
-    if execution_mode == "api_safe_import":
-        safe_phrase_required = str(
-            api_cfg.get("required_confirmation_phrase_safe", "SAFE IMPORT DO SMARTEMAILINGU")
-        )
-        safe_confirm = st.checkbox(
-            "Rozumím dopadu: bezpečný import běží jen jako přidání/aktualizace, bez mazání.",
-            value=False,
-        )
-        safe_phrase_input = st.text_input(f"Opiš potvrzovací frázi: {safe_phrase_required}", value="")
-
-    if execution_mode == "api_full_import":
-        full_phrase_required = str(
-            api_cfg.get("required_confirmation_phrase_full", "FULL IMPORT DO SMARTEMAILINGU")
-        )
-        full_confirm = st.checkbox(
-            "Rozumím dopadu: plný import může přepsat více polí dle pravidel.",
-            value=False,
-        )
-        full_phrase_input = st.text_input(f"Opiš potvrzovací frázi: {full_phrase_required}", value="")
-        full_operator = st.text_input("Operátor (kdo import spouští)", value="")
-        full_approver = st.text_input("Schvalovatel (4 oči)", value="")
-        approval_code = st.session_state.full_import_approval_code
-        full_second_approval_input = st.text_input(
-            f"Schvalovací kód (4 oči): {approval_code}",
-            value="",
-        )
-        api_max_contacts_full = int(
+        api_canary_size = int(
             st.number_input(
-                "Limit kontaktů pro plný import",
+                "Velikost testovací dávky (první dávka)",
+                min_value=0,
+                value=max(0, api_canary_size),
+                step=10,
+            )
+        )
+        api_batch_size = int(
+            st.number_input(
+                "Velikost dávky",
                 min_value=1,
-                value=max(1, api_max_contacts_full),
+                value=max(1, api_batch_size),
                 step=100,
             )
         )
+
+    with api_step_container:
+        st.markdown("### 3) Import do SmartEmailingu přes API")
+
+        if "api_contact_lists_cache_meta" not in st.session_state:
+            st.session_state.api_contact_lists_cache_meta = {}
+        if "staging_list_manual" not in st.session_state:
+            st.session_state.staging_list_manual = ""
+        if "staging_list_select" not in st.session_state:
+            st.session_state.staging_list_select = "(ručně)"
+
+        load_lists = st.button("Obnovit listy z API", key="refresh_api_lists_main")
+        credentials_ready_for_lists = bool(str(api_import_username).strip()) and bool(str(api_import_key).strip())
+        lists_fingerprint = hashlib.sha256(
+            (
+                f"{str(api_import_username).strip()}|"
+                f"{str(api_import_key).strip()}|"
+                f"{str(api_import_base_url).strip() or DEFAULT_BASE_URL}"
+            ).encode("utf-8")
+        ).hexdigest()
+        cached_fingerprint = str(st.session_state.get("api_contact_lists_cache_meta", {}).get("fingerprint", ""))
+        should_auto_load = credentials_ready_for_lists and cached_fingerprint != lists_fingerprint
+
+        if (load_lists or should_auto_load) and credentials_ready_for_lists:
+            try:
+                list_client = SmartEmailingApiClient(
+                    SmartEmailingCredentials(
+                        username=str(api_import_username).strip(),
+                        api_key=str(api_import_key).strip(),
+                        base_url=str(api_import_base_url).strip() or DEFAULT_BASE_URL,
+                    )
+                )
+                fetched_lists = list_client.fetch_contact_lists(
+                    endpoint_candidates=contact_lists_endpoint_candidates,
+                    search_endpoint_candidates=contact_lists_search_endpoint_candidates,
+                )
+                st.session_state.api_contact_lists_cache = fetched_lists
+                st.session_state.api_contact_lists_cache_meta = {
+                    "fingerprint": lists_fingerprint,
+                    "loaded_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if load_lists:
+                    st.success(f"Načteno listů: {len(fetched_lists)}")
+            except Exception as exc:
+                st.error(f"Nepodařilo se načíst listy: {exc}")
+
+        lists_cache = st.session_state.get("api_contact_lists_cache", [])
+        if lists_cache:
+            def _list_sort_tuple(item: dict[str, Any]) -> tuple[int, int, str]:
+                raw_id = str(item.get("id", "")).strip()
+                name = str(item.get("name", "")).strip().casefold()
+                try:
+                    return (0, -int(raw_id), name)
+                except Exception:
+                    return (1, 0, name)
+
+            label_to_list: dict[str, dict[str, str]] = {}
+            labels = []
+            for item in sorted(lists_cache, key=_list_sort_tuple):
+                list_id = str(item.get("id", "")).strip()
+                list_name = str(item.get("name", "")).strip() or "(bez názvu)"
+                label = f"{list_name} (id={list_id})"
+                labels.append(label)
+                label_to_list[label] = {"id": list_id, "name": list_name}
+
+            list_options = ["(ručně)"] + labels
+            if st.session_state.get("staging_list_select") not in list_options:
+                st.session_state["staging_list_select"] = "(ručně)"
+            selected_list_label = st.selectbox(
+                "Vyber staging seznam ze SmartEmailingu",
+                options=list_options,
+                key="staging_list_select",
+            )
+            if selected_list_label != "(ručně)":
+                selected = label_to_list.get(selected_list_label, {"id": "", "name": ""})
+                selected_id = str(selected.get("id", "")).strip()
+                selected_name = str(selected.get("name", "")).strip()
+                if selected_id:
+                    st.session_state["staging_list_manual"] = selected_id
+                    st.caption(f"Vybraný staging seznam: `{selected_name}` (id `{selected_id}`)")
+        else:
+            st.caption("Listy zatím nejsou načtené. Vyplň API údaje a klikni na `Obnovit listy z API`.")
+
+        staging_list_value = st.text_input(
+            "Staging seznam ID nebo název (bezpečný/plný režim)",
+            key="staging_list_manual",
+            help="Doporučeno: použít staging seznam, ne produkční seznam.",
+        )
+        staging_tag = st.text_input(
+            "Staging štítek (volitelný)",
+            value="",
+            placeholder="např. ITF_IMPORT_STAGING",
+            help="Některé účty podporují tagy v importních datech.",
+        )
+
+        lists_loaded_count = len(st.session_state.get("api_contact_lists_cache", []))
+        api_creds_filled = bool(str(api_import_username).strip()) and bool(str(api_import_key).strip())
+        st.caption(
+            "Rychlý stav API importu: "
+            f"údaje {'vyplněny' if api_creds_filled else 'chybí'}, "
+            f"načtené seznamy: {lists_loaded_count}."
+        )
+        st.markdown("#### Limity kontaktů pro import")
+        limit_col_safe, limit_col_full = st.columns(2)
+        with limit_col_safe:
+            api_max_contacts_safe = int(
+                st.number_input(
+                    "Limit pro bezpečný import",
+                    min_value=1,
+                    value=max(1, api_max_contacts_safe),
+                    step=100,
+                    key="safe_import_limit_main",
+                )
+            )
+        with limit_col_full:
+            api_max_contacts_full = int(
+                st.number_input(
+                    "Limit pro plný import",
+                    min_value=1,
+                    value=max(1, api_max_contacts_full),
+                    step=100,
+                    key="full_import_limit_main",
+                )
+            )
+
+        if execution_mode == "api_safe_import":
+            st.markdown("#### Povinné potvrzení pro bezpečný import")
+            safe_confirm = st.checkbox(
+                "Rozumím dopadu: bezpečný import běží jen jako přidání/aktualizace, bez mazání.",
+                value=False,
+                key="safe_import_confirm_main",
+            )
+
+        if execution_mode == "api_full_import":
+            full_phrase_required = str(
+                api_cfg.get("required_confirmation_phrase_full", "FULL IMPORT DO SMARTEMAILINGU")
+            )
+            st.markdown("#### Povinné potvrzení pro plný import")
+            full_confirm = st.checkbox(
+                "Rozumím dopadu: plný import může přepsat více polí dle pravidel.",
+                value=False,
+                key="full_import_confirm_main",
+            )
+            full_phrase_input = st.text_input(
+                f"Opiš potvrzovací frázi: {full_phrase_required}",
+                value="",
+                key="full_import_phrase_main",
+            )
+            full_operator = st.text_input(
+                "Operátor (kdo import spouští)",
+                value="",
+                key="full_import_operator_main",
+            )
+            full_approver = st.text_input(
+                "Schvalovatel (4 oči)",
+                value="",
+                key="full_import_approver_main",
+            )
+            approval_code = st.session_state.full_import_approval_code
+            full_second_approval_input = st.text_input(
+                f"Schvalovací kód (4 oči): {approval_code}",
+                value="",
+                key="full_import_approval_code_main",
+            )
 
 can_load_schema_during_generate = use_api_schema and bool(str(api_username).strip()) and bool(str(api_key).strip())
 api_credentials_ready = bool(str(api_import_username).strip()) and bool(str(api_import_key).strip())
@@ -823,10 +901,20 @@ generate_disabled = (not source_files) or (schema is None and not can_load_schem
     api_mode_enabled and not api_credentials_ready
 )
 
-if api_mode_enabled and not api_credentials_ready:
-    st.warning("Pro API režim vyplň API uživatelské jméno + API klíč.")
+with run_step_container:
+    run_status_box = st.empty()
+    if api_mode_enabled and not api_credentials_ready:
+        st.warning("Pro API režim vyplň API uživatelské jméno + API klíč.")
+    run_clicked = st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
 
-if st.button("Spustit zpracování", type="primary", disabled=generate_disabled):
+if run_clicked:
+    if execution_mode == "api_safe_import" and not safe_confirm:
+        run_status_box.error(
+            "Bezpečný import nelze spustit: zaškrtni povinné potvrzení "
+            "`Rozumím dopadu: bezpečný import běží jen jako přidání/aktualizace, bez mazání.`"
+        )
+        st.stop()
+
     active_schema = schema
     run_schema_origin = schema_origin
     if use_api_schema and refresh_api_schema_on_generate:
@@ -840,7 +928,7 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
                 source_kind="api_live",
                 extra_meta=api_meta,
             )
-            st.info(
+            run_status_box.info(
                 f"Před exportem načteno čerstvé API schéma: {len(active_schema.columns)} sloupců "
                 f"(vlastní pole: {api_meta.get('custom_field_count', 0)})"
             )
@@ -850,21 +938,21 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
                 if cached_custom_fields >= required_min_custom_fields:
                     active_schema = cached_api_schema
                     run_schema_origin = "smartemailing_api_cache"
-                    st.warning(f"Online obnovení API schématu selhalo ({exc}), používám API mezipaměť.")
+                    run_status_box.warning(f"Online obnovení API schématu selhalo ({exc}), používám API mezipaměť.")
                 else:
-                    st.warning(
+                    run_status_box.warning(
                         "Online obnovení API schématu selhalo "
                         f"({exc}) a API mezipaměť má jen {cached_custom_fields} vlastních polí, "
                         "používám aktuální záložní schéma."
                     )
             elif active_schema is not None:
-                st.warning(f"Online obnovení API schématu selhalo ({exc}), používám aktuální záložní schéma.")
+                run_status_box.warning(f"Online obnovení API schématu selhalo ({exc}), používám aktuální záložní schéma.")
             else:
-                st.error(f"Online obnovení API schématu selhalo ({exc}) a není dostupné záložní schéma.")
+                run_status_box.error(f"Online obnovení API schématu selhalo ({exc}) a není dostupné záložní schéma.")
                 st.stop()
 
     if active_schema is None:
-        st.error("Nelze pokračovat bez schématu sloupců.")
+        run_status_box.error("Nelze pokračovat bez schématu sloupců.")
         st.stop()
 
     all_import_rows = []
@@ -1003,6 +1091,7 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
     api_batch_results: list[dict[str, Any]] = []
     api_issues: list[dict[str, Any]] = []
     api_error = ""
+    api_block_reason = ""
     api_status = "not_requested"
     api_resolved_list_id = ""
     api_ping = {}
@@ -1043,6 +1132,8 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
             )
 
             import_for_api = final_import_df.drop(columns=["country_bucket", "__row_order"], errors="ignore")
+            if exclude_columns_from_api_import:
+                import_for_api = import_for_api.drop(columns=exclude_columns_from_api_import, errors="ignore")
             api_contacts, api_issues = build_api_contacts_from_import_df(
                 import_df=import_for_api,
                 api_system_field_map=api_cfg.get("system_field_map", {}),
@@ -1051,6 +1142,7 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
                 list_status=list_status,
                 tag=str(staging_tag).strip(),
                 strict_custom_fields=strict_custom_fields,
+                ignore_missing_custom_for_columns=ignore_missing_custom_for_columns,
             )
 
             api_contacts_preview = api_contacts[:50]
@@ -1077,15 +1169,10 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
                         f"překračuje limit režimu ({max_contacts_limit})."
                     )
                 elif execution_mode == "api_safe_import":
-                    safe_phrase_required = str(
-                        api_cfg.get("required_confirmation_phrase_safe", "SAFE IMPORT DO SMARTEMAILINGU")
-                    )
                     if not safe_confirm:
                         block_reason = "Bezpečný import je blokovaný: chybí potvrzení dopadu."
-                    elif safe_phrase_input.strip() != safe_phrase_required:
-                        block_reason = "Bezpečný import je blokovaný: špatná potvrzovací fráze."
-                    elif not (api_resolved_list_id or str(staging_tag).strip()):
-                        block_reason = "Bezpečný import je blokovaný: vyplň staging seznam nebo staging štítek."
+                    elif not api_resolved_list_id:
+                        block_reason = "Bezpečný import je blokovaný: vyber staging seznam."
                 elif execution_mode == "api_full_import":
                     full_phrase_required = str(
                         api_cfg.get("required_confirmation_phrase_full", "FULL IMPORT DO SMARTEMAILINGU")
@@ -1101,11 +1188,12 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
                         block_reason = "Plný import je blokovaný: operátor a schvalovatel musí být různé osoby (4 oči)."
                     elif full_second_approval_input.strip() != approval_code:
                         block_reason = "Plný import je blokovaný: neplatný schvalovací kód (4 oči)."
-                    elif not (api_resolved_list_id or str(staging_tag).strip()):
-                        block_reason = "Plný import je blokovaný: vyplň staging seznam nebo staging štítek."
+                    elif not api_resolved_list_id:
+                        block_reason = "Plný import je blokovaný: vyber staging seznam."
 
                 if block_reason:
                     api_status = "blocked"
+                    api_block_reason = block_reason
                     extra_report_frames.append(
                         pd.DataFrame(
                             {
@@ -1120,7 +1208,7 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
                             index=[0],
                         )
                     )
-                    st.error(block_reason)
+                    run_status_box.warning(block_reason)
                 else:
                     batch_results = client.import_contacts_canary(
                         contacts=api_contacts,
@@ -1165,9 +1253,32 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
                     index=[0],
                 )
             )
-            st.error(f"API část selhala: {exc}")
 
     summary_metrics["api_status"] = api_status
+
+    if api_mode_enabled:
+        if api_status == "import_ok":
+            run_status_box.success(
+                f"Běh dokončen: API import OK. Odesláno kontaktů: "
+                f"{int(sum(x.get('sent_contacts', 0) for x in api_batch_results))}."
+            )
+        elif api_status == "dry_run_ok":
+            run_status_box.success(
+                f"Běh dokončen: API dry-run OK. Připraveno kontaktů: {len(api_contacts)}."
+            )
+        elif api_status == "blocked":
+            if api_block_reason:
+                run_status_box.warning(f"Běh dokončen se zablokovaným API importem: {api_block_reason}")
+            else:
+                run_status_box.warning("Běh dokončen se zablokovaným API importem. Zkontroluj důvod v reportu.")
+        elif api_status == "failed":
+            run_status_box.error(f"Běh selhal: {api_error}")
+        else:
+            run_status_box.info(f"Běh dokončen se stavem: {api_status}")
+    else:
+        run_status_box.success(
+            f"Běh dokončen: CSV export připraven. Výstupních řádků: {summary_metrics.get('output_rows_total', 0)}."
+        )
 
     report_df = build_report(invalid_df, unknown_df, duplicates_df, summary_metrics=summary_metrics)
     if file_errors:
@@ -1211,9 +1322,11 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
                     json.dumps(api_batch_results, ensure_ascii=False, indent=2).encode("utf-8"),
                 )
     except UnicodeEncodeError as exc:
+        run_status_box.error(f"Běh selhal: vybrané kódování '{output_encoding}' neumí některé znaky.")
         st.error(f"Vybrané kódování '{output_encoding}' neumí některé znaky v datech: {exc}")
         st.stop()
     except ValueError as exc:
+        run_status_box.error(f"Běh selhal: {exc}")
         st.error(str(exc))
         st.stop()
 
@@ -1237,6 +1350,7 @@ if st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
             "staging_list_id": api_resolved_list_id,
             "staging_tag": str(staging_tag).strip(),
             "api_chyba": api_error,
+            "api_duvod_blokace": api_block_reason,
         }
         st.json(api_summary)
         st.markdown("#### Výsledky testovací dávky a dalších dávek")

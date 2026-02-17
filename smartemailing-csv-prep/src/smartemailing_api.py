@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, List
@@ -15,7 +16,7 @@ CUSTOM_FIELDS_ENDPOINTS = ["/api/v3/customfields", "/api/v3/custom-fields"]
 CUSTOM_FIELDS_SEARCH_ENDPOINTS = ["/api/v3/customfields/search", "/api/v3/custom-fields/search"]
 CONTACT_LISTS_ENDPOINTS = ["/api/v3/contactlists", "/api/v3/contact-lists"]
 CONTACT_LISTS_SEARCH_ENDPOINTS = ["/api/v3/contactlists/search", "/api/v3/contact-lists/search"]
-IMPORT_CONTACTS_ENDPOINTS = ["/api/v3/import", "/api/v3/imports", "/api/v3/import-contacts"]
+IMPORT_CONTACTS_ENDPOINTS = ["/api/v3/import"]
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,42 @@ def combine_schema_columns(system_columns: Iterable[str], custom_field_columns: 
     return out
 
 
+def _custom_field_expects_array(
+    field: dict[str, str],
+    forced_array_custom_field_names: set[str],
+) -> bool:
+    field_name = str(field.get("name", "")).strip().casefold()
+    if field_name and field_name in forced_array_custom_field_names:
+        return True
+    field_type = str(field.get("type", "")).strip().casefold()
+    if not field_type:
+        return False
+    return any(token in field_type for token in ["array", "multi", "multiple", "multiselect", "checkbox", "select_many"])
+
+
+def _parse_array_custom_field_value(raw_value: str, split_separators: list[str]) -> list[str]:
+    value = str(raw_value).strip()
+    if not value:
+        return []
+
+    if value.startswith("[") and value.endswith("]"):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                out = [str(x).strip() for x in parsed if str(x).strip()]
+                if out:
+                    return out
+        except Exception:
+            pass
+
+    separators = [str(x) for x in split_separators if str(x)]
+    if not separators:
+        return [value]
+    pattern = "|".join(re.escape(x) for x in separators)
+    parts = re.split(pattern, value)
+    return [p.strip() for p in parts if p.strip()]
+
+
 def build_api_contacts_from_import_df(
     import_df: Any,
     api_system_field_map: dict[str, str],
@@ -245,12 +282,26 @@ def build_api_contacts_from_import_df(
     list_status: str = "confirmed",
     tag: str = "",
     strict_custom_fields: bool = True,
+    ignore_missing_custom_for_columns: Iterable[str] | None = None,
+    array_custom_field_names: Iterable[str] | None = None,
+    array_value_split_separators: Iterable[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Converts final import dataframe to API contact payload list.
     Returns (contacts, issues).
     """
     custom_fields_by_name = {str(x.get("name", "")).strip().casefold(): x for x in custom_fields}
+    ignore_missing_custom_for_columns_set = {
+        str(x).strip().casefold()
+        for x in (ignore_missing_custom_for_columns or [])
+        if str(x).strip()
+    }
+    forced_array_custom_field_names = {
+        str(x).strip().casefold()
+        for x in (array_custom_field_names or [])
+        if str(x).strip()
+    }
+    array_value_split_separators_list = [str(x) for x in (array_value_split_separators or [",", ";", "|", "/"]) if str(x)]
 
     mapped_source_columns = {str(src).strip() for src in api_system_field_map.keys() if str(src).strip()}
     contacts: list[dict[str, Any]] = []
@@ -285,6 +336,8 @@ def build_api_contacts_from_import_df(
                 continue
             field = custom_fields_by_name.get(str(col).strip().casefold())
             if field is None:
+                if str(col).strip().casefold() in ignore_missing_custom_for_columns_set:
+                    continue
                 if strict_custom_fields:
                     issues.append(
                         {
@@ -297,7 +350,13 @@ def build_api_contacts_from_import_df(
 
             field_id = str(field.get("id", "")).strip()
             if field_id:
-                custom_values.append({"id": field_id, "value": value})
+                field_value: Any = value
+                if _custom_field_expects_array(field, forced_array_custom_field_names):
+                    parsed_values = _parse_array_custom_field_value(value, array_value_split_separators_list)
+                    if not parsed_values:
+                        continue
+                    field_value = parsed_values
+                custom_values.append({"id": field_id, "value": field_value})
             elif strict_custom_fields:
                 issues.append(
                     {
@@ -564,20 +623,23 @@ class SmartEmailingApiClient:
         endpoint_candidates: list[str] | None = None,
     ) -> tuple[dict[str, Any], str, str]:
         """
-        Tries multiple payload variants and endpoint candidates.
+        Tries documented import payload variants and endpoint candidates.
         Returns (response_payload, endpoint, payload_variant).
         """
         endpoints = endpoint_candidates or IMPORT_CONTACTS_ENDPOINTS
+        import_rows = self._to_import_rows(contacts)
         settings = {
             "update": bool(update_existing),
-            "skip_invalid_contacts": bool(skip_invalid_contacts),
         }
-        payload_variants = [
-            ("flat", {"settings": settings, "contacts": contacts}),
-            ("data_wrap", {"data": {"settings": settings, "contacts": contacts}}),
-        ]
+        payload_variants: list[tuple[str, dict[str, Any]]] = []
 
-        last_error: SmartEmailingApiError | None = None
+        import_payload = {"settings": settings, "data": import_rows}
+        payload_variants.append(("import_data", import_payload))
+
+        import_payload_no_settings = {"data": import_rows}
+        payload_variants.append(("import_data_no_settings", import_payload_no_settings))
+
+        fallback_errors: list[tuple[str, str, SmartEmailingApiError]] = []
         for variant_name, payload in payload_variants:
             for endpoint in endpoints:
                 try:
@@ -590,13 +652,66 @@ class SmartEmailingApiClient:
                         raise
                     # Endpoint/payload mismatch => continue trying.
                     if exc.status_code in {400, 404, 405, 415, 422}:
-                        last_error = exc
+                        fallback_errors.append((endpoint, variant_name, exc))
                         continue
                     raise
 
-        if last_error is not None:
-            raise last_error
+        if fallback_errors:
+            non_404 = [x for x in fallback_errors if x[2].status_code not in {404, 405}]
+            chosen_endpoint, chosen_variant, chosen_error = (non_404[0] if non_404 else fallback_errors[-1])
+            attempted = ", ".join(
+                sorted(
+                    {
+                        f"{endpoint} ({variant})"
+                        for endpoint, variant, _ in fallback_errors
+                    }
+                )
+            )
+            detail = chosen_error.body.strip()
+            detail_preview = f" Detail API: {detail[:300]}" if detail else ""
+            raise SmartEmailingApiError(
+                f"{chosen_error}. Zkoušené endpointy/payloady: {attempted}. "
+                f"Vybraná chyba: {chosen_endpoint} ({chosen_variant}).{detail_preview}",
+                status_code=chosen_error.status_code,
+                body=chosen_error.body,
+            )
         raise SmartEmailingApiError("Nepodařilo se odeslat batch kontaktů do SmartEmailing API.")
+
+    def _to_import_rows(
+        self,
+        contacts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Convert internal contact payload to /api/v3/import format:
+        - top-level "data": [...]
+        - per-contact custom fields / contact lists / tags preserved on row level.
+        """
+        rows: list[dict[str, Any]] = []
+
+        for contact in contacts:
+            row: dict[str, Any] = {}
+            contactlists = contact.get("contactlists", [])
+            customfields = contact.get("customfields", [])
+            tags = contact.get("tags", [])
+
+            for key, value in contact.items():
+                key_s = str(key).strip()
+                if not key_s:
+                    continue
+                if key_s in {"customfields", "contactlists", "tags"}:
+                    continue
+                row[key_s] = value
+
+            if isinstance(customfields, list) and customfields:
+                row["customfields"] = customfields
+            if isinstance(contactlists, list) and contactlists:
+                row["contactlists"] = contactlists
+            if isinstance(tags, list) and tags:
+                row["tags"] = tags
+
+            rows.append(row)
+
+        return rows
 
     def import_contacts_canary(
         self,

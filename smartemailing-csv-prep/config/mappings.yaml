@@ -69,12 +69,14 @@ smartemailing:
     batch_size: 500
     max_contacts_safe: 2000
     max_contacts_full: 10000
-    required_confirmation_phrase_safe: "SAFE IMPORT DO SMARTEMAILINGU"
     required_confirmation_phrase_full: "FULL IMPORT DO SMARTEMAILINGU"
     import_endpoint_candidates:
       - "/api/v3/import"
-      - "/api/v3/imports"
-      - "/api/v3/import-contacts"
+    ignore_missing_custom_for_columns:
+      - "Tituly před jménem"
+      - "Tituly za jménem"
+    exclude_columns_from_api_import:
+      - "prohlížené aplikace plusSystem"
     custom_fields_endpoint_candidates:
       - "/api/v3/customfields"
       - "/api/v3/custom-fields"
