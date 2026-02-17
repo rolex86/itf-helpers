@@ -8,6 +8,42 @@ import pandas as pd
 
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+_TITLE_BEFORE_FALLBACK_RE = re.compile(
+    r"(^|\s)(BcA|Bc|Ing(?:\.?\s*arch)?|JUDr|MUDr|MVDr|MgA|Mgr|PhDr|RNDr|ThDr|ThLic|doc|prof)\.?(?=\s|$)",
+    flags=re.IGNORECASE,
+)
+_TITLE_AFTER_FALLBACK_RE = re.compile(
+    r"(^|\s)(CSc|DrSc|Dr|Ph\.?\s*D|Th\.?\s*D|MBA|DiS|ACCA|FCCA)\.?(?=\s|$)",
+    flags=re.IGNORECASE,
+)
+_TITLE_BEFORE_CANONICAL = {
+    "bca": "BcA.",
+    "bc": "Bc.",
+    "ing": "Ing.",
+    "ingarch": "Ing.arch.",
+    "judr": "JUDr.",
+    "mudr": "MUDr.",
+    "mvdr": "MVDr.",
+    "mga": "MgA.",
+    "mgr": "Mgr.",
+    "phdr": "PhDr.",
+    "rndr": "RNDr.",
+    "thdr": "ThDr.",
+    "thlic": "ThLic.",
+    "doc": "doc.",
+    "prof": "prof.",
+}
+_TITLE_AFTER_CANONICAL = {
+    "csc": "CSc.",
+    "dr": "Dr.",
+    "drsc": "DrSc.",
+    "phd": "Ph.D.",
+    "thd": "Th.D.",
+    "mba": "MBA",
+    "dis": "DiS.",
+    "acca": "ACCA",
+    "fcca": "FCCA",
+}
 
 
 def normalize_lookup_token(value: str) -> str:
@@ -128,15 +164,42 @@ def parse_name_fields(full_name: str, cfg: Dict[str, Any]) -> Tuple[str, str, st
     if not s:
         return "", "", "", ""
 
+    # Normalize common separators so title regex works even when data contains ",Ph.D." (without space).
+    full_name_for_match = re.sub(r"[,;]+", " ", full_name)
+    full_name_for_match = re.sub(r"\s+", " ", full_name_for_match).strip()
+
     tb_re = re.compile(cfg["title_before_regex"], flags=re.IGNORECASE)
     ta_re = re.compile(cfg["title_after_regex"], flags=re.IGNORECASE)
 
-    title_before = " ".join([m.group(2) for m in tb_re.finditer(full_name)]).strip()
-    title_after = " ".join([m.group(2) for m in ta_re.finditer(full_name)]).strip()
+    title_before_parts = [str(m.group(2)).strip() for m in tb_re.finditer(full_name_for_match) if str(m.group(2)).strip()]
+    title_after_parts = [str(m.group(2)).strip() for m in ta_re.finditer(full_name_for_match) if str(m.group(2)).strip()]
+
+    # Fallback parser for common variants without dots ("Ing", "PhD", "Ph D", ...).
+    if not title_before_parts:
+        for m in _TITLE_BEFORE_FALLBACK_RE.finditer(full_name_for_match):
+            raw = str(m.group(2)).strip()
+            key = re.sub(r"[^A-Za-z0-9]+", "", raw).casefold()
+            resolved = _TITLE_BEFORE_CANONICAL.get(key, raw)
+            if resolved:
+                title_before_parts.append(resolved)
+
+    if not title_after_parts:
+        for m in _TITLE_AFTER_FALLBACK_RE.finditer(full_name_for_match):
+            raw = str(m.group(2)).strip()
+            key = re.sub(r"[^A-Za-z0-9]+", "", raw).casefold()
+            resolved = _TITLE_AFTER_CANONICAL.get(key, raw)
+            if resolved:
+                title_after_parts.append(resolved)
+
+    # Keep original order and remove duplicates.
+    title_before = " ".join(list(dict.fromkeys([x for x in title_before_parts if x]))).strip()
+    title_after = " ".join(list(dict.fromkeys([x for x in title_after_parts if x]))).strip()
 
     # remove titles from working string (loosely)
-    s2 = tb_re.sub(" ", full_name)
+    s2 = tb_re.sub(" ", full_name_for_match)
     s2 = ta_re.sub(" ", s2)
+    s2 = _TITLE_BEFORE_FALLBACK_RE.sub(" ", s2)
+    s2 = _TITLE_AFTER_FALLBACK_RE.sub(" ", s2)
     s2 = punct_re.sub("", s2)
     s2 = re.sub(r"\s+", " ", s2).strip()
 

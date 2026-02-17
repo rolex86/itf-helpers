@@ -236,6 +236,65 @@ class SmartEmailingApiTests(unittest.TestCase):
         self.assertTrue(any(x["issue"] == "missing_custom_field" for x in issues))
         self.assertTrue(any(x["issue"] == "missing_emailaddress" for x in issues))
 
+    def test_build_api_contacts_maps_titles_to_system_keys(self) -> None:
+        frame = MiniImportFrame(
+            [
+                {
+                    "E-mail": "a@example.com",
+                    "Jméno": "Jan",
+                    "Příjmení": "Novák",
+                    "Tituly před jménem": "Ing.",
+                    "Tituly za jménem": "Ph.D.",
+                }
+            ]
+        )
+        contacts, issues = build_api_contacts_from_import_df(
+            import_df=frame,
+            api_system_field_map={
+                "E-mail": "emailaddress",
+                "Jméno": "name",
+                "Příjmení": "surname",
+                "Tituly před jménem": "titlesbefore",
+                "Tituly za jménem": "titlesafter",
+            },
+            custom_fields=[],
+            strict_custom_fields=True,
+        )
+
+        self.assertEqual(len(issues), 0)
+        self.assertEqual(len(contacts), 1)
+        self.assertEqual(contacts[0]["titlesbefore"], "Ing.")
+        self.assertEqual(contacts[0]["titlesafter"], "Ph.D.")
+
+    def test_build_api_contacts_maps_city_alias_to_town(self) -> None:
+        frame = MiniImportFrame(
+            [
+                {
+                    "E-mail": "a@example.com",
+                    "Město": "Brno",
+                    "Společnost": "Acme",
+                    "Země": "CZ",
+                }
+            ]
+        )
+        contacts, issues = build_api_contacts_from_import_df(
+            import_df=frame,
+            api_system_field_map={
+                "E-mail": "emailaddress",
+                "Město": "city",
+                "Společnost": "company",
+                "Země": "country",
+            },
+            custom_fields=[],
+            strict_custom_fields=True,
+        )
+
+        self.assertEqual(len(issues), 0)
+        self.assertEqual(len(contacts), 1)
+        self.assertEqual(contacts[0]["town"], "Brno")
+        self.assertEqual(contacts[0]["company"], "Acme")
+        self.assertEqual(contacts[0]["country"], "CZ")
+
     def test_build_api_contacts_ignores_selected_missing_custom_fields(self) -> None:
         frame = MiniImportFrame(
             [

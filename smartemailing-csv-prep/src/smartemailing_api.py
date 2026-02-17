@@ -17,6 +17,9 @@ CUSTOM_FIELDS_SEARCH_ENDPOINTS = ["/api/v3/customfields/search", "/api/v3/custom
 CONTACT_LISTS_ENDPOINTS = ["/api/v3/contactlists", "/api/v3/contact-lists"]
 CONTACT_LISTS_SEARCH_ENDPOINTS = ["/api/v3/contactlists/search", "/api/v3/contact-lists/search"]
 IMPORT_CONTACTS_ENDPOINTS = ["/api/v3/import"]
+SYSTEM_FIELD_KEY_ALIASES = {
+    "city": "town",
+}
 
 
 @dataclass(frozen=True)
@@ -313,6 +316,9 @@ def build_api_contacts_from_import_df(
         for source_col, api_key in api_system_field_map.items():
             src = str(source_col).strip()
             key = str(api_key).strip()
+            key_alias = SYSTEM_FIELD_KEY_ALIASES.get(key.casefold(), "")
+            if key_alias:
+                key = key_alias
             if not src or not key:
                 continue
             if src not in import_df.columns:

@@ -23,7 +23,7 @@ from src.io_utils import clean_columns, read_csv_best_effort
 from src.normalize import detect_source, normalize_df
 from src.reporting import build_report, find_duplicates_from_stats
 from src.schema import Schema, schema_from_export_df
-from src.jobs import append_job_history, load_job_history, summarize_job_alerts
+from src.jobs import append_job_history, clear_job_history, load_job_history, summarize_job_alerts
 from src.smartemailing_api import (
     DEFAULT_BASE_URL,
     SmartEmailingApiClient,
@@ -41,7 +41,7 @@ from src.transforms import (
 
 
 st.set_page_config(page_title="SmartEmailing CSV Prep", layout="wide")
-st.title("SmartEmailing CSV Prep – generátor importních CSV")
+st.title("SmartEmailing CSV Prep – generátor importů (API/CSV)")
 st.markdown(
     """
     <style>
@@ -255,6 +255,111 @@ def api_issues_to_report_df(issues: list[dict[str, Any]]) -> pd.DataFrame:
             "source_row_index": "",
         }
     )
+
+
+def compute_import_confirmation_fingerprint(
+    execution_mode: str,
+    list_id: str,
+    tag: str,
+    canary_size: int,
+    batch_size: int,
+    max_contacts_limit: int,
+    contacts: list[dict[str, Any]],
+) -> str:
+    hasher = hashlib.sha256()
+    meta = {
+        "execution_mode": str(execution_mode).strip(),
+        "list_id": str(list_id).strip(),
+        "tag": str(tag).strip(),
+        "canary_size": int(canary_size),
+        "batch_size": int(batch_size),
+        "max_contacts_limit": int(max_contacts_limit),
+        "contacts_total": len(contacts),
+    }
+    hasher.update(json.dumps(meta, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+    hasher.update(b"\n")
+    for contact in contacts:
+        try:
+            serialized = json.dumps(contact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            serialized = str(contact)
+        hasher.update(serialized.encode("utf-8", errors="ignore"))
+        hasher.update(b"\n")
+    return hasher.hexdigest()
+
+
+def build_import_confirmation_summary(
+    execution_mode: str,
+    list_id: str,
+    tag: str,
+    canary_size: int,
+    batch_size: int,
+    max_contacts_limit: int,
+    contacts: list[dict[str, Any]],
+    issues_count: int,
+) -> dict[str, Any]:
+    emails_preview: list[str] = []
+    payload_system_fields: set[str] = set()
+    unique_custom_field_ids: set[str] = set()
+    contacts_with_custom_fields = 0
+    contacts_with_list_assignment = 0
+    contacts_with_tags = 0
+    custom_field_values_total = 0
+
+    for contact in contacts:
+        email = str(contact.get("emailaddress", "")).strip()
+        if email and len(emails_preview) < 20:
+            emails_preview.append(email)
+
+        for key, value in contact.items():
+            key_name = str(key).strip()
+            if not key_name or key_name in {"customfields", "contactlists", "tags"}:
+                continue
+            if str(value).strip():
+                payload_system_fields.add(key_name)
+
+        custom_values = contact.get("customfields", [])
+        if isinstance(custom_values, list) and custom_values:
+            contacts_with_custom_fields += 1
+            custom_field_values_total += len(custom_values)
+            for item in custom_values:
+                if not isinstance(item, dict):
+                    continue
+                field_id = str(item.get("id", "")).strip()
+                if field_id:
+                    unique_custom_field_ids.add(field_id)
+
+        contact_lists = contact.get("contactlists", [])
+        if isinstance(contact_lists, list) and contact_lists:
+            contacts_with_list_assignment += 1
+
+        tags = contact.get("tags", [])
+        if isinstance(tags, list) and tags:
+            contacts_with_tags += 1
+
+    mode_label = {
+        "api_safe_import": "API bezpečný import",
+        "api_full_import": "API plný import",
+    }.get(execution_mode, str(execution_mode))
+
+    return {
+        "mode_label": mode_label,
+        "contacts_total": len(contacts),
+        "issues_count": int(issues_count),
+        "staging_list_id": str(list_id).strip(),
+        "staging_tag": str(tag).strip(),
+        "canary_size": int(canary_size),
+        "batch_size": int(batch_size),
+        "max_contacts_limit": int(max_contacts_limit),
+        "contacts_with_custom_fields": contacts_with_custom_fields,
+        "contacts_with_list_assignment": contacts_with_list_assignment,
+        "contacts_with_tags": contacts_with_tags,
+        "custom_field_values_total": custom_field_values_total,
+        "custom_fields_unique_ids": len(unique_custom_field_ids),
+        "payload_system_fields": sorted(payload_system_fields),
+        "emails_preview": emails_preview,
+        "new_vs_update_note": "Rozdělení na nové vs. aktualizované kontakty API před importem spolehlivě nevrací.",
+    }
 
 
 st.sidebar.header("Nastavení")
@@ -933,11 +1038,24 @@ if "approved_custom_fields_fingerprint" not in st.session_state:
     st.session_state["approved_custom_fields_fingerprint"] = ""
 if "auto_resume_run_after_custom_fields_confirm" not in st.session_state:
     st.session_state["auto_resume_run_after_custom_fields_confirm"] = False
+if "pending_api_import_confirmation" not in st.session_state:
+    st.session_state["pending_api_import_confirmation"] = {}
+if "pending_api_import_confirmation_fingerprint" not in st.session_state:
+    st.session_state["pending_api_import_confirmation_fingerprint"] = ""
+if "approved_api_import_confirmation_fingerprint" not in st.session_state:
+    st.session_state["approved_api_import_confirmation_fingerprint"] = ""
+if "auto_resume_run_after_api_import_confirm" not in st.session_state:
+    st.session_state["auto_resume_run_after_api_import_confirm"] = False
 
 with run_step_container:
     run_status_box = st.empty()
     if api_mode_enabled and not api_credentials_ready:
         st.warning("Pro API režim vyplň API uživatelské jméno + API klíč.")
+    if execution_mode not in {"api_safe_import", "api_full_import"}:
+        st.session_state["pending_api_import_confirmation"] = {}
+        st.session_state["pending_api_import_confirmation_fingerprint"] = ""
+        st.session_state["approved_api_import_confirmation_fingerprint"] = ""
+        st.session_state["auto_resume_run_after_api_import_confirm"] = False
     pending_fields = [str(x).strip() for x in st.session_state.get("pending_custom_fields_to_create", []) if str(x).strip()]
     pending_fingerprint = str(st.session_state.get("pending_custom_fields_fingerprint", "")).strip()
     if pending_fields and pending_fingerprint:
@@ -961,10 +1079,75 @@ with run_step_container:
                 st.session_state["pending_custom_fields_to_create"] = []
                 st.session_state["pending_custom_fields_fingerprint"] = ""
                 run_status_box.warning("Vytvoření nových vlastních polí bylo zrušeno.")
+
+    pending_import_confirmation = st.session_state.get("pending_api_import_confirmation", {})
+    pending_import_fingerprint = str(st.session_state.get("pending_api_import_confirmation_fingerprint", "")).strip()
+    if (
+        execution_mode in {"api_safe_import", "api_full_import"}
+        and isinstance(pending_import_confirmation, dict)
+        and pending_import_confirmation
+        and pending_import_fingerprint
+    ):
+        st.warning(
+            "Běh čeká na potvrzení odeslání importu do SmartEmailingu API. "
+            "Zkontroluj souhrn a potvrď pokračování."
+        )
+        metric_col_1, metric_col_2, metric_col_3, metric_col_4 = st.columns(4)
+        metric_col_1.metric("Kontakty k odeslání", int(pending_import_confirmation.get("contacts_total", 0)))
+        metric_col_2.metric("Kontakty s custom fields", int(pending_import_confirmation.get("contacts_with_custom_fields", 0)))
+        metric_col_3.metric("Kontakty se seznamem", int(pending_import_confirmation.get("contacts_with_list_assignment", 0)))
+        metric_col_4.metric("Chyby payloadu", int(pending_import_confirmation.get("issues_count", 0)))
+        st.caption(
+            f"Režim: {pending_import_confirmation.get('mode_label', '')} | "
+            f"Staging list ID: {pending_import_confirmation.get('staging_list_id', '') or 'není'} | "
+            f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
+        )
+        st.caption(
+            f"Canary dávka: {pending_import_confirmation.get('canary_size', 0)} | "
+            f"Velikost dávky: {pending_import_confirmation.get('batch_size', 0)} | "
+            f"Limit režimu: {pending_import_confirmation.get('max_contacts_limit', 0)}"
+        )
+        payload_system_fields = [
+            str(x).strip()
+            for x in pending_import_confirmation.get("payload_system_fields", [])
+            if str(x).strip()
+        ]
+        if payload_system_fields:
+            st.caption(
+                "Systémová pole v payloadu: "
+                + ", ".join(payload_system_fields[:12])
+                + (" ..." if len(payload_system_fields) > 12 else "")
+            )
+        emails_preview = [
+            str(x).strip()
+            for x in pending_import_confirmation.get("emails_preview", [])
+            if str(x).strip()
+        ]
+        if emails_preview:
+            st.code("\n".join([f"- {x}" for x in emails_preview]), language="text")
+        st.info(str(pending_import_confirmation.get("new_vs_update_note", "")).strip())
+        confirm_import_col, cancel_import_col = st.columns(2)
+        with confirm_import_col:
+            if st.button("Potvrdit API import a pokračovat", key="confirm_api_import_send"):
+                st.session_state["approved_api_import_confirmation_fingerprint"] = pending_import_fingerprint
+                st.session_state["auto_resume_run_after_api_import_confirm"] = True
+                st.session_state["pending_api_import_confirmation"] = {}
+                st.session_state["pending_api_import_confirmation_fingerprint"] = ""
+                st.rerun()
+        with cancel_import_col:
+            if st.button("Zrušit API import", key="cancel_api_import_send"):
+                st.session_state["approved_api_import_confirmation_fingerprint"] = ""
+                st.session_state["auto_resume_run_after_api_import_confirm"] = False
+                st.session_state["pending_api_import_confirmation"] = {}
+                st.session_state["pending_api_import_confirmation_fingerprint"] = ""
+                run_status_box.warning("API import byl zrušen před odesláním.")
     run_clicked = st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
-    if bool(st.session_state.get("auto_resume_run_after_custom_fields_confirm", False)):
+    if bool(st.session_state.get("auto_resume_run_after_custom_fields_confirm", False)) or bool(
+        st.session_state.get("auto_resume_run_after_api_import_confirm", False)
+    ):
         run_clicked = True
         st.session_state["auto_resume_run_after_custom_fields_confirm"] = False
+        st.session_state["auto_resume_run_after_api_import_confirm"] = False
 
 if run_clicked:
     if execution_mode == "api_safe_import" and not safe_confirm:
@@ -1380,6 +1563,8 @@ if run_clicked:
                 if block_reason:
                     api_status = "blocked"
                     api_block_reason = block_reason
+                    st.session_state["pending_api_import_confirmation"] = {}
+                    st.session_state["pending_api_import_confirmation_fingerprint"] = ""
                     extra_report_frames.append(
                         pd.DataFrame(
                             {
@@ -1396,6 +1581,38 @@ if run_clicked:
                     )
                     run_status_box.warning(block_reason)
                 else:
+                    if execution_mode in {"api_safe_import", "api_full_import"}:
+                        import_confirmation_fingerprint = compute_import_confirmation_fingerprint(
+                            execution_mode=execution_mode,
+                            list_id=api_resolved_list_id,
+                            tag=str(staging_tag).strip(),
+                            canary_size=api_canary_size,
+                            batch_size=api_batch_size,
+                            max_contacts_limit=max_contacts_limit,
+                            contacts=api_contacts,
+                        )
+                        approved_import_fingerprint = str(
+                            st.session_state.get("approved_api_import_confirmation_fingerprint", "")
+                        ).strip()
+                        if approved_import_fingerprint != import_confirmation_fingerprint:
+                            st.session_state["pending_api_import_confirmation"] = build_import_confirmation_summary(
+                                execution_mode=execution_mode,
+                                list_id=api_resolved_list_id,
+                                tag=str(staging_tag).strip(),
+                                canary_size=api_canary_size,
+                                batch_size=api_batch_size,
+                                max_contacts_limit=max_contacts_limit,
+                                contacts=api_contacts,
+                                issues_count=len(api_issues),
+                            )
+                            st.session_state["pending_api_import_confirmation_fingerprint"] = import_confirmation_fingerprint
+                            run_status_box.warning(
+                                "Před odesláním do SmartEmailingu API potvrď souhrn importu "
+                                "(zobrazeno nad tlačítkem Spustit zpracování)."
+                            )
+                            st.rerun()
+                        st.session_state["approved_api_import_confirmation_fingerprint"] = ""
+
                     batch_results = client.import_contacts_canary(
                         contacts=api_contacts,
                         canary_size=api_canary_size,
@@ -1569,7 +1786,18 @@ if run_clicked:
     except Exception as exc:
         st.warning(f"Nepodařilo se uložit historii běhů: {exc}")
 
-st.markdown("### Historie běhů")
+history_header_col, history_action_col = st.columns([3, 1])
+with history_header_col:
+    st.markdown("### Historie běhů")
+with history_action_col:
+    if st.button("Smazat historii běhů", key="clear_job_history_btn"):
+        try:
+            clear_job_history()
+            st.success("Historie běhů byla smazána.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Nepodařilo se smazat historii běhů: {exc}")
+
 history_rows = load_job_history(limit=50)
 history_alerts = summarize_job_alerts(history_rows)
 if history_alerts["recent_failures"] >= 3:

@@ -1,8 +1,8 @@
 version: 2
-saved_at: '2026-02-17T09:32:48.735504+00:00'
+saved_at: '2026-02-17T10:08:55.256431+00:00'
 source_file: smartemailing_api
 source_kind: smartemailing_api
-schema_hash: 77ab2b62daa787adc2f05e913265f43206ef6b54b8b1f1e6becbfb37ccb509d2
+schema_hash: 9633d2921f0e28a619acc25bcc704521a0085eb8236433000916e4447e0bcd3a
 columns:
 - E-mail
 - Společnost
@@ -367,6 +367,7 @@ columns:
 - PCM_PRO_TERM
 - PCM
 - PHM_PRO
+- BFLM_PSVZ
 api_base_url: https://app.smartemailing.cz
 ping_status: ok
-custom_field_count: 358
+custom_field_count: 359

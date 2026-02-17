@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.jobs import append_job_history, load_job_history, summarize_job_alerts
+from src.jobs import append_job_history, clear_job_history, load_job_history, summarize_job_alerts
 
 
 class JobsTests(unittest.TestCase):
@@ -33,6 +33,18 @@ class JobsTests(unittest.TestCase):
         self.assertEqual(summary["failed"], 2)
         self.assertEqual(summary["recent_failures"], 2)
         self.assertAlmostEqual(summary["failure_rate"], 0.5)
+
+    def test_clear_job_history(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "jobs.jsonl"
+            append_job_history({"mode": "csv_fallback", "status": "ok"}, path=path)
+            self.assertTrue(path.exists())
+
+            clear_job_history(path=path)
+
+            self.assertFalse(path.exists())
+            rows = load_job_history(path=path, limit=10)
+            self.assertEqual(rows, [])
 
 
 if __name__ == "__main__":

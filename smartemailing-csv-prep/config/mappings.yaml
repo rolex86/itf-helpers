@@ -100,8 +100,10 @@ smartemailing:
       "E-mail": "emailaddress"
       "Jméno": "name"
       "Příjmení": "surname"
+      "Tituly před jménem": "titlesbefore"
+      "Tituly za jménem": "titlesafter"
       "Společnost": "company"
-      "Město": "city"
+      "Město": "town"
       "Země": "country"
       "Poznámky": "notes"
 

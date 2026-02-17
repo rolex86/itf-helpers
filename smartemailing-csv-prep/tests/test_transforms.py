@@ -6,6 +6,7 @@ import pandas as pd
 
 from src.transforms import (
     apply_country_bucket,
+    parse_name_fields,
     parse_program_codes,
     split_emails,
     validate_emails_without_split,
@@ -66,6 +67,34 @@ class SplitEmailsTests(unittest.TestCase):
         out = apply_country_bucket(df, cfg)
 
         self.assertEqual(out["country_bucket"].tolist(), ["CZ_SK", "DE_AT_CH", "EN"])
+
+    def test_parse_name_fields_extracts_titles_before_and_after(self) -> None:
+        cfg = {
+            "title_before_regex": r"(^|\s)(Bc\.|BcA\.|Ing\.|Ing\.arch\.|JUDr\.|MUDr\.|MVDr\.|MgA\.|Mgr\.|PhDr\.|RNDr\.|ThDr\.|ThLic\.|doc\.|prof\.)(\s|$)",
+            "title_after_regex": r"(^|\s)(CSc\.|Dr\.|DrSc\.|Ph\.D\.|Th\.D\.|MBA|DiS\.|ACCA|FCCA)(\s|$)",
+            "punctuation_strip_regex": r"[\.,;:!\?\-]",
+        }
+
+        title_before, first_name, last_name, title_after = parse_name_fields("Ing. Jan Novák, Ph.D.", cfg)
+
+        self.assertEqual(title_before, "Ing.")
+        self.assertEqual(first_name, "Jan")
+        self.assertEqual(last_name, "Novák")
+        self.assertEqual(title_after, "Ph.D.")
+
+    def test_parse_name_fields_handles_missing_space_after_comma_and_no_dot_variants(self) -> None:
+        cfg = {
+            "title_before_regex": r"(^|\s)(Bc\.|BcA\.|Ing\.|Ing\.arch\.|JUDr\.|MUDr\.|MVDr\.|MgA\.|Mgr\.|PhDr\.|RNDr\.|ThDr\.|ThLic\.|doc\.|prof\.)(\s|$)",
+            "title_after_regex": r"(^|\s)(CSc\.|Dr\.|DrSc\.|Ph\.D\.|Th\.D\.|MBA|DiS\.|ACCA|FCCA)(\s|$)",
+            "punctuation_strip_regex": r"[\.,;:!\?\-]",
+        }
+
+        title_before, first_name, last_name, title_after = parse_name_fields("Ing Jan Novák,PhD", cfg)
+
+        self.assertEqual(title_before, "Ing.")
+        self.assertEqual(first_name, "Jan")
+        self.assertEqual(last_name, "Novák")
+        self.assertEqual(title_after, "Ph.D.")
 
 
 if __name__ == "__main__":

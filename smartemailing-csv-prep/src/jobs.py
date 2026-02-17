@@ -43,6 +43,11 @@ def load_job_history(path: Path = DEFAULT_JOB_HISTORY_PATH, limit: int = 50) -> 
     return rows[: max(0, int(limit))]
 
 
+def clear_job_history(path: Path = DEFAULT_JOB_HISTORY_PATH) -> None:
+    if path.exists():
+        path.unlink()
+
+
 def summarize_job_alerts(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return {"total": 0, "failed": 0, "failure_rate": 0.0, "recent_failures": 0}
