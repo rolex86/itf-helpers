@@ -85,6 +85,7 @@ with CFG_PATH.open("r", encoding="utf-8") as f:
 SCHEMA_CACHE_PATH = Path("config/schema_cache.yaml")
 API_SCHEMA_CACHE_PATH = Path("config/schema_cache_api.yaml")
 API_CREDENTIALS_PATH = Path("config/se_api_credentials.local")
+API_LIST_FAVORITES_PATH = Path("config/se_list_favorites.local")
 
 
 def schema_hash(columns: list[str]) -> str:
@@ -164,6 +165,41 @@ def save_api_credentials(path: Path, username: str, api_key: str, base_url: str)
 def clear_api_credentials(path: Path) -> None:
     if path.exists():
         path.unlink()
+
+
+def load_api_list_favorites(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        raw_ids = data.get("favorite_list_ids", [])
+        if not isinstance(raw_ids, list):
+            return set()
+        return {str(x).strip() for x in raw_ids if str(x).strip()}
+    except Exception:
+        return set()
+
+
+def save_api_list_favorites(path: Path, favorite_ids: set[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _sort_key(raw_id: str) -> tuple[int, int, str]:
+        value = str(raw_id).strip()
+        try:
+            return (0, -int(value), value.casefold())
+        except Exception:
+            return (1, 0, value.casefold())
+
+    payload = {
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "favorite_list_ids": sorted(
+            {str(x).strip() for x in favorite_ids if str(x).strip()},
+            key=_sort_key,
+        ),
+    }
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
 
 
 def build_system_schema_columns(cfg: dict[str, Any]) -> list[str]:
@@ -786,6 +822,8 @@ auto_create_unknown_program_fields = auto_create_unknown_program_fields_default
 if api_mode_enabled:
     if "api_contact_lists_cache" not in st.session_state:
         st.session_state.api_contact_lists_cache = []
+    if "api_list_favorite_ids" not in st.session_state:
+        st.session_state.api_list_favorite_ids = sorted(load_api_list_favorites(API_LIST_FAVORITES_PATH))
     if "full_import_approval_code" not in st.session_state:
         st.session_state.full_import_approval_code = hashlib.sha1(
             datetime.now(timezone.utc).isoformat().encode("utf-8")
@@ -900,23 +938,48 @@ if api_mode_enabled:
                 st.error(f"Nepodařilo se načíst listy: {exc}")
 
         lists_cache = st.session_state.get("api_contact_lists_cache", [])
+        favorite_list_ids = {
+            str(x).strip()
+            for x in st.session_state.get("api_list_favorite_ids", [])
+            if str(x).strip()
+        }
         if lists_cache:
-            def _list_sort_tuple(item: dict[str, Any]) -> tuple[int, int, str]:
+            def _list_sort_tuple(item: dict[str, Any]) -> tuple[int, int, int, str]:
                 raw_id = str(item.get("id", "")).strip()
                 name = str(item.get("name", "")).strip().casefold()
+                favorite_rank = 0 if raw_id in favorite_list_ids else 1
                 try:
-                    return (0, -int(raw_id), name)
+                    return (favorite_rank, 0, -int(raw_id), name)
                 except Exception:
-                    return (1, 0, name)
+                    return (favorite_rank, 1, 0, name)
 
             label_to_list: dict[str, dict[str, str]] = {}
             labels = []
             for item in sorted(lists_cache, key=_list_sort_tuple):
                 list_id = str(item.get("id", "")).strip()
                 list_name = str(item.get("name", "")).strip() or "(bez názvu)"
-                label = f"{list_name} (id={list_id})"
+                favorite_prefix = "★ " if list_id in favorite_list_ids else ""
+                label = f"{favorite_prefix}{list_name} (id={list_id})"
                 labels.append(label)
                 label_to_list[label] = {"id": list_id, "name": list_name}
+
+            favorite_items = [
+                item for item in sorted(lists_cache, key=_list_sort_tuple) if str(item.get("id", "")).strip() in favorite_list_ids
+            ]
+            if favorite_items:
+                st.caption("Rychlý výběr oblíbených")
+                quick_cols = st.columns(min(3, len(favorite_items)))
+                for idx, item in enumerate(favorite_items):
+                    list_id = str(item.get("id", "")).strip()
+                    list_name = str(item.get("name", "")).strip() or "(bez názvu)"
+                    quick_label = f"★ {list_name} ({list_id})"
+                    selected_label_with_id = f"★ {list_name} (id={list_id})"
+                    with quick_cols[idx % len(quick_cols)]:
+                        if st.button(quick_label, key=f"quick_select_favorite_{list_id}"):
+                            if selected_label_with_id in ["(ručně)"] + labels:
+                                st.session_state["staging_list_select"] = selected_label_with_id
+                            st.session_state["staging_list_manual"] = list_id
+                            st.rerun()
 
             list_options = ["(ručně)"] + labels
             if st.session_state.get("staging_list_select") not in list_options:
@@ -933,6 +996,23 @@ if api_mode_enabled:
                 if selected_id:
                     st.session_state["staging_list_manual"] = selected_id
                     st.caption(f"Vybraný staging seznam: `{selected_name}` (id `{selected_id}`)")
+                    is_favorite = selected_id in favorite_list_ids
+                    toggle_fav_label = "★ Odebrat z oblíbených" if is_favorite else "☆ Přidat do oblíbených"
+                    fav_col_1, fav_col_2 = st.columns([1, 4])
+                    with fav_col_1:
+                        if st.button(toggle_fav_label, key=f"toggle_api_favorite_list_{selected_id}"):
+                            if is_favorite:
+                                favorite_list_ids.discard(selected_id)
+                            else:
+                                favorite_list_ids.add(selected_id)
+                            st.session_state["api_list_favorite_ids"] = sorted(favorite_list_ids)
+                            try:
+                                save_api_list_favorites(API_LIST_FAVORITES_PATH, favorite_list_ids)
+                            except Exception as exc:
+                                st.error(f"Nepodařilo se uložit oblíbené seznamy: {exc}")
+                            st.rerun()
+                    with fav_col_2:
+                        st.caption("Oblíbené seznamy jsou označené `★` a řadí se vždy nahoře.")
         else:
             st.caption("Listy zatím nejsou načtené. Vyplň API údaje a klikni na `Obnovit listy z API`.")
 
