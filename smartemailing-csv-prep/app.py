@@ -285,7 +285,12 @@ def build_ignore_missing_custom_for_columns(
     return list(dict.fromkeys(default_ignore_missing_custom + configured_ignore_missing_custom))
 
 
-def fetch_schema_from_api(username: str, api_key: str, base_url: str) -> tuple[Schema, dict[str, Any]]:
+def fetch_schema_from_api(
+    username: str,
+    api_key: str,
+    base_url: str,
+    read_only: bool = False,
+) -> tuple[Schema, dict[str, Any]]:
     creds = SmartEmailingCredentials(
         username=str(username).strip(),
         api_key=str(api_key).strip(),
@@ -294,7 +299,7 @@ def fetch_schema_from_api(username: str, api_key: str, base_url: str) -> tuple[S
     if not creds.username or not creds.api_key:
         raise ValueError("Vyplň SmartEmailing uživatelské jméno i API klíč.")
 
-    client = SmartEmailingApiClient(creds)
+    client = SmartEmailingApiClient(creds, read_only=bool(read_only))
     ping = client.ping()
     api_cfg = CFG.get("smartemailing", {}).get("api", {})
     custom_fields_endpoint_candidates = [
@@ -1249,15 +1254,92 @@ with st.sidebar.expander("Profil importu", expanded=False):
         ),
     )
     selected_preset = next((x for x in profile_presets if str(x.get("id", "")).strip() == selected_preset_id), None)
+    tracked_keys = [
+        "do_split_emails",
+        "do_split_names",
+        "do_bucket_country",
+        "output_encoding",
+        "dedup_label",
+        "use_cached_schema",
+        "use_api_schema",
+        "refresh_api_schema_on_generate",
+        "use_api_cache_on_error",
+        "execution_mode_label",
+        "strict_custom_fields_main",
+        "list_status_main",
+        "staging_list_manual",
+        "api_bucket_select_cz_sk_main",
+        "api_bucket_select_de_at_ch_main",
+        "api_bucket_select_en_main",
+        "staging_tag_input",
+        "api_canary_size_main",
+        "api_batch_size_main",
+        "safe_import_limit_main",
+        "full_import_limit_main",
+        "diff_preflight_enabled_main",
+        "diff_send_only_changes_main",
+        "diff_fallback_send_all_on_error_main",
+        "skip_blacklisted_contacts_main",
+        "clear_removed_program_custom_fields_main",
+        "clear_allowed_name_prefixes_main",
+        "diff_page_limit_main",
+        "diff_max_pages_main",
+        "diff_target_email_batch_size_main",
+        "api_read_parallel_workers_main",
+        "auto_create_unknown_program_fields_main",
+        "auto_add_created_program_fields_to_allowlist_main",
+        "profile_lock_critical_options_main",
+    ]
+
+    def collect_current_preset_values() -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for tracked_key in tracked_keys:
+            if tracked_key in st.session_state:
+                values[tracked_key] = st.session_state.get(tracked_key)
+        return values
+
     if st.session_state.pop("pending_profile_preset_applied_notice", False):
         st.success("Preset aplikován.")
-    if st.button("Aplikovat preset", key="apply_profile_preset_btn", disabled=selected_preset is None):
-        preset_values = selected_preset.get("values", {}) if isinstance(selected_preset, dict) else {}
-        if isinstance(preset_values, dict):
-            st.session_state["pending_profile_preset_values"] = {
-                str(key): value for key, value in preset_values.items()
-            }
-        st.rerun()
+    preset_action_col_apply, preset_action_col_update = st.columns(2)
+    with preset_action_col_apply:
+        if st.button("Aplikovat preset", key="apply_profile_preset_btn", disabled=selected_preset is None):
+            preset_values = selected_preset.get("values", {}) if isinstance(selected_preset, dict) else {}
+            if isinstance(preset_values, dict):
+                st.session_state["pending_profile_preset_values"] = {
+                    str(key): value for key, value in preset_values.items()
+                }
+            st.rerun()
+    with preset_action_col_update:
+        if st.button(
+            "Aktualizovat vybraný preset",
+            key="update_profile_preset_btn",
+            disabled=selected_preset is None,
+            help="Přepíše vybraný preset aktuálním stavem formuláře.",
+        ):
+            selected_idx = next(
+                (
+                    idx
+                    for idx, item in enumerate(profile_presets)
+                    if str(item.get("id", "")).strip() == str(selected_preset_id).strip()
+                ),
+                None,
+            )
+            if selected_idx is None:
+                st.error("Není vybraný preset k aktualizaci.")
+            else:
+                profile_presets[selected_idx]["updated_at"] = datetime.now(timezone.utc).isoformat()
+                profile_presets[selected_idx]["values"] = collect_current_preset_values()
+                save_profile_presets(
+                    PROFILE_SETTINGS_PATH,
+                    profile_presets,
+                    profile_id=active_profile_id,
+                    profile_name=active_profile_name,
+                )
+                st.session_state["profile_selected_preset_id_pending"] = str(
+                    profile_presets[selected_idx].get("id", "")
+                ).strip()
+                st.success("Vybraný preset aktualizován.")
+                st.rerun()
 
     new_preset_name = st.text_input("Uložit aktuální jako preset", value="", key="profile_new_preset_name")
     if st.button("Uložit preset", key="save_profile_preset_btn"):
@@ -1265,46 +1347,7 @@ with st.sidebar.expander("Profil importu", expanded=False):
         if not preset_name_clean:
             st.error("Vyplň název presetu.")
         else:
-            tracked_keys = [
-                "do_split_emails",
-                "do_split_names",
-                "do_bucket_country",
-                "output_encoding",
-                "dedup_label",
-                "use_cached_schema",
-                "use_api_schema",
-                "refresh_api_schema_on_generate",
-                "use_api_cache_on_error",
-                "execution_mode_label",
-                "strict_custom_fields_main",
-                "list_status_main",
-                "staging_list_manual",
-                "api_bucket_select_cz_sk_main",
-                "api_bucket_select_de_at_ch_main",
-                "api_bucket_select_en_main",
-                "staging_tag_input",
-                "api_canary_size_main",
-                "api_batch_size_main",
-                "safe_import_limit_main",
-                "full_import_limit_main",
-                "diff_preflight_enabled_main",
-                "diff_send_only_changes_main",
-                "diff_fallback_send_all_on_error_main",
-                "skip_blacklisted_contacts_main",
-                "clear_removed_program_custom_fields_main",
-                "clear_allowed_name_prefixes_main",
-                "diff_page_limit_main",
-                "diff_max_pages_main",
-                "diff_target_email_batch_size_main",
-                "api_read_parallel_workers_main",
-                "auto_create_unknown_program_fields_main",
-                "auto_add_created_program_fields_to_allowlist_main",
-                "profile_lock_critical_options_main",
-            ]
-            preset_values: dict[str, Any] = {}
-            for tracked_key in tracked_keys:
-                if tracked_key in st.session_state:
-                    preset_values[tracked_key] = st.session_state.get(tracked_key)
+            preset_values = collect_current_preset_values()
             existing_idx = next(
                 (
                     idx
@@ -2947,14 +2990,6 @@ if api_mode_enabled:
             help="Po vytvoření pole pro nový kód aplikace se jeho custom field ID uloží do allowlistu.",
         )
 
-        if execution_mode == "api_safe_import":
-            st.markdown("#### Povinné potvrzení pro bezpečný import")
-            safe_confirm = st.checkbox(
-                "Rozumím dopadu: bezpečný import běží jen jako přidání/aktualizace, bez mazání.",
-                value=False,
-                key="safe_import_confirm_main",
-            )
-
         if execution_mode == "api_full_import":
             full_phrase_required = str(
                 api_cfg.get("required_confirmation_phrase_full", "FULL IMPORT DO SMARTEMAILINGU")
@@ -3396,6 +3431,7 @@ with run_step_container:
                             "🔎",
                             help="Zaškrtni kontakt pro zobrazení detailu změn.",
                             default=False,
+                            width="small",
                         )
                     },
                 )
@@ -3410,11 +3446,29 @@ with run_step_container:
                 ]
             except Exception:
                 selected_from_table = []
+
+            resolved_from_table = ""
             if selected_from_table:
-                selected_preview_email = selected_from_table[0]
+                selected_unique: list[str] = []
+                for email in selected_from_table:
+                    normalized = normalize_scalar_for_diff(email)
+                    if normalized and normalized not in selected_unique:
+                        selected_unique.append(normalized)
+                if len(selected_unique) == 1:
+                    resolved_from_table = selected_unique[0]
+                else:
+                    previous_key = normalize_email_key(selected_preview_email)
+                    alternatives = [
+                        email
+                        for email in selected_unique
+                        if normalize_email_key(email) != previous_key
+                    ]
+                    resolved_from_table = alternatives[-1] if alternatives else selected_unique[-1]
+                    st.caption("V tabulce může být aktivní jen 1 kontakt. Použit je poslední výběr.")
+
+            if normalize_email_key(resolved_from_table) != normalize_email_key(selected_preview_email):
+                selected_preview_email = resolved_from_table
                 st.session_state["diff_preview_selected_email"] = selected_preview_email
-                if len(selected_from_table) > 1:
-                    st.caption("Je označeno více řádků, používám první z nich.")
 
             email_options = ["(nevybráno)"] + [
                 normalize_scalar_for_diff(x) for x in preview_df.get("email", pd.Series(dtype=str)).tolist()
@@ -3424,10 +3478,20 @@ with run_step_container:
                 if selected_preview_email and selected_preview_email in email_options
                 else "(nevybráno)"
             )
+            desired_selectbox_value = default_email
+            current_selectbox_value = str(st.session_state.get("diff_preview_detail_email_select", "")).strip()
+            if current_selectbox_value not in email_options:
+                current_selectbox_value = ""
+            if current_selectbox_value != desired_selectbox_value:
+                st.session_state["diff_preview_detail_email_select"] = desired_selectbox_value
             selected_from_control = st.selectbox(
                 "Vyber kontakt pro detail diffu",
                 options=email_options,
-                index=email_options.index(default_email),
+                index=email_options.index(
+                    str(st.session_state.get("diff_preview_detail_email_select", desired_selectbox_value)).strip()
+                    if str(st.session_state.get("diff_preview_detail_email_select", desired_selectbox_value)).strip() in email_options
+                    else desired_selectbox_value
+                ),
                 key="diff_preview_detail_email_select",
             )
             if selected_from_control == "(nevybráno)":
@@ -3475,6 +3539,13 @@ with run_step_container:
                         "Detail `původní -> nová` není pro tento kontakt dostupný "
                         "(typicky nové kontakty nebo fallback bez detailních field diffů)."
                     )
+
+    if execution_mode == "api_safe_import":
+        safe_confirm = st.checkbox(
+            "Rozumím dopadu: bezpečný import běží jen jako přidání/aktualizace, bez mazání.",
+            value=False,
+            key="safe_import_confirm_main",
+        )
 
     diff_preview_clicked = False
     run_button_col, preview_button_col = st.columns(2)
@@ -3531,7 +3602,12 @@ if run_clicked or diff_preview_clicked:
     run_schema_origin = schema_origin
     if use_api_schema and refresh_api_schema_on_generate:
         try:
-            active_schema, api_meta = fetch_schema_from_api(api_username, api_key, api_base_url)
+            active_schema, api_meta = fetch_schema_from_api(
+                api_username,
+                api_key,
+                api_base_url,
+                read_only=bool(preview_only or execution_mode == "api_dry_run"),
+            )
             run_schema_origin = "smartemailing_api"
             save_cached_schema(
                 API_SCHEMA_CACHE_PATH,
@@ -3880,8 +3956,13 @@ if run_clicked or diff_preview_clicked:
                     username=str(api_import_username).strip(),
                     api_key=str(api_import_key).strip(),
                     base_url=str(api_import_base_url).strip() or DEFAULT_BASE_URL,
-                )
+                ),
+                read_only=bool(preview_only or execution_mode == "api_dry_run"),
             )
+            if client.read_only:
+                run_status_box.info(
+                    "API klient běží v read-only režimu: v diff preview/dry-run jsou blokovaná všechna write API volání."
+                )
             if preview_only or execution_mode == "api_dry_run":
                 def _blocked_write_api_call(*_args: Any, **_kwargs: Any) -> Any:
                     raise RuntimeError(

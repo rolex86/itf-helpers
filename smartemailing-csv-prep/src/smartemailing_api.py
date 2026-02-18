@@ -731,10 +731,16 @@ def build_api_contacts_from_import_df(
 
 
 class SmartEmailingApiClient:
-    def __init__(self, credentials: SmartEmailingCredentials, timeout_sec: int = 20) -> None:
+    def __init__(
+        self,
+        credentials: SmartEmailingCredentials,
+        timeout_sec: int = 20,
+        read_only: bool = False,
+    ) -> None:
         self.credentials = credentials
         self.base_url = normalize_base_url(credentials.base_url)
         self.timeout_sec = int(timeout_sec)
+        self.read_only = bool(read_only)
         self._import_preferred_endpoint: str = ""
         self._import_preferred_payload_variant: str = ""
         self._contacts_lookup_preferred_get_endpoint: str = ""
@@ -753,6 +759,13 @@ class SmartEmailingApiClient:
         query: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
     ) -> Any:
+        method_upper = str(method).strip().upper() or "GET"
+        if self.read_only and method_upper != "GET":
+            raise SmartEmailingApiError(
+                f"SmartEmailing API read-only režim: {method_upper} {path} je zakázané.",
+                status_code=405,
+            )
+
         query = query or {}
         full_query = parse.urlencode(query, doseq=True)
         url = f"{self.base_url}{path}"
@@ -763,7 +776,7 @@ class SmartEmailingApiClient:
         if body is not None:
             payload_bytes = json.dumps(body).encode("utf-8")
 
-        req = request.Request(url=url, method=method.upper(), data=payload_bytes)
+        req = request.Request(url=url, method=method_upper, data=payload_bytes)
         req.add_header("Accept", "application/json")
         req.add_header("Authorization", build_basic_auth_header(self.credentials.username, self.credentials.api_key))
         if body is not None:
@@ -835,6 +848,8 @@ class SmartEmailingApiClient:
         post_endpoints = (
             CUSTOM_FIELDS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
         )
+        if self.read_only:
+            post_endpoints = []
 
         best_rows: list[dict[str, str]] = []
         any_success = False
@@ -960,6 +975,8 @@ class SmartEmailingApiClient:
         post_endpoints = (
             CONTACT_LISTS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
         )
+        if self.read_only:
+            post_endpoints = []
 
         best_rows: list[dict[str, str]] = []
         any_success = False
@@ -1015,6 +1032,8 @@ class SmartEmailingApiClient:
     ) -> list[dict[str, Any]]:
         get_endpoints = CONTACTS_ENDPOINTS if endpoint_candidates is None else endpoint_candidates
         post_endpoints = CONTACTS_SEARCH_ENDPOINTS if search_endpoint_candidates is None else search_endpoint_candidates
+        if self.read_only:
+            post_endpoints = []
 
         wanted = {
             str(x).strip().casefold()
@@ -1109,6 +1128,8 @@ class SmartEmailingApiClient:
             [str(x).strip() for x in post_endpoints_raw if str(x).strip()],
             self._contacts_lookup_preferred_post_endpoint,
         )
+        if self.read_only:
+            post_endpoints = []
 
         wanted = {
             str(x).strip().casefold()
@@ -1209,7 +1230,7 @@ class SmartEmailingApiClient:
             preferred_post_endpoint = str(self._contacts_lookup_preferred_post_endpoint).strip()
             preferred_body_variant = str(self._contacts_lookup_preferred_body_variant).strip()
             preferred_include_key = str(self._contacts_lookup_preferred_include_key).strip()
-            if preferred_post_endpoint and preferred_body_variant:
+            if post_endpoints and preferred_post_endpoint and preferred_body_variant:
                 body = build_body_base(preferred_body_variant, email_key)
                 body.update(build_include_extra(preferred_include_key))
                 if body:
@@ -1335,6 +1356,8 @@ class SmartEmailingApiClient:
             if search_endpoint_candidates is None
             else search_endpoint_candidates
         )
+        if self.read_only:
+            post_endpoints = []
 
         by_contact_id: dict[str, dict[str, dict[str, Any]]] = {contact_id: {} for contact_id in wanted_ids}
 
@@ -1486,6 +1509,16 @@ class SmartEmailingApiClient:
         )
         get_endpoints = self._resolve_list_id_endpoint_templates(get_templates, resolved_list_id)
         post_endpoints = self._resolve_list_id_endpoint_templates(post_templates, resolved_list_id)
+        if self.read_only:
+            post_endpoints = []
+            prefer_targeted_search = False
+
+        resolved_contacts_search_endpoint_candidates = (
+            [] if self.read_only else contacts_search_endpoint_candidates
+        )
+        resolved_custom_field_values_search_endpoint_candidates = (
+            [] if self.read_only else custom_field_values_search_endpoint_candidates
+        )
 
         target_email_keys = {
             str(x).strip().casefold()
@@ -1511,9 +1544,9 @@ class SmartEmailingApiClient:
                     page_limit=page_limit,
                     max_pages=max_pages,
                     contacts_endpoint_candidates=contacts_endpoint_candidates,
-                    contacts_search_endpoint_candidates=contacts_search_endpoint_candidates,
+                    contacts_search_endpoint_candidates=resolved_contacts_search_endpoint_candidates,
                     custom_field_values_endpoint_candidates=custom_field_values_endpoint_candidates,
-                    custom_field_values_search_endpoint_candidates=custom_field_values_search_endpoint_candidates,
+                    custom_field_values_search_endpoint_candidates=resolved_custom_field_values_search_endpoint_candidates,
                     read_parallel_workers=read_parallel_workers,
                 )
 
@@ -1563,9 +1596,9 @@ class SmartEmailingApiClient:
                 page_limit=page_limit,
                 max_pages=max_pages,
                 contacts_endpoint_candidates=contacts_endpoint_candidates,
-                contacts_search_endpoint_candidates=contacts_search_endpoint_candidates,
+                contacts_search_endpoint_candidates=resolved_contacts_search_endpoint_candidates,
                 custom_field_values_endpoint_candidates=custom_field_values_endpoint_candidates,
-                custom_field_values_search_endpoint_candidates=custom_field_values_search_endpoint_candidates,
+                custom_field_values_search_endpoint_candidates=resolved_custom_field_values_search_endpoint_candidates,
                 read_parallel_workers=read_parallel_workers,
             )
         if last_error is not None:
