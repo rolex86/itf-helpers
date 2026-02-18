@@ -387,6 +387,15 @@ def extract_contacts(payload: Any) -> list[dict[str, Any]]:
             if not value_str:
                 continue
             resolved_key = SYSTEM_FIELD_KEY_ALIASES.get(key.casefold(), key)
+            if resolved_key == "blacklisted":
+                current_value = str(row.get(resolved_key, "")).strip()
+                if not current_value:
+                    row[resolved_key] = value_str
+                elif _is_truthy_flag(current_value) and not _is_truthy_flag(value_str):
+                    # Conservative merge: if duplicate rows disagree, keep non-blacklisted value.
+                    # This prevents false positives when one duplicate contact row is stale/blacklisted.
+                    row[resolved_key] = value_str
+                continue
             if not str(row.get(resolved_key, "")).strip():
                 row[resolved_key] = value_str
 

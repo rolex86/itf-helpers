@@ -9,11 +9,11 @@ import pandas as pd
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 _TITLE_BEFORE_FALLBACK_RE = re.compile(
-    r"(^|\s)(BcA|Bc|Ing(?:\.?\s*arch)?|JUDr|MUDr|MVDr|MgA|Mgr|PhDr|RNDr|ThDr|ThLic|doc|prof)\.?(?=\s|$)",
+    r"(^|\s)(BcA|Bc|Ing(?:\.?\s*arch)?|JUDr|MUDr|MVDr|MgA|Mgr|PhDr|RNDr|ThDr|ThLic|doc|prof)(?:\.?(?=\s|$)|\.(?=[^\W\d_]))",
     flags=re.IGNORECASE,
 )
 _TITLE_AFTER_FALLBACK_RE = re.compile(
-    r"(^|\s)(CSc|DrSc|Dr|Ph\.?\s*D|Th\.?\s*D|MBA|DiS|ACCA|FCCA)\.?(?=\s|$)",
+    r"(^|\s)\.?(CSc|DrSc|Dr|Ph\.?\s*D|Th\.?\s*D|MBA|DiS|ACCA|FCCA)\.?(?=\s|$|[,;])",
     flags=re.IGNORECASE,
 )
 _TITLE_BEFORE_CANONICAL = {

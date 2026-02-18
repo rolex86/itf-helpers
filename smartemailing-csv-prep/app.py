@@ -113,6 +113,7 @@ PROFILES_ROOT_PATH = Path("config/profiles")
 PROFILES_INDEX_PATH = PROFILES_ROOT_PATH / "index.yaml"
 LEGACY_API_LIST_FAVORITES_PATH = Path("config/se_list_favorites.local")
 LEGACY_PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH = Path("config/program_custom_fields_allowlist.local")
+COUNTRY_BUCKET_KEYS = ("CZ_SK", "DE_AT_CH", "EN")
 
 
 def schema_hash(columns: list[str]) -> str:
@@ -370,6 +371,7 @@ def compute_import_confirmation_fingerprint(
     batch_size: int,
     max_contacts_limit: int,
     contacts: list[dict[str, Any]],
+    bucket_routing: dict[str, str] | None = None,
 ) -> str:
     hasher = hashlib.sha256()
     meta = {
@@ -380,6 +382,11 @@ def compute_import_confirmation_fingerprint(
         "batch_size": int(batch_size),
         "max_contacts_limit": int(max_contacts_limit),
         "contacts_total": len(contacts),
+        "bucket_routing": {
+            str(k).strip(): str(v).strip()
+            for k, v in (bucket_routing or {}).items()
+            if str(k).strip() and str(v).strip()
+        },
     }
     hasher.update(json.dumps(meta, ensure_ascii=False, sort_keys=True).encode("utf-8"))
     hasher.update(b"\n")
@@ -408,6 +415,8 @@ def build_import_confirmation_summary(
     diff_unchanged_contacts: int | None = None,
     diff_removed_program_custom_fields: int | None = None,
     clear_removed_program_custom_fields_enabled: bool = False,
+    bucket_routing: dict[str, str] | None = None,
+    bucket_contacts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     emails_preview: list[str] = []
     payload_system_fields: set[str] = set()
@@ -463,6 +472,16 @@ def build_import_confirmation_summary(
         "contacts_total": len(contacts),
         "issues_count": int(issues_count),
         "staging_list_id": str(list_id).strip(),
+        "bucket_routing": {
+            str(k).strip(): str(v).strip()
+            for k, v in (bucket_routing or {}).items()
+            if str(k).strip() and str(v).strip()
+        },
+        "bucket_contacts": {
+            str(k).strip(): int(v)
+            for k, v in (bucket_contacts or {}).items()
+            if str(k).strip()
+        },
         "staging_tag": str(tag).strip(),
         "canary_size": int(canary_size),
         "batch_size": int(batch_size),
@@ -497,6 +516,22 @@ def normalize_scalar_for_diff(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+CASE_INSENSITIVE_SYSTEM_FIELDS_FOR_DIFF = {
+    "name",
+    "surname",
+    "titlesbefore",
+    "titlesafter",
+}
+
+
+def normalize_system_field_for_diff(field_name: Any, value: Any) -> str:
+    normalized = normalize_scalar_for_diff(value)
+    key = str(field_name).strip().casefold()
+    if key in CASE_INSENSITIVE_SYSTEM_FIELDS_FOR_DIFF:
+        return normalized.casefold()
+    return normalized
 
 
 def normalize_array_for_diff(value: Any, separators: list[str]) -> tuple[str, ...]:
@@ -602,6 +637,30 @@ def to_streamlit_safe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def init_run_log_state() -> None:
+    if "run_log_entries" not in st.session_state:
+        st.session_state["run_log_entries"] = []
+
+
+def clear_run_log_state() -> None:
+    st.session_state["run_log_entries"] = []
+
+
+def append_run_log_entry(level: str, message: str) -> None:
+    init_run_log_state()
+    entries = st.session_state.get("run_log_entries", [])
+    if not isinstance(entries, list):
+        entries = []
+    entries.append(
+        {
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "level": str(level).strip().upper(),
+            "message": str(message),
+        }
+    )
+    st.session_state["run_log_entries"] = entries[-300:]
+
+
 def split_contact_for_diff(contact: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     system_fields: dict[str, Any] = {}
     custom_fields: dict[str, Any] = {}
@@ -695,6 +754,7 @@ def diff_api_contacts(
     contacts_to_send: list[dict[str, Any]] = []
     updated_details: list[dict[str, Any]] = []
     unchanged_emails: list[str] = []
+    matched_existing_contacts = 0
     removed_clearable_custom_fields_by_email: dict[str, list[str]] = {}
     removed_nonclearable_custom_fields_by_email: dict[str, list[str]] = {}
     clear_operations: list[dict[str, str]] = []
@@ -706,6 +766,7 @@ def diff_api_contacts(
             new_contacts.append(contact)
             contacts_to_send.append(contact)
             continue
+        matched_existing_contacts += 1
 
         existing_system, existing_custom, existing_tags = existing_split_by_email.get(
             email_key,
@@ -715,7 +776,9 @@ def diff_api_contacts(
         changed_fields: list[str] = []
         for field_name, import_value in import_system.items():
             existing_value = existing_system.get(field_name, "")
-            if normalize_scalar_for_diff(import_value) != normalize_scalar_for_diff(existing_value):
+            import_norm = normalize_system_field_for_diff(field_name, import_value)
+            existing_norm = normalize_system_field_for_diff(field_name, existing_value)
+            if import_norm != existing_norm:
                 changed_fields.append(field_name)
 
         if import_tags:
@@ -813,6 +876,7 @@ def diff_api_contacts(
         "custom_fields_compare_enabled": custom_fields_compare_enabled,
         "existing_contacts_with_custom_fields": existing_contacts_with_custom_fields,
         "existing_contacts_with_customfields_key": existing_contacts_with_customfields_key,
+        "matched_existing_contacts": matched_existing_contacts,
         "removed_clearable_custom_fields_by_email": removed_clearable_custom_fields_by_email,
         "removed_clearable_custom_fields_total": int(
             sum(len(x) for x in removed_clearable_custom_fields_by_email.values())
@@ -939,6 +1003,10 @@ if st.session_state.get("_runtime_active_profile_id", "") != active_profile_id:
         "profile_new_preset_name",
         "staging_list_manual",
         "staging_list_select",
+        "api_bucket_select_cz_sk_main",
+        "api_bucket_select_de_at_ch_main",
+        "api_bucket_select_en_main",
+        "api_bucket_favorite_list_ids_by_bucket",
         "api_contact_lists_cache",
         "api_contact_lists_cache_meta",
     ]:
@@ -950,7 +1018,11 @@ if st.session_state.get("_runtime_active_profile_id", "") != active_profile_id:
             st.session_state.pop(key, None)
     st.session_state["_runtime_active_profile_id"] = active_profile_id
 
-with st.sidebar.expander("Profil importu", expanded=True):
+st.sidebar.markdown(
+    f"**Aktivní profil:** `{active_profile_name} ({active_profile_id})`"
+)
+
+with st.sidebar.expander("Profil importu", expanded=False):
     profile_options = [item.id for item in profile_items]
     if active_profile_id not in profile_options and profile_options:
         active_profile_id = profile_options[0]
@@ -1068,6 +1140,9 @@ with st.sidebar.expander("Profil importu", expanded=True):
                 "strict_custom_fields_main",
                 "list_status_main",
                 "staging_list_manual",
+                "api_bucket_select_cz_sk_main",
+                "api_bucket_select_de_at_ch_main",
+                "api_bucket_select_en_main",
                 "staging_tag_input",
                 "api_canary_size_main",
                 "api_batch_size_main",
@@ -1152,6 +1227,9 @@ with st.sidebar.expander("Profil importu", expanded=True):
         st.session_state["profile_selected_preset_id"] = "(žádný)"
         st.success("Preset smazán.")
         st.rerun()
+
+    if st.button("Uložit nastavení profilu", key="manual_profile_settings_save_btn"):
+        st.session_state["manual_profile_save_requested"] = True
 
     export_profile_payload = {
         "version": 1,
@@ -1665,6 +1743,24 @@ contacts_search_endpoint_candidates = [
     for x in api_cfg.get("contacts_search_endpoint_candidates", ["/api/v3/contacts/search", "/api/v3/contact/search"])
     if str(x).strip()
 ]
+# Blacklist lookup must stay strict to avoid false positives on legacy aliases.
+# We intentionally use only the documented contacts endpoints.
+blacklist_contacts_endpoint_candidates = [
+    endpoint
+    for endpoint in contacts_endpoint_candidates
+    if endpoint.strip().casefold() == "/api/v3/contacts"
+]
+if not blacklist_contacts_endpoint_candidates:
+    blacklist_contacts_endpoint_candidates = ["/api/v3/contacts"]
+
+blacklist_contacts_search_endpoint_candidates = [
+    endpoint
+    for endpoint in contacts_search_endpoint_candidates
+    if endpoint.strip().casefold() == "/api/v3/contacts/search"
+]
+if not blacklist_contacts_search_endpoint_candidates:
+    blacklist_contacts_search_endpoint_candidates = ["/api/v3/contacts/search"]
+
 contact_custom_field_values_endpoint_candidates = [
     str(x).strip()
     for x in api_cfg.get(
@@ -1785,6 +1881,35 @@ api_import_username = ""
 api_import_key = ""
 api_import_base_url = DEFAULT_BASE_URL
 staging_list_value = ""
+bucket_routing_saved_raw = (
+    profile_api_saved.get("bucket_list_values", {})
+    if isinstance(profile_api_saved.get("bucket_list_values", {}), dict)
+    else {}
+)
+bucket_routing_list_values: dict[str, str] = {
+    bucket: str(bucket_routing_saved_raw.get(bucket, "")).strip()
+    for bucket in COUNTRY_BUCKET_KEYS
+}
+bucket_favorite_lists_saved_raw = (
+    profile_api_saved.get("bucket_favorite_list_ids", {})
+    if isinstance(profile_api_saved.get("bucket_favorite_list_ids", {}), dict)
+    else {}
+)
+bucket_favorite_list_ids_by_bucket_default: dict[str, list[str]] = {
+    bucket: sorted(
+        {
+            str(x).strip()
+            for x in (
+                bucket_favorite_lists_saved_raw.get(bucket, [])
+                if isinstance(bucket_favorite_lists_saved_raw.get(bucket, []), list)
+                else []
+            )
+            if str(x).strip()
+        }
+    )
+    for bucket in COUNTRY_BUCKET_KEYS
+}
+bucket_routing_enabled = bool(do_bucket_country)
 staging_tag = str(profile_api_saved.get("staging_tag", "")).strip()
 api_canary_size = to_int(profile_api_saved.get("canary_size", api_cfg.get("canary_size", 50)), 50)
 api_batch_size = to_int(profile_api_saved.get("batch_size", api_cfg.get("batch_size", 500)), 500)
@@ -1848,6 +1973,11 @@ if api_mode_enabled:
         st.session_state.api_contact_lists_cache = []
     if "api_list_favorite_ids" not in st.session_state:
         st.session_state.api_list_favorite_ids = sorted(load_api_list_favorites(API_LIST_FAVORITES_PATH))
+    if "api_bucket_favorite_list_ids_by_bucket" not in st.session_state:
+        st.session_state.api_bucket_favorite_list_ids_by_bucket = {
+            bucket: list(bucket_favorite_list_ids_by_bucket_default.get(bucket, []))
+            for bucket in COUNTRY_BUCKET_KEYS
+        }
     if "program_custom_fields_allowlist_ids" not in st.session_state:
         st.session_state.program_custom_fields_allowlist_ids = sorted(program_custom_field_allowlist_ids)
     if "program_custom_fields_catalog" not in st.session_state:
@@ -2037,6 +2167,11 @@ if api_mode_enabled:
                 st.error("Pro načtení custom fields vyplň API uživatelské jméno a API klíč.")
             else:
                 try:
+                    preserved_allowlist_ids = {
+                        str(x).strip()
+                        for x in st.session_state.get("program_custom_fields_allowlist_ids", [])
+                        if str(x).strip()
+                    }
                     catalog_client = SmartEmailingApiClient(
                         SmartEmailingCredentials(
                             username=str(api_import_username).strip(),
@@ -2053,6 +2188,11 @@ if api_mode_enabled:
                         "loaded_at": datetime.now(timezone.utc).isoformat(),
                         "count": len(fetched_catalog),
                     }
+                    # Keep allowlist stable by ID across API refreshes and rebuild checkboxes from these IDs.
+                    st.session_state.program_custom_fields_allowlist_ids = sorted(preserved_allowlist_ids)
+                    st.session_state["program_custom_fields_allowlist_checkbox_seed"] = (
+                        int(st.session_state.get("program_custom_fields_allowlist_checkbox_seed", 0)) + 1
+                    )
                     st.success(f"Načteno custom fields pro allowlist: {len(fetched_catalog)}")
                 except Exception as exc:
                     st.error(f"Nepodařilo se načíst custom fields pro allowlist: {exc}")
@@ -2099,7 +2239,12 @@ if api_mode_enabled:
             for field_id in option_ids:
                 field_id_str = str(field_id).strip()
                 checkbox_key = f"program_custom_fields_allowlist_checkbox_{allowlist_checkbox_seed}_{field_id_str}"
-                if bool(st.session_state.get(checkbox_key)):
+                selected = (
+                    bool(st.session_state.get(checkbox_key))
+                    if checkbox_key in st.session_state
+                    else (field_id_str in allowlist_ids_current)
+                )
+                if selected:
                     selected_allowlist_ids.append(field_id_str)
             st.session_state.program_custom_fields_allowlist_ids = sorted(
                 {str(x).strip() for x in selected_allowlist_ids if str(x).strip()}
@@ -2210,6 +2355,20 @@ if api_mode_enabled:
             for x in st.session_state.get("api_list_favorite_ids", [])
             if str(x).strip()
         }
+        bucket_routing_enabled = bool(do_bucket_country)
+        if bucket_routing_enabled:
+            st.caption(
+                "Bucket routing pro API je aktivní, protože je zapnuto "
+                "`Rozdělit výstup podle země (CZ_SK / DE_AT_CH / EN)` v levém panelu."
+            )
+        else:
+            st.caption(
+                "Bucket routing pro API je vypnutý. Zapni "
+                "`Rozdělit výstup podle země (CZ_SK / DE_AT_CH / EN)` v levém panelu."
+            )
+        label_to_list: dict[str, dict[str, str]] = {}
+        labels: list[str] = []
+        list_options = ["(ručně)"]
         if lists_cache_for_staging:
             def _list_sort_tuple(item: dict[str, Any]) -> tuple[int, int, int, str]:
                 raw_id = str(item.get("id", "")).strip()
@@ -2220,8 +2379,6 @@ if api_mode_enabled:
                 except Exception:
                     return (favorite_rank, 1, 0, name)
 
-            label_to_list: dict[str, dict[str, str]] = {}
-            labels = []
             for item in sorted(lists_cache_for_staging, key=_list_sort_tuple):
                 list_id = str(item.get("id", "")).strip()
                 list_name = str(item.get("name", "")).strip() or "(bez názvu)"
@@ -2229,72 +2386,73 @@ if api_mode_enabled:
                 label = f"{favorite_prefix}{list_name} (id={list_id})"
                 labels.append(label)
                 label_to_list[label] = {"id": list_id, "name": list_name}
-
-            favorite_items = [
-                item
-                for item in sorted(lists_cache_for_staging, key=_list_sort_tuple)
-                if str(item.get("id", "")).strip() in favorite_list_ids
-            ]
-            if favorite_items:
-                st.caption("Rychlý výběr oblíbených")
-                quick_cols = st.columns(min(3, len(favorite_items)))
-                for idx, item in enumerate(favorite_items):
-                    list_id = str(item.get("id", "")).strip()
-                    list_name = str(item.get("name", "")).strip() or "(bez názvu)"
-                    quick_label = f"★ {list_name} ({list_id})"
-                    selected_label_with_id = f"★ {list_name} (id={list_id})"
-                    with quick_cols[idx % len(quick_cols)]:
-                        if st.button(
-                            quick_label,
-                            key=f"quick_select_favorite_{list_id}",
-                            disabled=profile_lock_critical_options,
-                        ):
-                            if selected_label_with_id in ["(ručně)"] + labels:
-                                st.session_state["staging_list_select"] = selected_label_with_id
-                            st.session_state["staging_list_manual"] = list_id
-                            st.rerun()
-
             list_options = ["(ručně)"] + labels
-            if st.session_state.get("staging_list_select") not in list_options:
-                st.session_state["staging_list_select"] = "(ručně)"
-            selected_list_label = st.selectbox(
-                "Vyber staging seznam ze SmartEmailingu",
-                options=list_options,
-                key="staging_list_select",
-                disabled=profile_lock_critical_options,
-            )
-            if selected_list_label != "(ručně)":
-                selected = label_to_list.get(selected_list_label, {"id": "", "name": ""})
-                selected_id = str(selected.get("id", "")).strip()
-                selected_name = str(selected.get("name", "")).strip()
-                if selected_id:
-                    st.session_state["staging_list_manual"] = selected_id
-                    st.caption(f"Vybraný staging seznam: `{selected_name}` (id `{selected_id}`)")
-                    is_favorite = selected_id in favorite_list_ids
-                    toggle_fav_label = "★ Odebrat z oblíbených" if is_favorite else "☆ Přidat do oblíbených"
-                    fav_col_1, fav_col_2 = st.columns([1, 4])
-                    with fav_col_1:
-                        if st.button(
-                            toggle_fav_label,
-                            key=f"toggle_api_favorite_list_{selected_id}",
-                            disabled=profile_lock_critical_options,
-                        ):
-                            if is_favorite:
-                                favorite_list_ids.discard(selected_id)
-                            else:
-                                favorite_list_ids.add(selected_id)
-                            st.session_state["api_list_favorite_ids"] = sorted(favorite_list_ids)
-                            try:
-                                save_api_list_favorites(API_LIST_FAVORITES_PATH, favorite_list_ids)
-                            except Exception as exc:
-                                st.error(f"Nepodařilo se uložit oblíbené seznamy: {exc}")
-                            st.rerun()
-                    with fav_col_2:
-                        st.caption("Oblíbené seznamy jsou označené `★` a řadí se vždy nahoře.")
-            if hidden_segment_lists > 0:
-                st.caption(
-                    f"Skryto dynamických segment listů (`Segment id #`): {hidden_segment_lists}."
+
+            if not bucket_routing_enabled:
+                favorite_items = [
+                    item
+                    for item in sorted(lists_cache_for_staging, key=_list_sort_tuple)
+                    if str(item.get("id", "")).strip() in favorite_list_ids
+                ]
+                if favorite_items:
+                    st.caption("Rychlý výběr oblíbených")
+                    quick_cols = st.columns(min(3, len(favorite_items)))
+                    for idx, item in enumerate(favorite_items):
+                        list_id = str(item.get("id", "")).strip()
+                        list_name = str(item.get("name", "")).strip() or "(bez názvu)"
+                        quick_label = f"★ {list_name} ({list_id})"
+                        selected_label_with_id = f"★ {list_name} (id={list_id})"
+                        with quick_cols[idx % len(quick_cols)]:
+                            if st.button(
+                                quick_label,
+                                key=f"quick_select_favorite_{list_id}",
+                                disabled=profile_lock_critical_options,
+                            ):
+                                if selected_label_with_id in ["(ručně)"] + labels:
+                                    st.session_state["staging_list_select"] = selected_label_with_id
+                                st.session_state["staging_list_manual"] = list_id
+                                st.rerun()
+
+                if st.session_state.get("staging_list_select") not in list_options:
+                    st.session_state["staging_list_select"] = "(ručně)"
+                selected_list_label = st.selectbox(
+                    "Vyber staging seznam ze SmartEmailingu",
+                    options=list_options,
+                    key="staging_list_select",
+                    disabled=profile_lock_critical_options,
                 )
+                if selected_list_label != "(ručně)":
+                    selected = label_to_list.get(selected_list_label, {"id": "", "name": ""})
+                    selected_id = str(selected.get("id", "")).strip()
+                    selected_name = str(selected.get("name", "")).strip()
+                    if selected_id:
+                        st.session_state["staging_list_manual"] = selected_id
+                        st.caption(f"Vybraný staging seznam: `{selected_name}` (id `{selected_id}`)")
+                        is_favorite = selected_id in favorite_list_ids
+                        toggle_fav_label = "★ Odebrat z oblíbených" if is_favorite else "☆ Přidat do oblíbených"
+                        fav_col_1, fav_col_2 = st.columns([1, 4])
+                        with fav_col_1:
+                            if st.button(
+                                toggle_fav_label,
+                                key=f"toggle_api_favorite_list_{selected_id}",
+                                disabled=profile_lock_critical_options,
+                            ):
+                                if is_favorite:
+                                    favorite_list_ids.discard(selected_id)
+                                else:
+                                    favorite_list_ids.add(selected_id)
+                                st.session_state["api_list_favorite_ids"] = sorted(favorite_list_ids)
+                                try:
+                                    save_api_list_favorites(API_LIST_FAVORITES_PATH, favorite_list_ids)
+                                except Exception as exc:
+                                    st.error(f"Nepodařilo se uložit oblíbené seznamy: {exc}")
+                                st.rerun()
+                        with fav_col_2:
+                            st.caption("Oblíbené seznamy jsou označené `★` a řadí se vždy nahoře.")
+                if hidden_segment_lists > 0:
+                    st.caption(
+                        f"Skryto dynamických segment listů (`Segment id #`): {hidden_segment_lists}."
+                    )
         else:
             if lists_cache and hidden_segment_lists > 0:
                 st.caption(
@@ -2303,12 +2461,128 @@ if api_mode_enabled:
             else:
                 st.caption("Listy zatím nejsou načtené. Vyplň API údaje a klikni na `Obnovit listy z API`.")
 
-        staging_list_value = st.text_input(
-            "Staging seznam ID nebo název (bezpečný/plný režim)",
-            key="staging_list_manual",
-            disabled=profile_lock_critical_options,
-            help="Doporučeno: použít staging seznam, ne produkční seznam.",
-        )
+        if not bucket_routing_enabled:
+            staging_list_value = st.text_input(
+                "Staging seznam ID nebo název (bezpečný/plný režim)",
+                key="staging_list_manual",
+                disabled=profile_lock_critical_options,
+                help="Doporučeno: použít staging seznam, ne produkční seznam.",
+            )
+        else:
+            staging_list_value = str(st.session_state.get("staging_list_manual", "")).strip()
+        if bucket_routing_enabled:
+            st.caption("Nastav cílový list pro každý bucket. Použije se jen bucket, který má data.")
+            bucket_favorite_lists_state_raw = st.session_state.get("api_bucket_favorite_list_ids_by_bucket", {})
+            bucket_favorite_ids_by_bucket: dict[str, set[str]] = {}
+            for bucket in COUNTRY_BUCKET_KEYS:
+                raw_ids = (
+                    bucket_favorite_lists_state_raw.get(bucket, [])
+                    if isinstance(bucket_favorite_lists_state_raw, dict)
+                    else []
+                )
+                if not isinstance(raw_ids, list):
+                    raw_ids = []
+                bucket_favorite_ids_by_bucket[bucket] = {
+                    str(x).strip() for x in raw_ids if str(x).strip()
+                }
+
+            def _persist_bucket_favorites_state() -> None:
+                st.session_state["api_bucket_favorite_list_ids_by_bucket"] = {
+                    bucket: sorted({str(x).strip() for x in bucket_favorite_ids_by_bucket.get(bucket, set()) if str(x).strip()})
+                    for bucket in COUNTRY_BUCKET_KEYS
+                }
+
+            def _bucket_select(bucket_key: str, title: str, session_key: str) -> str:
+                bucket_favorites = set(bucket_favorite_ids_by_bucket.get(bucket_key, set()))
+
+                def _bucket_sort(item: dict[str, Any]) -> tuple[int, int, int, str]:
+                    raw_id = str(item.get("id", "")).strip()
+                    name = str(item.get("name", "")).strip().casefold()
+                    favorite_rank = 0 if raw_id in bucket_favorites else 1
+                    try:
+                        return (favorite_rank, 0, -int(raw_id), name)
+                    except Exception:
+                        return (favorite_rank, 1, 0, name)
+
+                bucket_label_to_list: dict[str, dict[str, str]] = {}
+                bucket_labels: list[str] = []
+                for item in sorted(lists_cache_for_staging, key=_bucket_sort):
+                    list_id = str(item.get("id", "")).strip()
+                    list_name = str(item.get("name", "")).strip() or "(bez názvu)"
+                    favorite_prefix = "★ " if list_id in bucket_favorites else ""
+                    label = f"{favorite_prefix}{list_name} (id={list_id})"
+                    bucket_labels.append(label)
+                    bucket_label_to_list[label] = {"id": list_id, "name": list_name}
+
+                label_by_list_id = {
+                    str(item.get("id", "")).strip(): label
+                    for label, item in bucket_label_to_list.items()
+                    if str(item.get("id", "")).strip()
+                }
+                current_value = str(bucket_routing_list_values.get(bucket_key, "")).strip()
+                bucket_options = ["(není vybráno)"] + bucket_labels
+                option_to_list_id: dict[str, str] = {"(není vybráno)": ""}
+                for label in bucket_labels:
+                    option_to_list_id[label] = str(bucket_label_to_list.get(label, {}).get("id", "")).strip()
+
+                default_label = "(není vybráno)"
+                if current_value:
+                    matched_label = label_by_list_id.get(current_value, "")
+                    if matched_label:
+                        default_label = matched_label
+                    else:
+                        unknown_label = f"(uloženo) id={current_value}"
+                        if unknown_label not in option_to_list_id:
+                            bucket_options.append(unknown_label)
+                            option_to_list_id[unknown_label] = current_value
+                        default_label = unknown_label
+
+                if st.session_state.get(session_key) not in bucket_options:
+                    st.session_state[session_key] = default_label
+
+                selected_label = st.selectbox(
+                    title,
+                    options=bucket_options,
+                    key=session_key,
+                    disabled=profile_lock_critical_options,
+                )
+                selected_list_id = str(option_to_list_id.get(selected_label, "")).strip()
+                if selected_list_id:
+                    is_favorite = selected_list_id in bucket_favorites
+                    toggle_label = "★ Odebrat z oblíbených (bucket)" if is_favorite else "☆ Přidat do oblíbených (bucket)"
+                    if st.button(
+                        toggle_label,
+                        key=f"toggle_bucket_favorite_{bucket_key}_{selected_list_id}",
+                        disabled=profile_lock_critical_options,
+                    ):
+                        if is_favorite:
+                            bucket_favorite_ids_by_bucket[bucket_key].discard(selected_list_id)
+                        else:
+                            bucket_favorite_ids_by_bucket[bucket_key].add(selected_list_id)
+                        _persist_bucket_favorites_state()
+                        st.rerun()
+                return selected_list_id
+
+            bucket_col_1, bucket_col_2, bucket_col_3 = st.columns(3)
+            with bucket_col_1:
+                bucket_routing_list_values["CZ_SK"] = _bucket_select(
+                    bucket_key="CZ_SK",
+                    title="List pro CZ_SK",
+                    session_key="api_bucket_select_cz_sk_main",
+                )
+            with bucket_col_2:
+                bucket_routing_list_values["DE_AT_CH"] = _bucket_select(
+                    bucket_key="DE_AT_CH",
+                    title="List pro DE_AT_CH",
+                    session_key="api_bucket_select_de_at_ch_main",
+                )
+            with bucket_col_3:
+                bucket_routing_list_values["EN"] = _bucket_select(
+                    bucket_key="EN",
+                    title="List pro EN",
+                    session_key="api_bucket_select_en_main",
+                )
+            _persist_bucket_favorites_state()
         staging_tag = st.text_input(
             "Staging štítek (volitelný)",
             value=str(profile_api_saved.get("staging_tag", "")).strip(),
@@ -2346,7 +2620,7 @@ if api_mode_enabled:
             help="Kontakty s `blacklisted=1` se vyřadí ještě před diffem a importem.",
         )
         clear_removed_program_custom_fields = st.checkbox(
-            "Při diffu mazat odebrané kódy aplikací (jen programové custom fields)",
+            "Při diffu mazat odebrané kódy aplikací (jen vybrané custom fields)",
             value=clear_removed_program_custom_fields_default,
             key="clear_removed_program_custom_fields_main",
             disabled=(not diff_preflight_enabled) or profile_lock_critical_options,
@@ -2513,6 +2787,26 @@ profile_settings_to_save = {
         "strict_custom_fields": bool(strict_custom_fields),
         "list_status": str(list_status).strip() or "confirmed",
         "staging_list_value": str(st.session_state.get("staging_list_manual", "")).strip(),
+        "bucket_routing_enabled": bool(bucket_routing_enabled),
+        "bucket_list_values": {
+            bucket: str(bucket_routing_list_values.get(bucket, "")).strip()
+            for bucket in COUNTRY_BUCKET_KEYS
+            if str(bucket_routing_list_values.get(bucket, "")).strip()
+        },
+        "bucket_favorite_list_ids": {
+            bucket: sorted(
+                {
+                    str(x).strip()
+                    for x in (
+                        st.session_state.get("api_bucket_favorite_list_ids_by_bucket", {}).get(bucket, [])
+                        if isinstance(st.session_state.get("api_bucket_favorite_list_ids_by_bucket", {}), dict)
+                        else []
+                    )
+                    if str(x).strip()
+                }
+            )
+            for bucket in COUNTRY_BUCKET_KEYS
+        },
         "staging_tag": str(staging_tag).strip(),
         "canary_size": int(api_canary_size),
         "batch_size": int(api_batch_size),
@@ -2552,6 +2846,8 @@ profile_settings_to_save = {
         ),
     },
 }
+profile_settings_save_ok = False
+profile_settings_save_error = ""
 try:
     save_profile_settings(
         PROFILE_SETTINGS_PATH,
@@ -2560,8 +2856,19 @@ try:
         profile_name=active_profile_name,
         presets=profile_presets_current,
     )
+    profile_settings_save_ok = True
 except Exception as exc:
+    profile_settings_save_error = str(exc)
     st.warning(f"Nepodařilo se uložit profilová nastavení: {exc}")
+
+if st.session_state.pop("manual_profile_save_requested", False):
+    if profile_settings_save_ok:
+        st.sidebar.success("Aktuální nastavení profilu bylo ručně uloženo.")
+    else:
+        st.sidebar.error(
+            "Ruční uložení nastavení profilu selhalo: "
+            + (profile_settings_save_error or "neznámá chyba")
+        )
 
 can_load_schema_during_generate = use_api_schema and bool(str(api_username).strip()) and bool(str(api_key).strip())
 api_credentials_ready = bool(str(api_import_username).strip()) and bool(str(api_import_key).strip())
@@ -2593,9 +2900,58 @@ if "diff_preview_error" not in st.session_state:
     st.session_state["diff_preview_error"] = ""
 
 with run_step_container:
-    run_status_box = st.empty()
+    init_run_log_state()
+    run_status_placeholder = st.empty()
+    st.markdown("#### Log běhu")
+    run_log_placeholder = st.empty()
+
+    def render_run_log_panel() -> None:
+        log_entries = st.session_state.get("run_log_entries", [])
+        with run_log_placeholder.container():
+            if isinstance(log_entries, list) and len(log_entries) > 0:
+                st.dataframe(
+                    to_streamlit_safe_dataframe(pd.DataFrame(log_entries)),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=220,
+                )
+            else:
+                st.caption("Zatím bez hlášek běhu.")
+
+    class RunStatusProxy:
+        def __init__(self, placeholder: Any) -> None:
+            self._placeholder = placeholder
+
+        def _emit(self, level: str, message: str) -> None:
+            append_run_log_entry(level, message)
+            render_run_log_panel()
+            level_key = str(level).strip().lower()
+            if level_key == "success":
+                self._placeholder.success(message)
+            elif level_key == "warning":
+                self._placeholder.warning(message)
+            elif level_key == "error":
+                self._placeholder.error(message)
+            else:
+                self._placeholder.info(message)
+
+        def info(self, message: str) -> None:
+            self._emit("info", message)
+
+        def warning(self, message: str) -> None:
+            self._emit("warning", message)
+
+        def error(self, message: str) -> None:
+            self._emit("error", message)
+
+        def success(self, message: str) -> None:
+            self._emit("success", message)
+
+    run_status_box = RunStatusProxy(run_status_placeholder)
+    render_run_log_panel()
+
     if api_mode_enabled and not api_credentials_ready:
-        st.warning("Pro API režim vyplň API uživatelské jméno + API klíč.")
+        run_status_box.warning("Pro API režim vyplň API uživatelské jméno + API klíč.")
     if execution_mode not in {"api_safe_import", "api_full_import"}:
         st.session_state["pending_api_import_confirmation"] = {}
         st.session_state["pending_api_import_confirmation_fingerprint"] = ""
@@ -2645,11 +3001,26 @@ with run_step_container:
         metric_col_2.metric("Kontakty s custom fields", int(pending_import_confirmation.get("contacts_with_custom_fields", 0)))
         metric_col_3.metric("Kontakty se seznamem", int(pending_import_confirmation.get("contacts_with_list_assignment", 0)))
         metric_col_4.metric("Chyby payloadu", int(pending_import_confirmation.get("issues_count", 0)))
-        st.caption(
-            f"Režim: {pending_import_confirmation.get('mode_label', '')} | "
-            f"Staging list ID: {pending_import_confirmation.get('staging_list_id', '') or 'není'} | "
-            f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
-        )
+        pending_bucket_routing = pending_import_confirmation.get("bucket_routing", {})
+        if isinstance(pending_bucket_routing, dict) and pending_bucket_routing:
+            routing_label = ", ".join(
+                [
+                    f"{bucket}→{str(pending_bucket_routing.get(bucket, '')).strip()}"
+                    for bucket in COUNTRY_BUCKET_KEYS
+                    if str(pending_bucket_routing.get(bucket, "")).strip()
+                ]
+            )
+            st.caption(
+                f"Režim: {pending_import_confirmation.get('mode_label', '')} | "
+                f"Bucket routing: {routing_label or 'není'} | "
+                f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
+            )
+        else:
+            st.caption(
+                f"Režim: {pending_import_confirmation.get('mode_label', '')} | "
+                f"Staging list ID: {pending_import_confirmation.get('staging_list_id', '') or 'není'} | "
+                f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
+            )
         st.caption(
             f"Canary dávka: {pending_import_confirmation.get('canary_size', 0)} | "
             f"Velikost dávky: {pending_import_confirmation.get('batch_size', 0)} | "
@@ -2663,6 +3034,15 @@ with run_step_container:
                 f"aktualizace={int(pending_import_confirmation.get('diff_updated_contacts', 0))}, "
                 f"beze změny={int(pending_import_confirmation.get('diff_unchanged_contacts', 0))}."
             )
+            pending_bucket_contacts = pending_import_confirmation.get("bucket_contacts", {})
+            if isinstance(pending_bucket_contacts, dict) and pending_bucket_contacts:
+                bucket_counts = ", ".join(
+                    [
+                        f"{bucket}={int(pending_bucket_contacts.get(bucket, 0) or 0)}"
+                        for bucket in COUNTRY_BUCKET_KEYS
+                    ]
+                )
+                st.caption(f"Kontakty po bucketech: {bucket_counts}.")
             if bool(pending_import_confirmation.get("clear_removed_program_custom_fields_enabled", False)):
                 st.caption(
                     "Čištění odebraných kódů aplikací: "
@@ -2714,20 +3094,46 @@ with run_step_container:
             preview_metric_2.metric("Aktualizace", int(preview_summary.get("updated_contacts", 0)))
             preview_metric_3.metric("Beze změny", int(preview_summary.get("unchanged_contacts", 0)))
             preview_metric_4.metric("K odeslání", int(preview_summary.get("contacts_to_send", 0)))
-            st.caption(
-                f"Staging list ID: {preview_summary.get('list_id', '') or 'není'} | "
-                f"Diff status: {preview_summary.get('diff_status', '') or 'n/a'} | "
-                f"Vytvořeno: {preview_summary.get('generated_at', '') or 'n/a'}"
-            )
+            preview_bucket_routing = preview_summary.get("bucket_routing", {})
+            if isinstance(preview_bucket_routing, dict) and preview_bucket_routing:
+                preview_routing_label = ", ".join(
+                    [
+                        f"{bucket}→{str(preview_bucket_routing.get(bucket, '')).strip()}"
+                        for bucket in COUNTRY_BUCKET_KEYS
+                        if str(preview_bucket_routing.get(bucket, "")).strip()
+                    ]
+                )
+                st.caption(
+                    f"Bucket routing: {preview_routing_label or 'není'} | "
+                    f"Diff status: {preview_summary.get('diff_status', '') or 'n/a'} | "
+                    f"Vytvořeno: {preview_summary.get('generated_at', '') or 'n/a'}"
+                )
+            else:
+                st.caption(
+                    f"Staging list ID: {preview_summary.get('list_id', '') or 'není'} | "
+                    f"Diff status: {preview_summary.get('diff_status', '') or 'n/a'} | "
+                    f"Vytvořeno: {preview_summary.get('generated_at', '') or 'n/a'}"
+                )
             if bool(preview_summary.get("clear_removed_program_custom_fields_enabled", False)):
                 st.caption(
                     "Čištění odebraných kódů aplikací je zapnuté: "
                     f"{int(preview_summary.get('removed_program_custom_fields', 0))} změn."
                 )
-            if not bool(preview_summary.get("custom_fields_compare_enabled", True)):
+            if (
+                not bool(preview_summary.get("custom_fields_compare_enabled", True))
+                and int(preview_summary.get("matched_existing_contacts", 0)) > 0
+            ):
                 st.warning(
-                    "API nevrátil custom fields pro existující kontakty ani přes list/detail/email lookup. "
+                    "U existujících kontaktů se nepodařilo získat custom fields (nebo je kontakty nemají). "
                     "Diff porovnání custom fields bylo přeskočeno a fallback běží jako odeslání všech připravených kontaktů."
+                )
+            preview_route_summaries = preview_summary.get("route_summaries", [])
+            if isinstance(preview_route_summaries, list) and preview_route_summaries:
+                st.caption("Diff souhrn po bucketech/listových trasách")
+                st.dataframe(
+                    to_streamlit_safe_dataframe(pd.DataFrame(preview_route_summaries)),
+                    use_container_width=True,
+                    height=210,
                 )
         if preview_error:
             st.warning(preview_error)
@@ -2758,6 +3164,8 @@ with run_step_container:
 preview_only = diff_preview_clicked and not run_clicked
 
 if run_clicked or diff_preview_clicked:
+    clear_run_log_state()
+    render_run_log_panel()
     if preview_only:
         st.session_state["pending_api_import_confirmation"] = {}
         st.session_state["pending_api_import_confirmation_fingerprint"] = ""
@@ -2766,7 +3174,12 @@ if run_clicked or diff_preview_clicked:
         if not diff_preflight_enabled:
             run_status_box.error("Diff preview nelze spočítat: zapni volbu porovnání před importem (diff).")
             st.stop()
-        if not str(staging_list_value).strip():
+        if bucket_routing_enabled and not any(str(v).strip() for v in bucket_routing_list_values.values()):
+            run_status_box.error(
+                "Diff preview nelze spočítat: při zapnutém bucket routingu vyplň aspoň jeden cílový list."
+            )
+            st.stop()
+        if (not bucket_routing_enabled) and not str(staging_list_value).strip():
             run_status_box.error("Diff preview nelze spočítat: vyber staging seznam.")
             st.stop()
         run_status_box.info("Načítám diff preview (bez odeslání importu do API).")
@@ -2901,10 +3314,12 @@ if run_clicked or diff_preview_clicked:
             all_import_rows.append(import_df)
 
             processed_files += 1
-            st.info(f"{sf.name}: detekováno jako **{source.name}**, řádků po transformacích: {len(expanded)}")
+            run_status_box.info(
+                f"{sf.name}: detekováno jako {source.name}, řádků po transformacích: {len(expanded)}"
+            )
         except Exception as exc:
             file_errors.append({"source_file": sf.name, "error": str(exc)})
-            st.error(f"{sf.name}: nepodařilo se zpracovat ({exc})")
+            run_status_box.error(f"{sf.name}: nepodařilo se zpracovat ({exc})")
             continue
 
     if all_import_rows:
@@ -2919,7 +3334,9 @@ if run_clicked or diff_preview_clicked:
         if email_export_column and email_export_column in final_import_df.columns:
             final_import_df, dedup_removed_rows = deduplicate_import_df(final_import_df, email_export_column, dedup_keep)
         else:
-            st.warning("Deduplikace je zapnutá, ale ve schématu nebyl nalezen emailový sloupec pro deduplikaci.")
+            run_status_box.warning(
+                "Deduplikace je zapnutá, ale ve schématu nebyl nalezen emailový sloupec pro deduplikaci."
+            )
 
     if len(final_import_df) > 0:
         bucket_series = final_import_df.get(
@@ -3113,6 +3530,10 @@ if run_clicked or diff_preview_clicked:
     api_block_reason = ""
     api_status = "not_requested"
     api_resolved_list_id = ""
+    api_bucket_routing_map: dict[str, str] = {}
+    api_bucket_contacts_prepared: dict[str, int] = {}
+    api_missing_bucket_lists_with_data: list[str] = []
+    api_route_details: list[dict[str, Any]] = []
     api_ping = {}
     extra_report_frames: list[pd.DataFrame] = []
 
@@ -3125,6 +3546,16 @@ if run_clicked or diff_preview_clicked:
                     base_url=str(api_import_base_url).strip() or DEFAULT_BASE_URL,
                 )
             )
+            if preview_only or execution_mode == "api_dry_run":
+                def _blocked_write_api_call(*_args: Any, **_kwargs: Any) -> Any:
+                    raise RuntimeError(
+                        "Safety guard: write volání na SmartEmailing API je v dry-run/diff preview režimu zakázané."
+                    )
+
+                # Hard safety brake: even if a future code path regresses, no write call can pass in preview/dry-run.
+                client.import_contacts_canary = _blocked_write_api_call  # type: ignore[method-assign]
+                client.import_contacts_batch = _blocked_write_api_call  # type: ignore[method-assign]
+                client.create_custom_field = _blocked_write_api_call  # type: ignore[method-assign]
             api_ping = client.ping()
             custom_fields = client.fetch_custom_fields(
                 endpoint_candidates=custom_fields_endpoint_candidates,
@@ -3140,42 +3571,118 @@ if run_clicked or diff_preview_clicked:
                     f"API vrátilo jen {len(custom_fields)} vlastních polí, minimum je {min_custom_fields}."
                 )
 
-            api_resolved_list_id = (
-                client.resolve_contact_list_id(
-                    staging_list_value,
-                    endpoint_candidates=contact_lists_endpoint_candidates,
-                    search_endpoint_candidates=contact_lists_search_endpoint_candidates,
+            route_definitions: list[dict[str, Any]] = []
+            if bucket_routing_enabled:
+                for bucket in COUNTRY_BUCKET_KEYS:
+                    raw_df = final_parts.get(bucket, pd.DataFrame())
+                    if not isinstance(raw_df, pd.DataFrame) or len(raw_df) == 0:
+                        continue
+                    route_list_value = str(bucket_routing_list_values.get(bucket, "")).strip()
+                    resolved_route_list_id = (
+                        client.resolve_contact_list_id(
+                            route_list_value,
+                            endpoint_candidates=contact_lists_endpoint_candidates,
+                            search_endpoint_candidates=contact_lists_search_endpoint_candidates,
+                        )
+                        if route_list_value
+                        else ""
+                    )
+                    route_import_df = raw_df.drop(columns=["__row_order"], errors="ignore")
+                    if exclude_columns_from_api_import:
+                        route_import_df = route_import_df.drop(columns=exclude_columns_from_api_import, errors="ignore")
+                    route_definitions.append(
+                        {
+                            "bucket": bucket,
+                            "route_name": f"bucket:{bucket}",
+                            "list_value": route_list_value,
+                            "resolved_list_id": resolved_route_list_id,
+                            "import_df": route_import_df,
+                        }
+                    )
+                    if resolved_route_list_id:
+                        api_bucket_routing_map[bucket] = resolved_route_list_id
+                api_resolved_list_id = ""
+            else:
+                api_resolved_list_id = (
+                    client.resolve_contact_list_id(
+                        staging_list_value,
+                        endpoint_candidates=contact_lists_endpoint_candidates,
+                        search_endpoint_candidates=contact_lists_search_endpoint_candidates,
+                    )
+                    if str(staging_list_value).strip()
+                    else ""
                 )
-                if str(staging_list_value).strip()
-                else ""
-            )
+                import_for_api = final_import_df.drop(
+                    columns=["country_bucket", "__row_order", "__source_file", "__source_row_index"],
+                    errors="ignore",
+                )
+                if exclude_columns_from_api_import:
+                    import_for_api = import_for_api.drop(columns=exclude_columns_from_api_import, errors="ignore")
+                route_definitions.append(
+                    {
+                        "bucket": "ALL",
+                        "route_name": "single",
+                        "list_value": str(staging_list_value).strip(),
+                        "resolved_list_id": api_resolved_list_id,
+                        "import_df": import_for_api,
+                    }
+                )
 
-            import_for_api = final_import_df.drop(
-                columns=["country_bucket", "__row_order", "__source_file", "__source_row_index"],
-                errors="ignore",
-            )
-            if exclude_columns_from_api_import:
-                import_for_api = import_for_api.drop(columns=exclude_columns_from_api_import, errors="ignore")
-            api_contacts, api_issues = build_api_contacts_from_import_df(
-                import_df=import_for_api,
-                api_system_field_map=api_system_field_map_for_run,
-                custom_fields=custom_fields,
-                list_id=api_resolved_list_id,
-                list_status=list_status,
-                tag=str(staging_tag).strip(),
-                strict_custom_fields=strict_custom_fields,
-                ignore_missing_custom_for_columns=ignore_missing_custom_for_columns,
-                array_custom_field_names=array_custom_field_names,
-                array_value_split_separators=array_value_split_separators,
-                managed_empty_custom_field_name_pattern=managed_empty_custom_field_name_pattern,
-                managed_custom_field_ids_allowlist=program_custom_field_allowlist_ids,
-            )
+            for route in route_definitions:
+                route_bucket = str(route.get("bucket", "")).strip() or "ALL"
+                route_import_df = route.get("import_df")
+                if not isinstance(route_import_df, pd.DataFrame):
+                    route_import_df = pd.DataFrame()
+                route_list_id = str(route.get("resolved_list_id", "")).strip()
+                route_contacts, route_issues = build_api_contacts_from_import_df(
+                    import_df=route_import_df,
+                    api_system_field_map=api_system_field_map_for_run,
+                    custom_fields=custom_fields,
+                    list_id=route_list_id,
+                    list_status=list_status,
+                    tag=str(staging_tag).strip(),
+                    strict_custom_fields=strict_custom_fields,
+                    ignore_missing_custom_for_columns=ignore_missing_custom_for_columns,
+                    array_custom_field_names=array_custom_field_names,
+                    array_value_split_separators=array_value_split_separators,
+                    managed_empty_custom_field_name_pattern=managed_empty_custom_field_name_pattern,
+                    managed_custom_field_ids_allowlist=program_custom_field_allowlist_ids,
+                )
+                route["contacts"] = route_contacts
+                route["issues"] = route_issues
+                route["contacts_prepared"] = len(route_contacts)
+                api_bucket_contacts_prepared[route_bucket] = int(len(route_contacts))
+                if (
+                    bucket_routing_enabled
+                    and execution_mode in {"api_safe_import", "api_full_import"}
+                    and len(route_contacts) > 0
+                    and not route_list_id
+                ):
+                    api_missing_bucket_lists_with_data.append(route_bucket)
+                api_contacts.extend(route_contacts)
+                api_issues.extend(route_issues)
+            api_route_details = route_definitions
 
             summary_metrics["api_diff_enabled"] = int(bool(diff_preflight_enabled))
             summary_metrics["api_diff_send_only_changes"] = int(bool(diff_send_only_changes))
             summary_metrics["api_diff_fallback_on_error"] = int(bool(diff_fallback_send_all_on_error))
             summary_metrics["api_diff_target_email_batch_size"] = int(max(1, diff_target_email_batch_size))
             summary_metrics["api_read_parallel_workers"] = int(max(1, api_read_parallel_workers))
+            summary_metrics["api_bucket_routing_enabled"] = int(bool(bucket_routing_enabled))
+            summary_metrics["api_bucket_routes_total"] = int(len(api_route_details))
+            summary_metrics["api_bucket_routes_with_contacts"] = int(
+                len([x for x in api_route_details if int(x.get("contacts_prepared", 0) or 0) > 0])
+            )
+            summary_metrics["api_bucket_routes_missing_list"] = int(len(api_missing_bucket_lists_with_data))
+            summary_metrics["api_bucket_routing_lists"] = ",".join(
+                [
+                    f"{bucket}:{str(api_bucket_routing_map.get(bucket, '')).strip()}"
+                    for bucket in COUNTRY_BUCKET_KEYS
+                    if str(api_bucket_routing_map.get(bucket, "")).strip()
+                ]
+            )
+            for bucket in COUNTRY_BUCKET_KEYS:
+                summary_metrics[f"api_bucket_prepared_{bucket}"] = int(api_bucket_contacts_prepared.get(bucket, 0))
             summary_metrics["api_skip_blacklisted_contacts_enabled"] = int(bool(skip_blacklisted_contacts))
             summary_metrics["api_blacklisted_lookup_status"] = "disabled"
             summary_metrics["api_blacklisted_contacts_found"] = 0
@@ -3262,8 +3769,8 @@ if run_clicked or diff_preview_clicked:
                     }
                     blacklisted_email_keys = client.fetch_blacklisted_email_keys(
                         email_keys=import_email_keys_for_blacklist,
-                        endpoint_candidates=contacts_endpoint_candidates,
-                        search_endpoint_candidates=contacts_search_endpoint_candidates,
+                        endpoint_candidates=blacklist_contacts_endpoint_candidates,
+                        search_endpoint_candidates=blacklist_contacts_search_endpoint_candidates,
                         max_workers=api_read_parallel_workers,
                     )
                     summary_metrics["api_blacklisted_lookup_status"] = "ok"
@@ -3282,6 +3789,19 @@ if run_clicked or diff_preview_clicked:
                             for contact in api_contacts
                             if normalize_email_key(contact.get("emailaddress", "")) not in blacklisted_email_keys
                         ]
+                        for route in api_route_details:
+                            route_contacts = route.get("contacts", [])
+                            if not isinstance(route_contacts, list):
+                                route_contacts = []
+                            route_contacts = [
+                                contact
+                                for contact in route_contacts
+                                if normalize_email_key(contact.get("emailaddress", "")) not in blacklisted_email_keys
+                            ]
+                            route["contacts"] = route_contacts
+                            route["contacts_prepared"] = int(len(route_contacts))
+                            route_bucket = str(route.get("bucket", "")).strip() or "ALL"
+                            api_bucket_contacts_prepared[route_bucket] = int(len(route_contacts))
                         skipped_blacklisted = before_blacklist_filter - len(api_contacts)
                         summary_metrics["api_blacklisted_contacts_skipped"] = int(skipped_blacklisted)
                         extra_report_frames.append(
@@ -3299,7 +3819,12 @@ if run_clicked or diff_preview_clicked:
                         )
                         run_status_box.info(
                             "Blacklist filtr: přeskočeno kontaktů "
-                            f"{skipped_blacklisted} (blacklisted=1)."
+                            f"{skipped_blacklisted} (blacklisted=1). "
+                            + (
+                                f"Např.: {', '.join(blacklisted_emails_preview[:5])}"
+                                if blacklisted_emails_preview
+                                else ""
+                            )
                         )
                 except Exception as exc:
                     summary_metrics["api_blacklisted_lookup_status"] = "error"
@@ -3308,137 +3833,277 @@ if run_clicked or diff_preview_clicked:
                         f"Nepodařilo se ověřit blacklist kontakty přes API, pokračuji bez filtru. Detail: {exc}"
                     )
 
-            if diff_preflight_enabled and api_resolved_list_id:
+            api_contacts = [
+                contact
+                for route in api_route_details
+                for contact in (
+                    route.get("contacts", [])
+                    if isinstance(route.get("contacts", []), list)
+                    else []
+                )
+            ]
+
+            if diff_preflight_enabled:
                 try:
-                    import_email_keys = {
-                        normalize_email_key(contact.get("emailaddress", ""))
-                        for contact in api_contacts
-                        if normalize_email_key(contact.get("emailaddress", ""))
-                    }
-                    existing_contacts = client.fetch_contacts_in_list(
-                        list_id=api_resolved_list_id,
-                        page_limit=diff_page_limit,
-                        max_pages=diff_max_pages,
-                        endpoint_templates=contacts_in_list_endpoint_templates,
-                        search_endpoint_templates=contacts_in_list_search_endpoint_templates,
-                        detail_endpoint_templates=contacts_detail_endpoint_templates,
-                        enrich_only_email_keys=import_email_keys,
-                        contacts_endpoint_candidates=contacts_endpoint_candidates,
-                        contacts_search_endpoint_candidates=contacts_search_endpoint_candidates,
-                        custom_field_values_endpoint_candidates=contact_custom_field_values_endpoint_candidates,
-                        custom_field_values_search_endpoint_candidates=contact_custom_field_values_search_endpoint_candidates,
-                        target_email_batch_size=diff_target_email_batch_size,
-                        read_parallel_workers=api_read_parallel_workers,
-                        prefer_targeted_search=True,
-                    )
-                    api_diff_summary = diff_api_contacts(
-                        import_contacts=api_contacts,
-                        existing_contacts=existing_contacts,
-                        array_value_split_separators=array_value_split_separators,
-                        clearable_custom_field_ids=program_custom_field_ids_for_clear,
-                    )
-                    summary_metrics["api_diff_status"] = "ok"
-                    summary_metrics["api_diff_existing_contacts"] = int(api_diff_summary.get("existing_total", 0))
-                    summary_metrics["api_diff_new_contacts"] = int(len(api_diff_summary.get("new_contacts", [])))
-                    summary_metrics["api_diff_updated_contacts"] = int(len(api_diff_summary.get("updated_contacts", [])))
-                    summary_metrics["api_diff_unchanged_contacts"] = int(len(api_diff_summary.get("unchanged_contacts", [])))
-                    summary_metrics["api_diff_filtered_out"] = int(len(api_diff_summary.get("unchanged_contacts", [])))
-                    extra_report_frames.append(
-                        pd.DataFrame(
-                            {
-                                "type": "api_diff_summary",
-                                "row_index": "",
-                                "detail": (
-                                    f"existing={summary_metrics['api_diff_existing_contacts']}, "
-                                    f"new={summary_metrics['api_diff_new_contacts']}, "
-                                    f"updated={summary_metrics['api_diff_updated_contacts']}, "
-                                    f"unchanged={summary_metrics['api_diff_unchanged_contacts']}"
-                                ),
-                                "email_raw": "",
-                                "company": "",
-                                "source_file": "",
-                                "source_row_index": "",
-                            },
-                            index=[0],
+                    routes_for_diff = [
+                        route
+                        for route in api_route_details
+                        if isinstance(route.get("contacts", []), list) and len(route.get("contacts", [])) > 0
+                    ]
+                    missing_diff_lists = [
+                        str(route.get("bucket", "")).strip() or "ALL"
+                        for route in routes_for_diff
+                        if not str(route.get("resolved_list_id", "")).strip()
+                    ]
+                    if missing_diff_lists:
+                        summary_metrics["api_diff_status"] = "skipped_no_list"
+                        if bucket_routing_enabled:
+                            run_status_box.warning(
+                                "Diff preflight je zapnutý, ale některé buckety nemají vybraný list: "
+                                + ", ".join(missing_diff_lists)
+                            )
+                        else:
+                            run_status_box.warning("Diff preflight je zapnutý, ale není vybraný staging seznam.")
+                    else:
+                        aggregated_new_contacts: list[dict[str, Any]] = []
+                        aggregated_updated_contacts: list[dict[str, Any]] = []
+                        aggregated_unchanged_contacts: list[dict[str, Any]] = []
+                        aggregated_contacts_to_send: list[dict[str, Any]] = []
+                        aggregated_updated_details: list[dict[str, Any]] = []
+                        aggregated_clear_operations: list[dict[str, Any]] = []
+                        aggregated_existing_total = 0
+                        aggregated_existing_with_custom_fields = 0
+                        aggregated_removed_nonclearable_custom_fields_total = 0
+                        aggregated_compare_enabled = True
+                        route_diff_summaries: list[dict[str, Any]] = []
+
+                        for route in routes_for_diff:
+                            route_bucket = str(route.get("bucket", "")).strip() or "ALL"
+                            route_list_id = str(route.get("resolved_list_id", "")).strip()
+                            route_contacts = route.get("contacts", [])
+                            if not isinstance(route_contacts, list):
+                                route_contacts = []
+
+                            import_email_keys = {
+                                normalize_email_key(contact.get("emailaddress", ""))
+                                for contact in route_contacts
+                                if normalize_email_key(contact.get("emailaddress", ""))
+                            }
+                            existing_contacts = client.fetch_contacts_in_list(
+                                list_id=route_list_id,
+                                page_limit=diff_page_limit,
+                                max_pages=diff_max_pages,
+                                endpoint_templates=contacts_in_list_endpoint_templates,
+                                search_endpoint_templates=contacts_in_list_search_endpoint_templates,
+                                detail_endpoint_templates=contacts_detail_endpoint_templates,
+                                enrich_only_email_keys=import_email_keys,
+                                contacts_endpoint_candidates=contacts_endpoint_candidates,
+                                contacts_search_endpoint_candidates=contacts_search_endpoint_candidates,
+                                custom_field_values_endpoint_candidates=contact_custom_field_values_endpoint_candidates,
+                                custom_field_values_search_endpoint_candidates=contact_custom_field_values_search_endpoint_candidates,
+                                target_email_batch_size=diff_target_email_batch_size,
+                                read_parallel_workers=api_read_parallel_workers,
+                                prefer_targeted_search=True,
+                            )
+                            route_diff_summary = diff_api_contacts(
+                                import_contacts=route_contacts,
+                                existing_contacts=existing_contacts,
+                                array_value_split_separators=array_value_split_separators,
+                                clearable_custom_field_ids=program_custom_field_ids_for_clear,
+                            )
+                            route["diff_summary"] = route_diff_summary
+
+                            route_new_contacts = list(route_diff_summary.get("new_contacts", []))
+                            route_updated_contacts = list(route_diff_summary.get("updated_contacts", []))
+                            route_unchanged_contacts = list(route_diff_summary.get("unchanged_contacts", []))
+                            route_contacts_to_send = (
+                                list(route_diff_summary.get("contacts_to_send", []))
+                                if (
+                                    diff_send_only_changes
+                                    and bool(route_diff_summary.get("custom_fields_compare_enabled", True))
+                                )
+                                else list(route_contacts)
+                            )
+                            route_compare_enabled = bool(route_diff_summary.get("custom_fields_compare_enabled", True))
+
+                            route["contacts"] = route_contacts_to_send
+                            route["contacts_prepared"] = int(len(route_contacts_to_send))
+                            if route_bucket in COUNTRY_BUCKET_KEYS:
+                                api_bucket_contacts_prepared[route_bucket] = int(len(route_contacts_to_send))
+
+                            route_clear_ops = [
+                                op
+                                for op in route_diff_summary.get("clear_operations", [])
+                                if isinstance(op, dict)
+                                and str(op.get("field_id", "")).strip()
+                                and str(op.get("email_key", "")).strip()
+                            ]
+                            route_summary = {
+                                "bucket": route_bucket,
+                                "list_id": route_list_id,
+                                "existing": int(route_diff_summary.get("existing_total", 0)),
+                                "new": len(route_new_contacts),
+                                "updated": len(route_updated_contacts),
+                                "unchanged": len(route_unchanged_contacts),
+                                "to_send": len(route_contacts_to_send),
+                                "compare_enabled": int(route_compare_enabled),
+                                "removed_program_custom_fields": len(route_clear_ops),
+                            }
+                            route_diff_summaries.append(route_summary)
+
+                            aggregated_existing_total += int(route_diff_summary.get("existing_total", 0))
+                            aggregated_existing_with_custom_fields += int(
+                                route_diff_summary.get("existing_contacts_with_custom_fields", 0)
+                            )
+                            aggregated_removed_nonclearable_custom_fields_total += int(
+                                route_diff_summary.get("removed_nonclearable_custom_fields_total", 0)
+                            )
+                            aggregated_compare_enabled = aggregated_compare_enabled and route_compare_enabled
+                            aggregated_new_contacts.extend(route_new_contacts)
+                            aggregated_updated_contacts.extend(route_updated_contacts)
+                            aggregated_unchanged_contacts.extend(route_unchanged_contacts)
+                            aggregated_contacts_to_send.extend(route_contacts_to_send)
+                            aggregated_updated_details.extend(list(route_diff_summary.get("updated_details", [])))
+                            aggregated_clear_operations.extend(route_clear_ops)
+
+                        api_contacts = list(aggregated_contacts_to_send)
+                        api_diff_summary = {
+                            "existing_total": int(aggregated_existing_total),
+                            "new_contacts": aggregated_new_contacts,
+                            "updated_contacts": aggregated_updated_contacts,
+                            "unchanged_contacts": aggregated_unchanged_contacts,
+                            "contacts_to_send": aggregated_contacts_to_send,
+                            "updated_details": aggregated_updated_details,
+                            "clear_operations": aggregated_clear_operations,
+                            "removed_nonclearable_custom_fields_total": int(
+                                aggregated_removed_nonclearable_custom_fields_total
+                            ),
+                            "custom_fields_compare_enabled": bool(aggregated_compare_enabled),
+                            "existing_contacts_with_custom_fields": int(aggregated_existing_with_custom_fields),
+                            "route_summaries": route_diff_summaries,
+                        }
+
+                        summary_metrics["api_diff_status"] = "ok"
+                        summary_metrics["api_diff_existing_contacts"] = int(api_diff_summary.get("existing_total", 0))
+                        summary_metrics["api_diff_new_contacts"] = int(len(api_diff_summary.get("new_contacts", [])))
+                        summary_metrics["api_diff_updated_contacts"] = int(len(api_diff_summary.get("updated_contacts", [])))
+                        summary_metrics["api_diff_unchanged_contacts"] = int(len(api_diff_summary.get("unchanged_contacts", [])))
+                        summary_metrics["api_diff_filtered_out"] = int(
+                            len(api_diff_summary.get("unchanged_contacts", []))
+                            if diff_send_only_changes and bool(api_diff_summary.get("custom_fields_compare_enabled", True))
+                            else 0
                         )
-                    )
-                    updated_details = list(api_diff_summary.get("updated_details", []))
-                    if updated_details:
                         extra_report_frames.append(
                             pd.DataFrame(
                                 {
-                                    "type": "api_diff_updated_fields",
+                                    "type": "api_diff_summary",
                                     "row_index": "",
-                                    "detail": [
-                                        ", ".join([str(x).strip() for x in row.get("changed_fields", []) if str(x).strip()])
-                                        for row in updated_details[:200]
-                                    ],
-                                    "email_raw": [str(row.get("email", "")).strip() for row in updated_details[:200]],
+                                    "detail": (
+                                        f"existing={summary_metrics['api_diff_existing_contacts']}, "
+                                        f"new={summary_metrics['api_diff_new_contacts']}, "
+                                        f"updated={summary_metrics['api_diff_updated_contacts']}, "
+                                        f"unchanged={summary_metrics['api_diff_unchanged_contacts']}"
+                                    ),
+                                    "email_raw": "",
                                     "company": "",
                                     "source_file": "",
                                     "source_row_index": "",
-                                }
+                                },
+                                index=[0],
                             )
                         )
+                        if bucket_routing_enabled and route_diff_summaries:
+                            route_diff_rows = [
+                                f"{row['bucket']}: list={row['list_id']} existing={row['existing']} new={row['new']} "
+                                f"updated={row['updated']} unchanged={row['unchanged']} send={row['to_send']}"
+                                for row in route_diff_summaries
+                            ]
+                            extra_report_frames.append(
+                                pd.DataFrame(
+                                    {
+                                        "type": "api_diff_route_summary",
+                                        "row_index": "",
+                                        "detail": route_diff_rows[:200],
+                                        "email_raw": "",
+                                        "company": "",
+                                        "source_file": "",
+                                        "source_row_index": "",
+                                    }
+                                )
+                            )
 
-                    clear_operations = [
-                        op
-                        for op in api_diff_summary.get("clear_operations", [])
-                        if isinstance(op, dict)
-                        and str(op.get("field_id", "")).strip()
-                        and str(op.get("email_key", "")).strip()
-                    ]
-                    summary_metrics["api_diff_removed_program_custom_fields"] = int(len(clear_operations))
-                    summary_metrics["api_diff_removed_nonclearable_custom_fields"] = int(
-                        api_diff_summary.get("removed_nonclearable_custom_fields_total", 0)
-                    )
-                    if (
-                        clear_removed_program_custom_fields
-                        and bool(api_diff_summary.get("custom_fields_compare_enabled", True))
-                        and clear_operations
-                    ):
-                        api_clear_operations = list(clear_operations)
-                        run_status_box.info(
-                            "Diff detekoval odebrané kódy aplikací: "
-                            f"pro vyčištění bude použito {len(clear_operations)} API update operací "
-                            "s prázdnou hodnotou custom fieldu (jen hodnoty na konkrétních kontaktech)."
-                        )
-                    else:
-                        api_clear_operations = []
-                    if clear_removed_program_custom_fields and int(
-                        summary_metrics.get("api_diff_removed_nonclearable_custom_fields", 0)
-                    ) > 0:
-                        run_status_box.warning(
-                            "Diff detekoval i odebrané custom fields mimo allowlist aplikačních polí. "
-                            f"Tyto změny se nemažou: {int(summary_metrics.get('api_diff_removed_nonclearable_custom_fields', 0))}."
-                        )
+                        updated_details = list(api_diff_summary.get("updated_details", []))
+                        if updated_details:
+                            extra_report_frames.append(
+                                pd.DataFrame(
+                                    {
+                                        "type": "api_diff_updated_fields",
+                                        "row_index": "",
+                                        "detail": [
+                                            ", ".join([str(x).strip() for x in row.get("changed_fields", []) if str(x).strip()])
+                                            for row in updated_details[:200]
+                                        ],
+                                        "email_raw": [str(row.get("email", "")).strip() for row in updated_details[:200]],
+                                        "company": "",
+                                        "source_file": "",
+                                        "source_row_index": "",
+                                    }
+                                )
+                            )
 
-                    if diff_send_only_changes:
-                        if bool(api_diff_summary.get("custom_fields_compare_enabled", True)):
-                            api_contacts = list(api_diff_summary.get("contacts_to_send", []))
+                        clear_operations = [
+                            op
+                            for op in api_diff_summary.get("clear_operations", [])
+                            if isinstance(op, dict)
+                            and str(op.get("field_id", "")).strip()
+                            and str(op.get("email_key", "")).strip()
+                        ]
+                        summary_metrics["api_diff_removed_program_custom_fields"] = int(len(clear_operations))
+                        summary_metrics["api_diff_removed_nonclearable_custom_fields"] = int(
+                            api_diff_summary.get("removed_nonclearable_custom_fields_total", 0)
+                        )
+                        if (
+                            clear_removed_program_custom_fields
+                            and bool(api_diff_summary.get("custom_fields_compare_enabled", True))
+                            and clear_operations
+                        ):
+                            api_clear_operations = list(clear_operations)
+                            run_status_box.info(
+                                "Diff detekoval odebrané kódy aplikací: "
+                                f"pro vyčištění bude použito {len(clear_operations)} API update operací "
+                                "s prázdnou hodnotou custom fieldu (jen hodnoty na konkrétních kontaktech)."
+                            )
                         else:
-                            # Fallback: custom fields couldn't be compared reliably,
-                            # keep all prepared contacts to avoid missing updates.
-                            summary_metrics["api_diff_filtered_out"] = 0
-
-                    if execution_mode in {"api_safe_import", "api_full_import"}:
-                        run_status_box.info(
-                            "Diff preflight: "
-                            f"nové={summary_metrics['api_diff_new_contacts']}, "
-                            f"aktualizace={summary_metrics['api_diff_updated_contacts']}, "
-                            f"beze změny={summary_metrics['api_diff_unchanged_contacts']}."
-                            + (
-                                " Odesílám jen nové+změněné."
-                                if diff_send_only_changes and bool(api_diff_summary.get("custom_fields_compare_enabled", True))
-                                else " Odesílám vše."
-                            )
-                        )
-                        if not bool(api_diff_summary.get("custom_fields_compare_enabled", True)):
+                            api_clear_operations = []
+                        if clear_removed_program_custom_fields and int(
+                            summary_metrics.get("api_diff_removed_nonclearable_custom_fields", 0)
+                        ) > 0:
                             run_status_box.warning(
-                                "API nevrátil custom fields pro existující kontakty "
-                                "ani přes list/detail/email lookup. Porovnání custom fields bylo v diffu přeskočeno "
-                                "a z bezpečnostního fallbacku se odesílají všechny připravené kontakty."
+                                "Diff detekoval i odebrané custom fields mimo allowlist aplikačních polí. "
+                                f"Tyto změny se nemažou: {int(summary_metrics.get('api_diff_removed_nonclearable_custom_fields', 0))}."
                             )
+
+                        if execution_mode in {"api_safe_import", "api_full_import"}:
+                            run_status_box.info(
+                                "Diff preflight: "
+                                f"nové={summary_metrics['api_diff_new_contacts']}, "
+                                f"aktualizace={summary_metrics['api_diff_updated_contacts']}, "
+                                f"beze změny={summary_metrics['api_diff_unchanged_contacts']}."
+                                + (
+                                    " Odesílám jen nové+změněné."
+                                    if diff_send_only_changes and bool(api_diff_summary.get("custom_fields_compare_enabled", True))
+                                    else " Odesílám vše."
+                                )
+                            )
+                            if (
+                                not bool(api_diff_summary.get("custom_fields_compare_enabled", True))
+                                and int(api_diff_summary.get("matched_existing_contacts", 0)) > 0
+                            ):
+                                run_status_box.warning(
+                                    "U existujících kontaktů se nepodařilo získat custom fields "
+                                    "(nebo je kontakty nemají). Porovnání custom fields bylo v diffu přeskočeno "
+                                    "a z bezpečnostního fallbacku se odesílají všechny připravené kontakty."
+                                )
                 except Exception as exc:
                     api_diff_error = str(exc)
                     summary_metrics["api_diff_status"] = "error"
@@ -3466,16 +4131,41 @@ if run_clicked or diff_preview_clicked:
                             raise SmartEmailingApiError(
                                 f"Diff preflight selhal a fallback je vypnutý: {api_diff_error}"
                             ) from exc
-            elif diff_preflight_enabled and execution_mode in {"api_safe_import", "api_full_import"}:
-                summary_metrics["api_diff_status"] = "skipped_no_list"
-                run_status_box.warning("Diff preflight je zapnutý, ale není vybraný staging seznam.")
-
             api_contacts_preview = api_contacts[:50]
+            summary_metrics["api_bucket_routes_with_contacts"] = int(
+                len(
+                    [
+                        x
+                        for x in api_route_details
+                        if isinstance(x.get("contacts", []), list) and len(x.get("contacts", [])) > 0
+                    ]
+                )
+            )
+            summary_metrics["api_bucket_routes_missing_list"] = int(len(api_missing_bucket_lists_with_data))
+            for bucket in COUNTRY_BUCKET_KEYS:
+                summary_metrics[f"api_bucket_prepared_{bucket}"] = int(api_bucket_contacts_prepared.get(bucket, 0))
             summary_metrics["api_ping_status"] = str(api_ping.get("status", "")) if isinstance(api_ping, dict) else ""
             summary_metrics["api_custom_fields"] = len(custom_fields)
             summary_metrics["api_contacts_prepared"] = len(api_contacts)
             summary_metrics["api_payload_issues"] = len(api_issues)
-            summary_metrics["api_staging_list_id"] = api_resolved_list_id
+            summary_metrics["api_staging_list_id"] = (
+                api_resolved_list_id
+                if not bucket_routing_enabled
+                else ",".join(
+                    [
+                        f"{bucket}:{str(api_bucket_routing_map.get(bucket, '')).strip()}"
+                        for bucket in COUNTRY_BUCKET_KEYS
+                        if str(api_bucket_routing_map.get(bucket, "")).strip()
+                    ]
+                )
+            )
+            summary_metrics["api_bucket_routing_lists_resolved"] = ",".join(
+                [
+                    f"{bucket}:{str(api_bucket_routing_map.get(bucket, '')).strip()}"
+                    for bucket in COUNTRY_BUCKET_KEYS
+                    if str(api_bucket_routing_map.get(bucket, "")).strip()
+                ]
+            )
             summary_metrics["api_staging_tag"] = str(staging_tag).strip()
 
             if api_issues:
@@ -3488,7 +4178,12 @@ if run_clicked or diff_preview_clicked:
                 if diff_status == "error":
                     preview_error = f"Diff preview selhal: {api_diff_error or 'neznámá chyba'}"
                 elif diff_status == "skipped_no_list":
-                    preview_error = "Diff preview nelze spočítat: není vybraný staging seznam."
+                    if bucket_routing_enabled:
+                        preview_error = (
+                            "Diff preview nelze spočítat: některé buckety s daty nemají vybraný cílový list."
+                        )
+                    else:
+                        preview_error = "Diff preview nelze spočítat: není vybraný staging seznam."
                 elif diff_status == "disabled":
                     preview_error = "Diff preview je vypnutý. Zapni porovnání před importem (diff)."
 
@@ -3496,6 +4191,11 @@ if run_clicked or diff_preview_clicked:
                 st.session_state["diff_preview_summary"] = {
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "list_id": api_resolved_list_id,
+                    "bucket_routing": {
+                        bucket: str(api_bucket_routing_map.get(bucket, "")).strip()
+                        for bucket in COUNTRY_BUCKET_KEYS
+                        if str(api_bucket_routing_map.get(bucket, "")).strip()
+                    },
                     "diff_status": diff_status,
                     "existing_contacts": int(summary_metrics.get("api_diff_existing_contacts", 0)),
                     "new_contacts": int(summary_metrics.get("api_diff_new_contacts", 0)),
@@ -3504,11 +4204,15 @@ if run_clicked or diff_preview_clicked:
                     "contacts_to_send": len(api_contacts),
                     "send_only_changes": bool(diff_send_only_changes),
                     "custom_fields_compare_enabled": bool(api_diff_summary.get("custom_fields_compare_enabled", True)),
+                    "matched_existing_contacts": int(api_diff_summary.get("matched_existing_contacts", 0)),
                     "existing_contacts_with_custom_fields": int(api_diff_summary.get("existing_contacts_with_custom_fields", 0)),
                     "removed_program_custom_fields": int(
                         summary_metrics.get("api_diff_removed_program_custom_fields", 0)
                     ),
                     "clear_removed_program_custom_fields_enabled": bool(clear_removed_program_custom_fields),
+                    "route_summaries": list(api_diff_summary.get("route_summaries", []))
+                    if isinstance(api_diff_summary.get("route_summaries", []), list)
+                    else [],
                 }
                 st.session_state["diff_preview_error"] = preview_error
 
@@ -3522,6 +4226,17 @@ if run_clicked or diff_preview_clicked:
                         f"beze změny={summary_metrics['api_diff_unchanged_contacts']}."
                     )
                 st.rerun()
+
+            api_missing_bucket_lists_with_data = sorted(
+                {
+                    str(route.get("bucket", "")).strip() or "ALL"
+                    for route in api_route_details
+                    if isinstance(route.get("contacts", []), list)
+                    and len(route.get("contacts", [])) > 0
+                    and not str(route.get("resolved_list_id", "")).strip()
+                }
+            )
+            summary_metrics["api_bucket_routes_missing_list"] = int(len(api_missing_bucket_lists_with_data))
 
             if execution_mode == "api_dry_run":
                 api_status = "dry_run_ok"
@@ -3538,7 +4253,13 @@ if run_clicked or diff_preview_clicked:
                 elif execution_mode == "api_safe_import":
                     if not safe_confirm:
                         block_reason = "Bezpečný import je blokovaný: chybí potvrzení dopadu."
-                    elif not api_resolved_list_id:
+                    elif bucket_routing_enabled and api_missing_bucket_lists_with_data:
+                        block_reason = (
+                            "Bezpečný import je blokovaný: chybí cílový list pro buckety s daty: "
+                            + ", ".join(sorted(set(api_missing_bucket_lists_with_data)))
+                            + "."
+                        )
+                    elif (not bucket_routing_enabled) and (not api_resolved_list_id):
                         block_reason = "Bezpečný import je blokovaný: vyber staging seznam."
                 elif execution_mode == "api_full_import":
                     full_phrase_required = str(
@@ -3555,7 +4276,13 @@ if run_clicked or diff_preview_clicked:
                         block_reason = "Plný import je blokovaný: operátor a schvalovatel musí být různé osoby (4 oči)."
                     elif full_second_approval_input.strip() != approval_code:
                         block_reason = "Plný import je blokovaný: neplatný schvalovací kód (4 oči)."
-                    elif not api_resolved_list_id:
+                    elif bucket_routing_enabled and api_missing_bucket_lists_with_data:
+                        block_reason = (
+                            "Plný import je blokovaný: chybí cílový list pro buckety s daty: "
+                            + ", ".join(sorted(set(api_missing_bucket_lists_with_data)))
+                            + "."
+                        )
+                    elif (not bucket_routing_enabled) and (not api_resolved_list_id):
                         block_reason = "Plný import je blokovaný: vyber staging seznam."
 
                 if block_reason:
@@ -3588,6 +4315,15 @@ if run_clicked or diff_preview_clicked:
                             batch_size=api_batch_size,
                             max_contacts_limit=max_contacts_limit,
                             contacts=api_contacts,
+                            bucket_routing=(
+                                {
+                                    bucket: str(api_bucket_routing_map.get(bucket, "")).strip()
+                                    for bucket in COUNTRY_BUCKET_KEYS
+                                    if str(api_bucket_routing_map.get(bucket, "")).strip()
+                                }
+                                if bucket_routing_enabled
+                                else {}
+                            ),
                         )
                         approved_import_fingerprint = str(
                             st.session_state.get("approved_api_import_confirmation_fingerprint", "")
@@ -3630,6 +4366,25 @@ if run_clicked or diff_preview_clicked:
                                 clear_removed_program_custom_fields_enabled=bool(
                                     clear_removed_program_custom_fields
                                 ),
+                                bucket_routing=(
+                                    {
+                                        bucket: str(api_bucket_routing_map.get(bucket, "")).strip()
+                                        for bucket in COUNTRY_BUCKET_KEYS
+                                        if str(api_bucket_routing_map.get(bucket, "")).strip()
+                                    }
+                                    if bucket_routing_enabled
+                                    else {}
+                                ),
+                                bucket_contacts=(
+                                    {
+                                        str(route.get("bucket", "")).strip() or "ALL": int(
+                                            route.get("contacts_prepared", 0) or 0
+                                        )
+                                        for route in api_route_details
+                                    }
+                                    if api_route_details
+                                    else {}
+                                ),
                             )
                             st.session_state["pending_api_import_confirmation_fingerprint"] = import_confirmation_fingerprint
                             run_status_box.warning(
@@ -3639,28 +4394,56 @@ if run_clicked or diff_preview_clicked:
                             st.rerun()
                         st.session_state["approved_api_import_confirmation_fingerprint"] = ""
 
-                    batch_results = client.import_contacts_canary(
-                        contacts=api_contacts,
-                        canary_size=api_canary_size,
-                        batch_size=api_batch_size,
-                        update_existing=True,
-                        skip_invalid_contacts=True,
-                        endpoint_candidates=import_endpoint_candidates,
-                    )
-                    api_batch_results = [
-                        {
-                            "endpoint": x.endpoint,
-                            "payload_variant": x.payload_variant,
-                            "operation": "import",
-                            "sent_contacts": x.sent_contacts,
-                            "batch_index": x.batch_index,
-                            "canary": x.canary,
-                            "started_at": x.started_at,
-                            "finished_at": x.finished_at,
-                            "response": x.response,
-                        }
-                        for x in batch_results
+                    api_batch_results = []
+                    route_batches_total = 0
+                    routes_for_send = [
+                        route
+                        for route in api_route_details
+                        if isinstance(route.get("contacts", []), list) and len(route.get("contacts", [])) > 0
                     ]
+                    if not routes_for_send:
+                        routes_for_send = [
+                            {
+                                "bucket": "ALL",
+                                "route_name": "single",
+                                "resolved_list_id": api_resolved_list_id,
+                                "contacts": list(api_contacts),
+                            }
+                        ]
+                    for route in routes_for_send:
+                        route_bucket = str(route.get("bucket", "")).strip() or "ALL"
+                        route_name = str(route.get("route_name", "")).strip() or route_bucket
+                        route_list_id = str(route.get("resolved_list_id", "")).strip()
+                        route_contacts = route.get("contacts", [])
+                        if not isinstance(route_contacts, list) or not route_contacts:
+                            continue
+                        batch_results = client.import_contacts_canary(
+                            contacts=route_contacts,
+                            canary_size=api_canary_size,
+                            batch_size=api_batch_size,
+                            update_existing=True,
+                            skip_invalid_contacts=True,
+                            endpoint_candidates=import_endpoint_candidates,
+                        )
+                        for x in batch_results:
+                            route_batches_total += 1
+                            api_batch_results.append(
+                                {
+                                    "endpoint": x.endpoint,
+                                    "payload_variant": x.payload_variant,
+                                    "operation": "import",
+                                    "sent_contacts": x.sent_contacts,
+                                    "batch_index": route_batches_total,
+                                    "route_batch_index": x.batch_index,
+                                    "canary": x.canary,
+                                    "started_at": x.started_at,
+                                    "finished_at": x.finished_at,
+                                    "response": x.response,
+                                    "route": route_name,
+                                    "route_bucket": route_bucket,
+                                    "route_list_id": route_list_id,
+                                }
+                            )
                     api_status = "import_ok"
                     summary_metrics["api_batches"] = len(api_batch_results)
                     summary_metrics["api_contacts_sent"] = int(sum(x["sent_contacts"] for x in api_batch_results))
@@ -3868,7 +4651,7 @@ if run_clicked or diff_preview_clicked:
         report_df = pd.concat([report_df, frame], ignore_index=True)
 
     if processed_files == 0:
-        st.warning("Nepodařilo se úspěšně zpracovat žádný zdrojový soubor. Zkontroluj report.")
+        run_status_box.warning("Nepodařilo se úspěšně zpracovat žádný zdrojový soubor. Zkontroluj report.")
 
     # build ZIP
     zip_buf = io.BytesIO()
@@ -3916,7 +4699,21 @@ if run_clicked or diff_preview_clicked:
             "pripravenych_kontaktu": len(api_contacts),
             "odeslanych_kontaktu": api_contacts_sent_import,
             "davky": len(api_import_batch_results),
-            "staging_list_id": api_resolved_list_id,
+            "staging_list_id": api_resolved_list_id if not bucket_routing_enabled else "",
+            "staging_listy_podle_bucketu": (
+                {
+                    bucket: str(api_bucket_routing_map.get(bucket, "")).strip()
+                    for bucket in COUNTRY_BUCKET_KEYS
+                    if str(api_bucket_routing_map.get(bucket, "")).strip()
+                }
+                if bucket_routing_enabled
+                else {}
+            ),
+            "bucket_routing_zapnuto": int(bool(bucket_routing_enabled)),
+            "bucket_pripraveno_cz_sk": summary_metrics.get("api_bucket_prepared_CZ_SK", 0),
+            "bucket_pripraveno_de_at_ch": summary_metrics.get("api_bucket_prepared_DE_AT_CH", 0),
+            "bucket_pripraveno_en": summary_metrics.get("api_bucket_prepared_EN", 0),
+            "bucket_chybi_listu": summary_metrics.get("api_bucket_routes_missing_list", 0),
             "staging_tag": str(staging_tag).strip(),
             "api_chyba": api_error,
             "api_duvod_blokace": api_block_reason,

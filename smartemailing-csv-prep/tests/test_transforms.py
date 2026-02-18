@@ -96,6 +96,34 @@ class SplitEmailsTests(unittest.TestCase):
         self.assertEqual(last_name, "Novák")
         self.assertEqual(title_after, "Ph.D.")
 
+    def test_parse_name_fields_handles_glued_title_and_dot_prefixed_suffix(self) -> None:
+        cfg = {
+            "title_before_regex": r"(^|\s)(Bc\.|BcA\.|Ing\.|Ing\.arch\.|JUDr\.|MUDr\.|MVDr\.|MgA\.|Mgr\.|PhDr\.|RNDr\.|ThDr\.|ThLic\.|doc\.|prof\.)(\s|$)",
+            "title_after_regex": r"(^|\s)(CSc\.|Dr\.|DrSc\.|Ph\.D\.|Th\.D\.|MBA|DiS\.|ACCA|FCCA)(\s|$)",
+            "punctuation_strip_regex": r"[\.,;:!\?\-]",
+        }
+
+        title_before, first_name, last_name, title_after = parse_name_fields("Ing.jmeno novak, .Dis", cfg)
+
+        self.assertEqual(title_before, "Ing.")
+        self.assertEqual(first_name, "jmeno")
+        self.assertEqual(last_name, "novak")
+        self.assertEqual(title_after, "DiS.")
+
+    def test_parse_name_fields_does_not_treat_ingrid_as_title(self) -> None:
+        cfg = {
+            "title_before_regex": r"(^|\s)(Bc\.|BcA\.|Ing\.|Ing\.arch\.|JUDr\.|MUDr\.|MVDr\.|MgA\.|Mgr\.|PhDr\.|RNDr\.|ThDr\.|ThLic\.|doc\.|prof\.)(\s|$)",
+            "title_after_regex": r"(^|\s)(CSc\.|Dr\.|DrSc\.|Ph\.D\.|Th\.D\.|MBA|DiS\.|ACCA|FCCA)(\s|$)",
+            "punctuation_strip_regex": r"[\.,;:!\?\-]",
+        }
+
+        title_before, first_name, last_name, title_after = parse_name_fields("Ingrid Novak", cfg)
+
+        self.assertEqual(title_before, "")
+        self.assertEqual(first_name, "Ingrid")
+        self.assertEqual(last_name, "Novak")
+        self.assertEqual(title_after, "")
+
 
 if __name__ == "__main__":
     unittest.main()

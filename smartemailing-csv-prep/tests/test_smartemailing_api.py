@@ -221,6 +221,36 @@ class ContactBlacklistedLookupFakeApiClient(SmartEmailingApiClient):
         raise SmartEmailingApiError("not found", status_code=404)
 
 
+class ContactBlacklistedLookupDuplicateRowsFakeApiClient(SmartEmailingApiClient):
+    def __init__(self) -> None:
+        super().__init__(SmartEmailingCredentials(username="user", api_key="key"))
+        self.calls: list[tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]] = []
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        self.calls.append((method, path, query, body))
+
+        if method == "GET" and path == "/api/v3/contacts":
+            email = str((query or {}).get("emailaddress", "")).strip().casefold()
+            if email == "mixed@example.com":
+                return {
+                    "data": {
+                        "items": [
+                            {"emailaddress": "mixed@example.com", "blacklisted": 1},
+                            {"emailaddress": "mixed@example.com", "blacklisted": 0},
+                        ]
+                    }
+                }
+            return {"data": {"items": []}}
+
+        raise SmartEmailingApiError("not found", status_code=404)
+
+
 class ContactCustomFieldValuesFakeApiClient(SmartEmailingApiClient):
     def __init__(self) -> None:
         super().__init__(SmartEmailingCredentials(username="user", api_key="key"))
@@ -949,6 +979,18 @@ class SmartEmailingApiTests(unittest.TestCase):
         )
 
         self.assertEqual(blacklisted, {"black@example.com"})
+
+    def test_fetch_blacklisted_email_keys_prefers_non_blacklisted_on_duplicate_email_rows(self) -> None:
+        client = ContactBlacklistedLookupDuplicateRowsFakeApiClient()
+
+        blacklisted = client.fetch_blacklisted_email_keys(
+            email_keys={"mixed@example.com"},
+            endpoint_candidates=["/api/v3/contacts"],
+            search_endpoint_candidates=[],
+            max_workers=1,
+        )
+
+        self.assertEqual(blacklisted, set())
 
     def test_fetch_contacts_in_list_targeted_partial_failure_falls_back_to_full_list(self) -> None:
         client = TargetedListSearchPartialFailureFakeApiClient()
