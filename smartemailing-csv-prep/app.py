@@ -781,18 +781,29 @@ def diff_api_contacts(
         )
 
         changed_fields: list[str] = []
+        field_diffs_by_field: dict[str, dict[str, Any]] = {}
         for field_name, import_value in import_system.items():
             existing_value = existing_system.get(field_name, "")
             import_norm = normalize_system_field_for_diff(field_name, import_value)
             existing_norm = normalize_system_field_for_diff(field_name, existing_value)
             if import_norm != existing_norm:
                 changed_fields.append(field_name)
+                field_diffs_by_field[field_name] = {
+                    "field": field_name,
+                    "before": existing_value,
+                    "after": import_value,
+                }
 
         if import_tags:
             existing_tags_set = {normalize_scalar_for_diff(x) for x in existing_tags}
             import_tags_set = {normalize_scalar_for_diff(x) for x in import_tags}
             if not import_tags_set.issubset(existing_tags_set):
                 changed_fields.append("tags")
+                field_diffs_by_field["tags"] = {
+                    "field": "tags",
+                    "before": list(existing_tags),
+                    "after": list(import_tags),
+                }
 
         contact_managed_custom_field_ids = {
             str(field_id).strip()
@@ -838,7 +849,13 @@ def diff_api_contacts(
                     split_scalar_values=split_scalar_values,
                 )
                 if import_norm != existing_norm:
-                    changed_fields.append(f"customfield:{field_id}")
+                    field_name = f"customfield:{field_id}"
+                    changed_fields.append(field_name)
+                    field_diffs_by_field[field_name] = {
+                        "field": field_name,
+                        "before": existing_value,
+                        "after": import_value,
+                    }
                     if existing_norm and not import_norm:
                         if field_id in contact_clearable_ids:
                             removed_clearable_fields.append(field_id)
@@ -860,12 +877,18 @@ def diff_api_contacts(
                 removed_nonclearable_custom_fields_by_email[email_key] = sorted(set(removed_nonclearable_fields))
 
         if changed_fields:
+            changed_fields_unique = sorted(set(changed_fields))
             updated_contacts.append(contact)
             contacts_to_send.append(contact)
             updated_details.append(
                 {
                     "email": email,
-                    "changed_fields": sorted(set(changed_fields)),
+                    "changed_fields": changed_fields_unique,
+                    "field_diffs": [
+                        field_diffs_by_field[field_name]
+                        for field_name in changed_fields_unique
+                        if field_name in field_diffs_by_field
+                    ],
                 }
             )
         else:
@@ -930,6 +953,71 @@ def build_diff_preview_rows(api_diff_summary: dict[str, Any], limit: int = 200) 
     status_rank = {"new": 0, "updated": 1, "unchanged": 2}
     rows.sort(key=lambda row: (status_rank.get(str(row.get("status", "")), 9), str(row.get("email", "")).casefold()))
     return rows[: max(0, int(limit))]
+
+
+def stringify_diff_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple, set)):
+        items = [stringify_diff_value(x) for x in value]
+        items = [x for x in items if x]
+        return ", ".join(items)
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            return str(value)
+    return str(value).strip()
+
+
+def build_diff_preview_detail_map(api_diff_summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for detail in api_diff_summary.get("updated_details", []):
+        if not isinstance(detail, dict):
+            continue
+        email = normalize_scalar_for_diff(detail.get("email", ""))
+        email_key = normalize_email_key(email)
+        if not email_key:
+            continue
+        field_diffs = detail.get("field_diffs", [])
+        field_rows: list[dict[str, str]] = []
+        if isinstance(field_diffs, list):
+            for item in field_diffs:
+                if not isinstance(item, dict):
+                    continue
+                field_name = str(item.get("field", "")).strip()
+                if not field_name:
+                    continue
+                field_rows.append(
+                    {
+                        "field": field_name,
+                        "before": stringify_diff_value(item.get("before", "")),
+                        "after": stringify_diff_value(item.get("after", "")),
+                    }
+                )
+        if not field_rows:
+            for field_name in detail.get("changed_fields", []):
+                field_name_clean = str(field_name).strip()
+                if not field_name_clean:
+                    continue
+                field_rows.append(
+                    {
+                        "field": field_name_clean,
+                        "before": "(nezjištěno)",
+                        "after": "(nezjištěno)",
+                    }
+                )
+        out[email_key] = {
+            "email": email,
+            "field_diffs": field_rows,
+        }
+    return out
 
 
 profiles_index = load_profiles_index(PROFILES_INDEX_PATH)
@@ -1018,6 +1106,9 @@ if st.session_state.get("_runtime_active_profile_id", "") != active_profile_id:
         "api_bucket_favorite_list_ids_by_bucket",
         "api_contact_lists_cache",
         "api_contact_lists_cache_meta",
+        "diff_preview_detail_email_select",
+        "diff_preview_detail_email_select_fallback",
+        "diff_preview_editor",
     ]:
         st.session_state.pop(key, None)
     for key in list(st.session_state.keys()):
@@ -1027,8 +1118,37 @@ if st.session_state.get("_runtime_active_profile_id", "") != active_profile_id:
             st.session_state.pop(key, None)
     st.session_state["_runtime_active_profile_id"] = active_profile_id
 
+pending_profile_preset_values = st.session_state.pop("pending_profile_preset_values", None)
+if isinstance(pending_profile_preset_values, dict):
+    for key, value in pending_profile_preset_values.items():
+        st.session_state[str(key)] = value
+    st.session_state["pending_profile_preset_applied_notice"] = True
+
+profile_presets_sidebar = [
+    x for x in load_profile_presets(PROFILE_SETTINGS_PATH) if isinstance(x, dict) and str(x.get("id", "")).strip()
+]
+profile_preset_name_by_id_sidebar = {
+    str(x.get("id", "")).strip(): str(x.get("name", "")).strip() or str(x.get("id", "")).strip()
+    for x in profile_presets_sidebar
+}
+preset_options_sidebar = ["(žádný)"] + [str(x.get("id", "")).strip() for x in profile_presets_sidebar]
+selected_preset_for_sidebar = str(
+    st.session_state.get(
+        "profile_selected_preset_id",
+        str(profile_ui_saved.get("selected_preset_id", "(žádný)")).strip() or "(žádný)",
+    )
+).strip() or "(žádný)"
+if selected_preset_for_sidebar not in preset_options_sidebar:
+    selected_preset_for_sidebar = "(žádný)"
+if selected_preset_for_sidebar == "(žádný)":
+    st.sidebar.markdown("**Aktivní preset:** `(žádný)`")
+else:
+    st.sidebar.markdown(
+        "**Aktivní preset:** "
+        f"`{profile_preset_name_by_id_sidebar.get(selected_preset_for_sidebar, selected_preset_for_sidebar)}`"
+    )
 st.sidebar.markdown(
-    f"**Aktivní profil:** `{active_profile_name} ({active_profile_id})`"
+    f"**Aktivní profil:** `{active_profile_name}`"
 )
 
 with st.sidebar.expander("Profil importu", expanded=False):
@@ -1113,8 +1233,11 @@ with st.sidebar.expander("Profil importu", expanded=False):
         st.session_state["profile_selected_preset_id"] = (
             pending_selected_preset_id if pending_selected_preset_id in preset_options else "(žádný)"
         )
+    saved_selected_preset_id = str(profile_ui_saved.get("selected_preset_id", "(žádný)")).strip() or "(žádný)"
     if st.session_state.get("profile_selected_preset_id") not in preset_options:
-        st.session_state["profile_selected_preset_id"] = "(žádný)"
+        st.session_state["profile_selected_preset_id"] = (
+            saved_selected_preset_id if saved_selected_preset_id in preset_options else "(žádný)"
+        )
     selected_preset_id = st.selectbox(
         "Preset profilu",
         options=preset_options,
@@ -1126,12 +1249,14 @@ with st.sidebar.expander("Profil importu", expanded=False):
         ),
     )
     selected_preset = next((x for x in profile_presets if str(x.get("id", "")).strip() == selected_preset_id), None)
+    if st.session_state.pop("pending_profile_preset_applied_notice", False):
+        st.success("Preset aplikován.")
     if st.button("Aplikovat preset", key="apply_profile_preset_btn", disabled=selected_preset is None):
         preset_values = selected_preset.get("values", {}) if isinstance(selected_preset, dict) else {}
         if isinstance(preset_values, dict):
-            for key, value in preset_values.items():
-                st.session_state[str(key)] = value
-        st.success("Preset aplikován.")
+            st.session_state["pending_profile_preset_values"] = {
+                str(key): value for key, value in preset_values.items()
+            }
         st.rerun()
 
     new_preset_name = st.text_input("Uložit aktuální jako preset", value="", key="profile_new_preset_name")
@@ -2250,6 +2375,34 @@ if api_mode_enabled:
                 "Filtr seznamu allowlist (název nebo ID)",
                 key=f"program_custom_fields_allowlist_filter_{allowlist_checkbox_seed}",
             ).strip().casefold()
+            visible_option_ids: list[str] = []
+            for field_id in option_ids:
+                field_id_str = str(field_id).strip()
+                label = id_to_label.get(field_id_str, f"(nenačtené) id={field_id_str}")
+                match_text = f"{label} {field_id_str}".casefold()
+                if fallback_filter and fallback_filter not in match_text:
+                    continue
+                visible_option_ids.append(field_id_str)
+
+            bulk_col_1, bulk_col_2, bulk_col_3 = st.columns([1, 1, 3], gap="small")
+            with bulk_col_1:
+                mark_all_clicked = st.button(
+                    "Označit vše",
+                    key=f"allowlist_mark_all_btn_{allowlist_checkbox_seed}",
+                    disabled=profile_lock_critical_options or not visible_option_ids,
+                )
+            with bulk_col_2:
+                unmark_all_clicked = st.button(
+                    "Odznačit vše",
+                    key=f"allowlist_unmark_all_btn_{allowlist_checkbox_seed}",
+                    disabled=profile_lock_critical_options or not visible_option_ids,
+                )
+            with bulk_col_3:
+                st.caption(
+                    "Hromadné akce pracují s aktuálně zobrazeným seznamem (respektují filtr). "
+                    "Na disk se zapisuje jen tlačítkem níže."
+                )
+
             shown_count = 0
             for field_id in option_ids:
                 field_id_str = str(field_id).strip()
@@ -2260,6 +2413,10 @@ if api_mode_enabled:
                 match_text = f"{label} {field_id_str}".casefold()
                 if fallback_filter and fallback_filter not in match_text:
                     continue
+                if mark_all_clicked:
+                    st.session_state[checkbox_key] = True
+                elif unmark_all_clicked:
+                    st.session_state[checkbox_key] = False
                 st.checkbox(label, key=checkbox_key)
                 shown_count += 1
             if fallback_filter:
@@ -2281,7 +2438,7 @@ if api_mode_enabled:
         else:
             st.caption("Seznam custom fields pro allowlist zatím není načtený.")
 
-        program_allowlist_cols = st.columns(2)
+        program_allowlist_cols = st.columns(3)
         with program_allowlist_cols[0]:
             if st.button("Uložit allowlist na disk", key="save_program_custom_fields_allowlist_btn"):
                 try:
@@ -2306,6 +2463,16 @@ if api_mode_enabled:
                 )
                 st.success(f"Allowlist načten z disku: {len(loaded_ids)} položek.")
                 st.rerun()
+        with program_allowlist_cols[2]:
+            if st.button("Smazat allowlist z disku", key="delete_program_custom_fields_allowlist_btn"):
+                try:
+                    if PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH.exists():
+                        PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH.unlink()
+                        st.success(f"Soubor allowlistu smazán: `{PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH}`")
+                    else:
+                        st.info("Soubor allowlistu na disku neexistuje.")
+                except Exception as exc:
+                    st.error(f"Nepodařilo se smazat allowlist z disku: {exc}")
 
         current_allowlist_count = len(
             {
@@ -2828,6 +2995,7 @@ profile_settings_to_save = {
         "do_bucket_country": bool(do_bucket_country),
         "output_encoding": str(output_encoding).strip() or "cp1250",
         "dedup_label": str(dedup_label).strip(),
+        "selected_preset_id": str(st.session_state.get("profile_selected_preset_id", "(žádný)")).strip() or "(žádný)",
         "use_cached_schema": bool(use_cached_schema),
         "use_api_schema": bool(use_api_schema),
         "refresh_api_schema_on_generate": bool(refresh_api_schema_on_generate),
@@ -2955,6 +3123,10 @@ if "diff_preview_summary" not in st.session_state:
     st.session_state["diff_preview_summary"] = {}
 if "diff_preview_error" not in st.session_state:
     st.session_state["diff_preview_error"] = ""
+if "diff_preview_detail_map" not in st.session_state:
+    st.session_state["diff_preview_detail_map"] = {}
+if "diff_preview_selected_email" not in st.session_state:
+    st.session_state["diff_preview_selected_email"] = ""
 
 with run_step_container:
     init_run_log_state()
@@ -3017,6 +3189,9 @@ with run_step_container:
         st.session_state["diff_preview_rows"] = []
         st.session_state["diff_preview_summary"] = {}
         st.session_state["diff_preview_error"] = ""
+        st.session_state["diff_preview_detail_map"] = {}
+        st.session_state["diff_preview_selected_email"] = ""
+        st.session_state.pop("diff_preview_editor", None)
     pending_fields = [str(x).strip() for x in st.session_state.get("pending_custom_fields_to_create", []) if str(x).strip()]
     pending_fingerprint = str(st.session_state.get("pending_custom_fields_fingerprint", "")).strip()
     if pending_fields and pending_fingerprint:
@@ -3195,7 +3370,111 @@ with run_step_container:
         if preview_error:
             st.warning(preview_error)
         if preview_rows:
-            st.dataframe(to_streamlit_safe_dataframe(pd.DataFrame(preview_rows)), use_container_width=True, height=320)
+            preview_df = to_streamlit_safe_dataframe(pd.DataFrame(preview_rows))
+            selected_preview_email = str(st.session_state.get("diff_preview_selected_email", "")).strip()
+            selected_preview_email_key = normalize_email_key(selected_preview_email)
+            preview_ui_df = preview_df.copy()
+            preview_ui_df.insert(
+                0,
+                "🔎",
+                [
+                    normalize_email_key(email) == selected_preview_email_key
+                    for email in preview_ui_df.get("email", pd.Series(dtype=str)).tolist()
+                ],
+            )
+            edited_preview_df = preview_ui_df
+            try:
+                edited_preview_df = st.data_editor(
+                    preview_ui_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=320,
+                    key="diff_preview_editor",
+                    disabled=[col for col in preview_ui_df.columns if col != "🔎"],
+                    column_config={
+                        "🔎": st.column_config.CheckboxColumn(
+                            "🔎",
+                            help="Zaškrtni kontakt pro zobrazení detailu změn.",
+                            default=False,
+                        )
+                    },
+                )
+            except Exception:
+                st.dataframe(preview_df, use_container_width=True, height=320)
+
+            try:
+                selected_from_table = [
+                    normalize_scalar_for_diff(x)
+                    for x in edited_preview_df.loc[edited_preview_df["🔎"] == True, "email"].tolist()
+                    if normalize_scalar_for_diff(x)
+                ]
+            except Exception:
+                selected_from_table = []
+            if selected_from_table:
+                selected_preview_email = selected_from_table[0]
+                st.session_state["diff_preview_selected_email"] = selected_preview_email
+                if len(selected_from_table) > 1:
+                    st.caption("Je označeno více řádků, používám první z nich.")
+
+            email_options = ["(nevybráno)"] + [
+                normalize_scalar_for_diff(x) for x in preview_df.get("email", pd.Series(dtype=str)).tolist()
+            ]
+            default_email = (
+                selected_preview_email
+                if selected_preview_email and selected_preview_email in email_options
+                else "(nevybráno)"
+            )
+            selected_from_control = st.selectbox(
+                "Vyber kontakt pro detail diffu",
+                options=email_options,
+                index=email_options.index(default_email),
+                key="diff_preview_detail_email_select",
+            )
+            if selected_from_control == "(nevybráno)":
+                selected_preview_email = ""
+                st.session_state["diff_preview_selected_email"] = ""
+            else:
+                selected_preview_email = selected_from_control
+                st.session_state["diff_preview_selected_email"] = selected_from_control
+
+            preview_detail_map = (
+                st.session_state.get("diff_preview_detail_map", {})
+                if isinstance(st.session_state.get("diff_preview_detail_map", {}), dict)
+                else {}
+            )
+            selected_preview_email_key = normalize_email_key(selected_preview_email)
+            selected_preview_detail = (
+                preview_detail_map.get(selected_preview_email_key, {})
+                if selected_preview_email_key
+                else {}
+            )
+            if selected_preview_email_key:
+                st.markdown(f"##### Detail změn pro `{selected_preview_email}`")
+                field_diff_rows = (
+                    selected_preview_detail.get("field_diffs", [])
+                    if isinstance(selected_preview_detail, dict)
+                    else []
+                )
+                if isinstance(field_diff_rows, list) and field_diff_rows:
+                    detail_df = to_streamlit_safe_dataframe(pd.DataFrame(field_diff_rows))
+                    detail_df = detail_df.rename(
+                        columns={
+                            "field": "pole",
+                            "before": "původní_hodnota",
+                            "after": "nová_hodnota",
+                        }
+                    )
+                    st.dataframe(
+                        detail_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=min(420, 110 + len(detail_df) * 32),
+                    )
+                else:
+                    st.caption(
+                        "Detail `původní -> nová` není pro tento kontakt dostupný "
+                        "(typicky nové kontakty nebo fallback bez detailních field diffů)."
+                    )
 
     diff_preview_clicked = False
     run_button_col, preview_button_col = st.columns(2)
@@ -4245,6 +4524,16 @@ if run_clicked or diff_preview_clicked:
                     preview_error = "Diff preview je vypnutý. Zapni porovnání před importem (diff)."
 
                 st.session_state["diff_preview_rows"] = preview_rows
+                st.session_state["diff_preview_detail_map"] = (
+                    build_diff_preview_detail_map(api_diff_summary) if diff_status == "ok" else {}
+                )
+                st.session_state.pop("diff_preview_editor", None)
+                if (
+                    str(st.session_state.get("diff_preview_selected_email", "")).strip()
+                    and normalize_email_key(st.session_state.get("diff_preview_selected_email", ""))
+                    not in st.session_state["diff_preview_detail_map"]
+                ):
+                    st.session_state["diff_preview_selected_email"] = ""
                 st.session_state["diff_preview_summary"] = {
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "list_id": api_resolved_list_id,
