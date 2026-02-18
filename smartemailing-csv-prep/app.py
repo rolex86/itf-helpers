@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,28 @@ from src.normalize import detect_source, normalize_df
 from src.reporting import build_report, find_duplicates_from_stats
 from src.schema import Schema, schema_from_export_df
 from src.jobs import append_job_history, clear_job_history, load_job_history, summarize_job_alerts
+from src.profiles import (
+    create_profile,
+    delete_profile,
+    delete_profile_files,
+    duplicate_profile,
+    duplicate_profile_files,
+    get_active_profile_id,
+    list_profiles,
+    load_profile_payload,
+    load_profile_presets,
+    load_profiles_index,
+    profile_allowlist_path,
+    profile_dir,
+    profile_favorites_path,
+    profile_settings_path,
+    rename_profile,
+    save_profile_presets,
+    save_profile_settings,
+    save_profiles_index,
+    slugify_profile_id,
+    set_active_profile,
+)
 from src.smartemailing_api import (
     DEFAULT_MANAGED_EMPTY_CUSTOM_FIELD_NAME_PATTERN,
     DEFAULT_BASE_URL,
@@ -86,8 +109,10 @@ with CFG_PATH.open("r", encoding="utf-8") as f:
 SCHEMA_CACHE_PATH = Path("config/schema_cache.yaml")
 API_SCHEMA_CACHE_PATH = Path("config/schema_cache_api.yaml")
 API_CREDENTIALS_PATH = Path("config/se_api_credentials.local")
-API_LIST_FAVORITES_PATH = Path("config/se_list_favorites.local")
-PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH = Path("config/program_custom_fields_allowlist.local")
+PROFILES_ROOT_PATH = Path("config/profiles")
+PROFILES_INDEX_PATH = PROFILES_ROOT_PATH / "index.yaml"
+LEGACY_API_LIST_FAVORITES_PATH = Path("config/se_list_favorites.local")
+LEGACY_PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH = Path("config/program_custom_fields_allowlist.local")
 
 
 def schema_hash(columns: list[str]) -> str:
@@ -239,6 +264,24 @@ def build_system_schema_columns(cfg: dict[str, Any]) -> list[str]:
         base.append(combined_field)
 
     return base
+
+
+def build_ignore_missing_custom_for_columns(
+    field_map_cfg: dict[str, Any],
+    api_system_field_map_cfg: dict[str, Any],
+    configured_ignore_missing_custom: list[str],
+) -> list[str]:
+    mapped_system_keys = {
+        str(x).strip().casefold()
+        for x in api_system_field_map_cfg.keys()
+        if str(x).strip()
+    }
+    default_ignore_missing_custom = [
+        str(col).strip()
+        for col in field_map_cfg.keys()
+        if str(col).strip() and str(col).strip().casefold() not in mapped_system_keys
+    ]
+    return list(dict.fromkeys(default_ignore_missing_custom + configured_ignore_missing_custom))
 
 
 def fetch_schema_from_api(username: str, api_key: str, base_url: str) -> tuple[Schema, dict[str, Any]]:
@@ -818,21 +861,412 @@ def build_diff_preview_rows(api_diff_summary: dict[str, Any], limit: int = 200) 
     return rows[: max(0, int(limit))]
 
 
+profiles_index = load_profiles_index(PROFILES_INDEX_PATH)
+profile_items = list_profiles(profiles_index)
+profile_id_to_name = {item.id: item.name for item in profile_items}
+active_profile_id = get_active_profile_id(profiles_index)
+active_profile_name = profile_id_to_name.get(active_profile_id, active_profile_id)
+
+ACTIVE_PROFILE_DIR = profile_dir(PROFILES_ROOT_PATH, active_profile_id)
+PROFILE_SETTINGS_PATH = profile_settings_path(PROFILES_ROOT_PATH, active_profile_id)
+API_LIST_FAVORITES_PATH = profile_favorites_path(PROFILES_ROOT_PATH, active_profile_id)
+PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH = profile_allowlist_path(PROFILES_ROOT_PATH, active_profile_id)
+active_profile_payload = load_profile_payload(PROFILE_SETTINGS_PATH)
+profile_settings_saved = (
+    active_profile_payload.get("settings", {})
+    if isinstance(active_profile_payload.get("settings", {}), dict)
+    else {}
+)
+profile_ui_saved = profile_settings_saved.get("ui", {}) if isinstance(profile_settings_saved.get("ui", {}), dict) else {}
+profile_api_saved = profile_settings_saved.get("api", {}) if isinstance(profile_settings_saved.get("api", {}), dict) else {}
+profile_safety_saved = (
+    profile_settings_saved.get("safety", {})
+    if isinstance(profile_settings_saved.get("safety", {}), dict)
+    else {}
+)
+
+if active_profile_id == "plussystem":
+    if not API_LIST_FAVORITES_PATH.exists() and LEGACY_API_LIST_FAVORITES_PATH.exists():
+        API_LIST_FAVORITES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(LEGACY_API_LIST_FAVORITES_PATH, API_LIST_FAVORITES_PATH)
+    if (
+        not PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH.exists()
+        and LEGACY_PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH.exists()
+    ):
+        PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(LEGACY_PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH, PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
+
+if st.session_state.get("_runtime_active_profile_id", "") != active_profile_id:
+    for key in [
+        "do_split_emails",
+        "do_split_names",
+        "do_bucket_country",
+        "output_encoding",
+        "dedup_label",
+        "use_cached_schema",
+        "use_api_schema",
+        "refresh_api_schema_on_generate",
+        "use_api_cache_on_error",
+        "execution_mode_label",
+        "api_canary_size_main",
+        "api_batch_size_main",
+        "safe_import_limit_main",
+        "full_import_limit_main",
+        "list_status_main",
+        "strict_custom_fields_main",
+        "use_profile_system_field_map_main",
+        "profile_system_field_map_yaml_main",
+        "use_profile_exclude_columns_main",
+        "profile_exclude_columns_text_main",
+        "staging_tag_input",
+        "diff_preflight_enabled_main",
+        "diff_send_only_changes_main",
+        "diff_fallback_send_all_on_error_main",
+        "skip_blacklisted_contacts_main",
+        "clear_removed_program_custom_fields_main",
+        "diff_page_limit_main",
+        "diff_max_pages_main",
+        "diff_target_email_batch_size_main",
+        "api_read_parallel_workers_main",
+        "auto_create_unknown_program_fields_main",
+        "auto_add_created_program_fields_to_allowlist_main",
+        "profile_lock_critical_options_main",
+        "api_list_favorite_ids",
+        "program_custom_fields_allowlist_ids",
+        "program_custom_fields_catalog",
+        "program_custom_fields_catalog_meta",
+        "profile_selected_preset_id",
+        "profile_new_preset_name",
+        "staging_list_manual",
+        "staging_list_select",
+        "api_contact_lists_cache",
+        "api_contact_lists_cache_meta",
+    ]:
+        st.session_state.pop(key, None)
+    for key in list(st.session_state.keys()):
+        if key.startswith("program_custom_fields_allowlist_checkbox_"):
+            st.session_state.pop(key, None)
+        if key.startswith("program_custom_fields_allowlist_filter_"):
+            st.session_state.pop(key, None)
+    st.session_state["_runtime_active_profile_id"] = active_profile_id
+
+with st.sidebar.expander("Profil importu", expanded=True):
+    profile_options = [item.id for item in profile_items]
+    if active_profile_id not in profile_options and profile_options:
+        active_profile_id = profile_options[0]
+    active_index = profile_options.index(active_profile_id) if active_profile_id in profile_options else 0
+
+    selected_profile_id = st.selectbox(
+        "Aktivní profil",
+        options=profile_options,
+        index=active_index if profile_options else 0,
+        format_func=lambda profile_id: f"{profile_id_to_name.get(profile_id, profile_id)} ({profile_id})",
+        key="active_profile_selectbox",
+    )
+    if selected_profile_id != active_profile_id:
+        profiles_index = set_active_profile(profiles_index, selected_profile_id)
+        save_profiles_index(PROFILES_INDEX_PATH, profiles_index)
+        st.rerun()
+
+    create_name = st.text_input("Nový profil", value="", key="create_profile_name")
+    if st.button("Vytvořit profil", key="create_profile_btn"):
+        profiles_index, created_profile_id = create_profile(profiles_index, create_name)
+        save_profiles_index(PROFILES_INDEX_PATH, profiles_index)
+        (PROFILES_ROOT_PATH / created_profile_id).mkdir(parents=True, exist_ok=True)
+        st.success(f"Profil vytvořen: {created_profile_id}")
+        st.rerun()
+
+    duplicate_name = st.text_input("Název kopie profilu", value=f"{active_profile_name} kopie", key="duplicate_profile_name")
+    if st.button("Duplikovat aktivní profil", key="duplicate_profile_btn"):
+        source_profile_id = get_active_profile_id(profiles_index)
+        profiles_index, duplicated_profile_id = duplicate_profile(
+            profiles_index,
+            source_profile_id=source_profile_id,
+            new_name=duplicate_name,
+        )
+        duplicate_profile_files(PROFILES_ROOT_PATH, source_profile_id, duplicated_profile_id)
+        save_profiles_index(PROFILES_INDEX_PATH, profiles_index)
+        st.success(f"Profil duplikován: {duplicated_profile_id}")
+        st.rerun()
+
+    rename_name = st.text_input("Přejmenovat aktivní profil", value=active_profile_name, key="rename_profile_name")
+    if st.button("Přejmenovat profil", key="rename_profile_btn"):
+        target_profile_id = get_active_profile_id(profiles_index)
+        profiles_index = rename_profile(profiles_index, target_profile_id, rename_name)
+        save_profiles_index(PROFILES_INDEX_PATH, profiles_index)
+        st.success("Profil přejmenován.")
+        st.rerun()
+
+    can_delete_profile = len(profile_items) > 1
+    delete_confirm = st.checkbox(
+        "Potvrzuji smazání aktivního profilu",
+        value=False,
+        key="delete_profile_confirm",
+        disabled=not can_delete_profile,
+    )
+    if st.button("Smazat aktivní profil", key="delete_profile_btn", disabled=not (can_delete_profile and delete_confirm)):
+        target_profile_id = get_active_profile_id(profiles_index)
+        profiles_index, _ = delete_profile(profiles_index, target_profile_id)
+        save_profiles_index(PROFILES_INDEX_PATH, profiles_index)
+        delete_profile_files(PROFILES_ROOT_PATH, target_profile_id)
+        st.success(f"Profil smazán: {target_profile_id}")
+        st.rerun()
+
+    st.checkbox(
+        "Uzamknout kritické volby profilu",
+        value=bool(profile_safety_saved.get("lock_critical_options", False)),
+        key="profile_lock_critical_options_main",
+        help="Když je zapnuto, kritické volby importu se jen zobrazí a nejdou měnit.",
+    )
+
+    profile_presets = [
+        x for x in load_profile_presets(PROFILE_SETTINGS_PATH) if isinstance(x, dict) and str(x.get("id", "")).strip()
+    ]
+    preset_options = ["(žádný)"] + [str(x.get("id", "")).strip() for x in profile_presets]
+    preset_id_to_name = {
+        str(x.get("id", "")).strip(): str(x.get("name", "")).strip() or str(x.get("id", "")).strip()
+        for x in profile_presets
+    }
+    if st.session_state.get("profile_selected_preset_id") not in preset_options:
+        st.session_state["profile_selected_preset_id"] = "(žádný)"
+    selected_preset_id = st.selectbox(
+        "Preset profilu",
+        options=preset_options,
+        key="profile_selected_preset_id",
+        format_func=lambda preset_id: (
+            "(žádný)"
+            if preset_id == "(žádný)"
+            else f"{preset_id_to_name.get(preset_id, preset_id)} ({preset_id})"
+        ),
+    )
+    selected_preset = next((x for x in profile_presets if str(x.get("id", "")).strip() == selected_preset_id), None)
+    if st.button("Aplikovat preset", key="apply_profile_preset_btn", disabled=selected_preset is None):
+        preset_values = selected_preset.get("values", {}) if isinstance(selected_preset, dict) else {}
+        if isinstance(preset_values, dict):
+            for key, value in preset_values.items():
+                st.session_state[str(key)] = value
+        st.success("Preset aplikován.")
+        st.rerun()
+
+    new_preset_name = st.text_input("Uložit aktuální jako preset", value="", key="profile_new_preset_name")
+    if st.button("Uložit preset", key="save_profile_preset_btn"):
+        preset_name_clean = str(new_preset_name).strip()
+        if not preset_name_clean:
+            st.error("Vyplň název presetu.")
+        else:
+            tracked_keys = [
+                "do_split_emails",
+                "do_split_names",
+                "do_bucket_country",
+                "output_encoding",
+                "dedup_label",
+                "use_cached_schema",
+                "use_api_schema",
+                "refresh_api_schema_on_generate",
+                "use_api_cache_on_error",
+                "execution_mode_label",
+                "strict_custom_fields_main",
+                "list_status_main",
+                "staging_list_manual",
+                "staging_tag_input",
+                "api_canary_size_main",
+                "api_batch_size_main",
+                "safe_import_limit_main",
+                "full_import_limit_main",
+                "diff_preflight_enabled_main",
+                "diff_send_only_changes_main",
+                "diff_fallback_send_all_on_error_main",
+                "skip_blacklisted_contacts_main",
+                "clear_removed_program_custom_fields_main",
+                "clear_allowed_name_prefixes_main",
+                "diff_page_limit_main",
+                "diff_max_pages_main",
+                "diff_target_email_batch_size_main",
+                "api_read_parallel_workers_main",
+                "auto_create_unknown_program_fields_main",
+                "auto_add_created_program_fields_to_allowlist_main",
+                "profile_lock_critical_options_main",
+            ]
+            preset_values: dict[str, Any] = {}
+            for tracked_key in tracked_keys:
+                if tracked_key in st.session_state:
+                    preset_values[tracked_key] = st.session_state.get(tracked_key)
+            existing_idx = next(
+                (
+                    idx
+                    for idx, item in enumerate(profile_presets)
+                    if str(item.get("name", "")).strip().casefold() == preset_name_clean.casefold()
+                ),
+                None,
+            )
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if existing_idx is None:
+                used_ids = {
+                    str(item.get("id", "")).strip()
+                    for item in profile_presets
+                    if str(item.get("id", "")).strip()
+                }
+                base_id = slugify_profile_id(preset_name_clean)
+                preset_id = base_id
+                suffix = 2
+                while preset_id in used_ids:
+                    preset_id = f"{base_id}_{suffix}"
+                    suffix += 1
+                profile_presets.append(
+                    {
+                        "id": preset_id,
+                        "name": preset_name_clean,
+                        "created_at": now_iso,
+                        "updated_at": now_iso,
+                        "values": preset_values,
+                    }
+                )
+                st.session_state["profile_selected_preset_id"] = preset_id
+            else:
+                profile_presets[existing_idx]["updated_at"] = now_iso
+                profile_presets[existing_idx]["values"] = preset_values
+                st.session_state["profile_selected_preset_id"] = str(
+                    profile_presets[existing_idx].get("id", "")
+                ).strip()
+            save_profile_presets(
+                PROFILE_SETTINGS_PATH,
+                profile_presets,
+                profile_id=active_profile_id,
+                profile_name=active_profile_name,
+            )
+            st.success("Preset uložen.")
+            st.rerun()
+
+    if st.button("Smazat vybraný preset", key="delete_profile_preset_btn", disabled=selected_preset is None):
+        profile_presets = [
+            item
+            for item in profile_presets
+            if str(item.get("id", "")).strip() != selected_preset_id
+        ]
+        save_profile_presets(
+            PROFILE_SETTINGS_PATH,
+            profile_presets,
+            profile_id=active_profile_id,
+            profile_name=active_profile_name,
+        )
+        st.session_state["profile_selected_preset_id"] = "(žádný)"
+        st.success("Preset smazán.")
+        st.rerun()
+
+    export_profile_payload = {
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "profile": {
+            "id": active_profile_id,
+            "name": active_profile_name,
+        },
+        "payload": load_profile_payload(PROFILE_SETTINGS_PATH),
+        "allowlist_custom_field_ids": sorted(
+            load_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
+        ),
+        "favorite_list_ids": sorted(load_api_list_favorites(API_LIST_FAVORITES_PATH)),
+    }
+    export_profile_yaml = yaml.safe_dump(export_profile_payload, allow_unicode=True, sort_keys=False)
+    st.download_button(
+        "Exportovat profil (YAML)",
+        data=export_profile_yaml.encode("utf-8"),
+        file_name=f"profile_{active_profile_id}.yaml",
+        mime="text/yaml",
+        key="export_profile_yaml_btn",
+    )
+
+    import_profile_file = st.file_uploader(
+        "Import profilu z YAML (do aktivního profilu)",
+        type=["yaml", "yml"],
+        key="import_profile_yaml_file",
+    )
+    if st.button("Importovat profil YAML", key="import_profile_yaml_btn", disabled=import_profile_file is None):
+        if import_profile_file is None:
+            st.error("Vyber nejdřív YAML soubor pro import.")
+        else:
+            try:
+                imported_data = yaml.safe_load(import_profile_file.getvalue().decode("utf-8")) or {}
+                if not isinstance(imported_data, dict):
+                    raise ValueError("Importovaný YAML musí být objekt (mapa).")
+                imported_payload = imported_data.get("payload", imported_data)
+                if not isinstance(imported_payload, dict):
+                    raise ValueError("Klíč `payload` musí být objekt.")
+                imported_settings = imported_payload.get("settings", {})
+                imported_presets = imported_payload.get("presets", [])
+                if not isinstance(imported_settings, dict):
+                    imported_settings = {}
+                if not isinstance(imported_presets, list):
+                    imported_presets = []
+
+                save_profile_settings(
+                    PROFILE_SETTINGS_PATH,
+                    settings=imported_settings,
+                    profile_id=active_profile_id,
+                    profile_name=active_profile_name,
+                    presets=imported_presets,
+                )
+
+                imported_allowlist = imported_data.get("allowlist_custom_field_ids", [])
+                if isinstance(imported_allowlist, list):
+                    save_program_custom_fields_allowlist(
+                        PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH,
+                        {str(x).strip() for x in imported_allowlist if str(x).strip()},
+                    )
+
+                imported_favorites = imported_data.get("favorite_list_ids", [])
+                if isinstance(imported_favorites, list):
+                    save_api_list_favorites(
+                        API_LIST_FAVORITES_PATH,
+                        {str(x).strip() for x in imported_favorites if str(x).strip()},
+                    )
+
+                st.success("Profil byl naimportován do aktivního profilu. Obnovuji UI.")
+                st.session_state["_runtime_active_profile_id"] = ""
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Nepodařilo se importovat profil YAML: {exc}")
+
+    st.caption(f"Aktivní profil: `{active_profile_name}` (`{active_profile_id}`)")
+
+profile_lock_critical_options = bool(
+    st.session_state.get(
+        "profile_lock_critical_options_main",
+        bool(profile_safety_saved.get("lock_critical_options", False)),
+    )
+)
+
 st.sidebar.header("Nastavení")
-do_split_emails = st.sidebar.checkbox("Rozdělit více emailů na více řádků", value=True)
-do_split_names = st.sidebar.checkbox("Rozdělit jména (tituly/jméno/příjmení)", value=True)
-do_bucket_country = st.sidebar.checkbox("Rozdělit výstup podle země (CZ_SK / DE_AT_CH / EN)", value=True)
+do_split_emails = st.sidebar.checkbox(
+    "Rozdělit více emailů na více řádků",
+    value=bool(profile_ui_saved.get("do_split_emails", True)),
+    key="do_split_emails",
+)
+do_split_names = st.sidebar.checkbox(
+    "Rozdělit jména (tituly/jméno/příjmení)",
+    value=bool(profile_ui_saved.get("do_split_names", True)),
+    key="do_split_names",
+)
+do_bucket_country = st.sidebar.checkbox(
+    "Rozdělit výstup podle země (CZ_SK / DE_AT_CH / EN)",
+    value=bool(profile_ui_saved.get("do_bucket_country", True)),
+    key="do_bucket_country",
+)
 if "output_encoding" not in st.session_state:
-    st.session_state["output_encoding"] = "cp1250"
+    st.session_state["output_encoding"] = str(profile_ui_saved.get("output_encoding", "cp1250")).strip() or "cp1250"
 output_encoding = st.sidebar.selectbox(
     "Kódování výstupních CSV",
     options=["cp1250", "utf-8", "utf-8-sig"],
     key="output_encoding",
 )
+dedup_options = ["Bez deduplikace", "Ponechat první výskyt", "Ponechat poslední výskyt"]
+default_dedup_label = str(profile_ui_saved.get("dedup_label", "Ponechat poslední výskyt")).strip()
+if default_dedup_label not in dedup_options:
+    default_dedup_label = "Ponechat poslední výskyt"
 dedup_label = st.sidebar.selectbox(
     "Deduplikace emailů ve výstupu",
-    options=["Bez deduplikace", "Ponechat první výskyt", "Ponechat poslední výskyt"],
-    index=2,
+    options=dedup_options,
+    index=dedup_options.index(default_dedup_label),
+    key="dedup_label",
 )
 dedup_keep = {
     "Bez deduplikace": "none",
@@ -855,6 +1289,10 @@ if st.sidebar.button("Smazat uložené SE API údaje"):
         st.sidebar.error(f"Nepodařilo se smazat uložené údaje: {exc}")
 
 st.markdown("### 1) Nahraj zdrojové CSV soubory (1 nebo více)")
+st.caption(
+    f"Aktivní profil: **{active_profile_name}** (`{active_profile_id}`) | "
+    f"složka: `{ACTIVE_PROFILE_DIR}`"
+)
 source_files = st.file_uploader("Zdrojové CSV", type=["csv"], accept_multiple_files=True)
 
 mode_step_container = st.container()
@@ -868,8 +1306,9 @@ with st.expander("Nastavení schématu (volitelné)", expanded=False):
     cached_schema, cached_schema_meta = load_cached_schema(SCHEMA_CACHE_PATH)
     use_cached_schema = st.checkbox(
         "Použít uložené schéma z CSV zálohy (bez nahrávání exportu)",
-        value=(cached_schema is not None),
+        value=bool(profile_ui_saved.get("use_cached_schema", (cached_schema is not None))),
         disabled=(cached_schema is None),
+        key="use_cached_schema",
         help="Použije se jen jako záloha. Pokud je aktivní API schéma, má přednost.",
     )
     export_file = None
@@ -952,7 +1391,8 @@ with st.expander("Nastavení schématu (volitelné)", expanded=False):
     cached_api_schema, cached_api_schema_meta = load_cached_schema(API_SCHEMA_CACHE_PATH)
     use_api_schema = st.checkbox(
         "Načítat schéma přímo ze SmartEmailing API",
-        value=True,
+        value=bool(profile_ui_saved.get("use_api_schema", True)),
+        key="use_api_schema",
     )
     api_username = ""
     api_key = ""
@@ -984,8 +1424,16 @@ with st.expander("Nastavení schématu (volitelné)", expanded=False):
                 key="schema_api_base_url",
             )
             save_schema_api_credentials = st.button("Uložit API údaje na disk", key="save_api_credentials_schema")
-            refresh_api_schema_on_generate = st.checkbox("Před exportem načíst schéma z API znovu", value=True)
-            use_api_cache_on_error = st.checkbox("Při chybě API použít schéma z API mezipaměti", value=True)
+            refresh_api_schema_on_generate = st.checkbox(
+                "Před exportem načíst schéma z API znovu",
+                value=bool(profile_ui_saved.get("refresh_api_schema_on_generate", True)),
+                key="refresh_api_schema_on_generate",
+            )
+            use_api_cache_on_error = st.checkbox(
+                "Při chybě API použít schéma z API mezipaměti",
+                value=bool(profile_ui_saved.get("use_api_cache_on_error", True)),
+                key="use_api_cache_on_error",
+            )
     
             if save_schema_api_credentials:
                 if str(api_username).strip() and str(api_key).strip():
@@ -1126,22 +1574,32 @@ with st.expander("Nastavení schématu (volitelné)", expanded=False):
     
 with mode_step_container:
     st.markdown("### 2) Režim běhu")
+    execution_mode_options = [
+        "API kontrolní běh (jen validace + náhled)",
+        "API bezpečný import (staging + testovací dávka)",
+        "API plný import (schvalování + testovací dávka)",
+        "CSV export (záloha)",
+    ]
+    execution_mode_by_label = {
+        "API kontrolní běh (jen validace + náhled)": "api_dry_run",
+        "API bezpečný import (staging + testovací dávka)": "api_safe_import",
+        "API plný import (schvalování + testovací dávka)": "api_full_import",
+        "CSV export (záloha)": "csv_fallback",
+    }
+    execution_mode_label_by_code = {v: k for k, v in execution_mode_by_label.items()}
+    default_execution_mode_code = str(profile_api_saved.get("execution_mode", "api_safe_import")).strip() or "api_safe_import"
+    default_execution_mode_label = execution_mode_label_by_code.get(
+        default_execution_mode_code,
+        "API bezpečný import (staging + testovací dávka)",
+    )
     execution_mode_label = st.radio(
         "Vyber akci po transformaci dat",
-        options=[
-            "API kontrolní běh (jen validace + náhled)",
-            "API bezpečný import (staging + testovací dávka)",
-            "API plný import (schvalování + testovací dávka)",
-            "CSV export (záloha)",
-        ],
-        index=1,
+        options=execution_mode_options,
+        index=execution_mode_options.index(default_execution_mode_label),
+        key="execution_mode_label",
+        disabled=profile_lock_critical_options,
     )
-execution_mode = {
-    "API kontrolní běh (jen validace + náhled)": "api_dry_run",
-    "API bezpečný import (staging + testovací dávka)": "api_safe_import",
-    "API plný import (schvalování + testovací dávka)": "api_full_import",
-    "CSV export (záloha)": "csv_fallback",
-}[execution_mode_label]
+execution_mode = execution_mode_by_label[execution_mode_label]
 
 api_cfg = CFG.get("smartemailing", {}).get("api", {})
 api_mode_enabled = execution_mode != "csv_fallback"
@@ -1237,9 +1695,11 @@ contact_custom_field_values_search_endpoint_candidates = [
     )
     if str(x).strip()
 ]
-strict_custom_fields = bool(api_cfg.get("strict_custom_fields", True))
-list_status = str(api_cfg.get("list_status", "confirmed")).strip() or "confirmed"
-auto_create_unknown_program_fields_default = bool(api_cfg.get("auto_create_unknown_program_fields", True))
+strict_custom_fields = bool(profile_api_saved.get("strict_custom_fields", api_cfg.get("strict_custom_fields", True)))
+list_status = str(profile_api_saved.get("list_status", api_cfg.get("list_status", "confirmed"))).strip() or "confirmed"
+auto_create_unknown_program_fields_default = bool(
+    profile_api_saved.get("auto_create_unknown_program_fields", api_cfg.get("auto_create_unknown_program_fields", True))
+)
 auto_create_program_field_type = str(api_cfg.get("auto_create_program_field_type", "text")).strip() or "text"
 custom_field_create_endpoint_candidates = [
     str(x).strip()
@@ -1271,22 +1731,53 @@ configured_exclude_columns_from_api_import = [
     for col in api_cfg.get("exclude_columns_from_api_import", [])
     if str(col).strip()
 ]
-exclude_columns_from_api_import = list(
+global_exclude_columns_from_api_import = list(
     dict.fromkeys(default_exclude_columns_from_api_import + configured_exclude_columns_from_api_import)
 )
-default_ignore_missing_custom = [
-    str(col).strip()
-    for col in field_map_cfg.keys()
-    if str(col).strip()
-    and str(col).strip().casefold() not in {str(x).strip().casefold() for x in api_system_field_map_cfg.keys()}
-]
 configured_ignore_missing_custom = [
     str(col).strip()
     for col in api_cfg.get("ignore_missing_custom_for_columns", [])
     if str(col).strip()
 ]
-ignore_missing_custom_for_columns = list(
-    dict.fromkeys(default_ignore_missing_custom + configured_ignore_missing_custom)
+profile_use_system_field_map_override_default = bool(
+    profile_api_saved.get("use_profile_system_field_map", False)
+)
+profile_system_field_map_override_saved = (
+    profile_api_saved.get("system_field_map", {})
+    if isinstance(profile_api_saved.get("system_field_map", {}), dict)
+    else {}
+)
+api_system_field_map_profile_override = {
+    str(k).strip(): str(v).strip()
+    for k, v in profile_system_field_map_override_saved.items()
+    if str(k).strip() and str(v).strip()
+}
+profile_use_exclude_columns_override_default = bool(
+    profile_api_saved.get("use_profile_exclude_columns", False)
+)
+profile_exclude_columns_override_saved = [
+    str(col).strip()
+    for col in profile_api_saved.get("exclude_columns_from_api_import", [])
+    if str(col).strip()
+]
+profile_exclude_columns_override_values = list(profile_exclude_columns_override_saved)
+profile_use_system_field_map_override = bool(profile_use_system_field_map_override_default)
+profile_use_exclude_columns_override = bool(profile_use_exclude_columns_override_default)
+
+api_system_field_map_for_run = (
+    dict(api_system_field_map_profile_override)
+    if profile_use_system_field_map_override and api_system_field_map_profile_override
+    else dict(api_system_field_map_cfg)
+)
+exclude_columns_from_api_import = (
+    list(dict.fromkeys(profile_exclude_columns_override_values))
+    if profile_use_exclude_columns_override
+    else list(global_exclude_columns_from_api_import)
+)
+ignore_missing_custom_for_columns = build_ignore_missing_custom_for_columns(
+    field_map_cfg=field_map_cfg,
+    api_system_field_map_cfg=api_system_field_map_for_run,
+    configured_ignore_missing_custom=configured_ignore_missing_custom,
 )
 program_custom_field_allowlist_ids = load_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
 
@@ -1294,27 +1785,50 @@ api_import_username = ""
 api_import_key = ""
 api_import_base_url = DEFAULT_BASE_URL
 staging_list_value = ""
-staging_tag = ""
-api_canary_size = to_int(api_cfg.get("canary_size", 50), 50)
-api_batch_size = to_int(api_cfg.get("batch_size", 500), 500)
-api_max_contacts_safe = to_int(api_cfg.get("max_contacts_safe", 2000), 2000)
-api_max_contacts_full = to_int(api_cfg.get("max_contacts_full", 10000), 10000)
-diff_preflight_enabled_default = bool(api_cfg.get("diff_preflight_enabled", True))
-diff_send_only_changes_default = bool(api_cfg.get("diff_send_only_changes", True))
-diff_fallback_send_all_on_error_default = bool(api_cfg.get("diff_fallback_send_all_on_error", True))
-skip_blacklisted_contacts_default = bool(api_cfg.get("skip_blacklisted_contacts", True))
-clear_removed_program_custom_fields_default = bool(
-    api_cfg.get("clear_removed_program_custom_fields_enabled", True)
+staging_tag = str(profile_api_saved.get("staging_tag", "")).strip()
+api_canary_size = to_int(profile_api_saved.get("canary_size", api_cfg.get("canary_size", 50)), 50)
+api_batch_size = to_int(profile_api_saved.get("batch_size", api_cfg.get("batch_size", 500)), 500)
+api_max_contacts_safe = to_int(profile_api_saved.get("max_contacts_safe", api_cfg.get("max_contacts_safe", 2000)), 2000)
+api_max_contacts_full = to_int(profile_api_saved.get("max_contacts_full", api_cfg.get("max_contacts_full", 10000)), 10000)
+diff_preflight_enabled_default = bool(
+    profile_api_saved.get("diff_preflight_enabled", api_cfg.get("diff_preflight_enabled", True))
 )
-diff_page_limit = to_int(api_cfg.get("diff_page_limit", 100), 100)
-diff_max_pages = to_int(api_cfg.get("diff_max_pages", 100), 100)
-diff_target_email_batch_size = to_int(api_cfg.get("diff_target_email_batch_size", 50), 50)
-api_read_parallel_workers = to_int(api_cfg.get("api_read_parallel_workers", 6), 6)
+diff_send_only_changes_default = bool(
+    profile_api_saved.get("diff_send_only_changes", api_cfg.get("diff_send_only_changes", True))
+)
+diff_fallback_send_all_on_error_default = bool(
+    profile_api_saved.get("diff_fallback_send_all_on_error", api_cfg.get("diff_fallback_send_all_on_error", True))
+)
+skip_blacklisted_contacts_default = bool(
+    profile_api_saved.get("skip_blacklisted_contacts", api_cfg.get("skip_blacklisted_contacts", True))
+)
+clear_removed_program_custom_fields_default = bool(
+    profile_api_saved.get(
+        "clear_removed_program_custom_fields_enabled",
+        api_cfg.get("clear_removed_program_custom_fields_enabled", True),
+    )
+)
+diff_page_limit = to_int(profile_api_saved.get("diff_page_limit", api_cfg.get("diff_page_limit", 100)), 100)
+diff_max_pages = to_int(profile_api_saved.get("diff_max_pages", api_cfg.get("diff_max_pages", 100)), 100)
+diff_target_email_batch_size = to_int(
+    profile_api_saved.get("diff_target_email_batch_size", api_cfg.get("diff_target_email_batch_size", 50)),
+    50,
+)
+api_read_parallel_workers = to_int(
+    profile_api_saved.get("api_read_parallel_workers", api_cfg.get("api_read_parallel_workers", 6)),
+    6,
+)
+clear_allowed_name_prefixes_default = [
+    str(x).strip()
+    for x in profile_api_saved.get("clear_allowed_name_prefixes", api_cfg.get("clear_allowed_name_prefixes", []))
+    if str(x).strip()
+]
 diff_preflight_enabled = diff_preflight_enabled_default
 diff_send_only_changes = diff_send_only_changes_default
 diff_fallback_send_all_on_error = diff_fallback_send_all_on_error_default
 skip_blacklisted_contacts = skip_blacklisted_contacts_default
 clear_removed_program_custom_fields = clear_removed_program_custom_fields_default
+clear_allowed_name_prefixes = list(clear_allowed_name_prefixes_default)
 safe_confirm = False
 full_confirm = False
 full_phrase_input = ""
@@ -1323,7 +1837,10 @@ full_approver = ""
 full_second_approval_input = ""
 auto_create_unknown_program_fields = auto_create_unknown_program_fields_default
 auto_add_created_program_fields_to_allowlist = bool(
-    api_cfg.get("auto_add_created_program_fields_to_allowlist", True)
+    profile_api_saved.get(
+        "auto_add_created_program_fields_to_allowlist",
+        api_cfg.get("auto_add_created_program_fields_to_allowlist", True),
+    )
 )
 
 if api_mode_enabled:
@@ -1388,12 +1905,113 @@ if api_mode_enabled:
             except Exception as exc:
                 st.warning(f"Nepodařilo se uložit API údaje lokálně: {exc}")
 
+        strict_custom_fields = st.checkbox(
+            "Striktní kontrola custom fields (chybějící pole = issue)",
+            value=bool(strict_custom_fields),
+            key="strict_custom_fields_main",
+            disabled=profile_lock_critical_options,
+        )
+        list_status_options = ["confirmed", "unconfirmed"]
+        default_list_status = list_status if list_status in list_status_options else "confirmed"
+        list_status = st.selectbox(
+            "Výchozí status kontaktu v listu",
+            options=list_status_options,
+            index=list_status_options.index(default_list_status),
+            key="list_status_main",
+            disabled=profile_lock_critical_options,
+        )
+
+        profile_use_system_field_map_override = st.checkbox(
+            "Použít vlastní mapování systémových polí v tomto profilu",
+            value=profile_use_system_field_map_override_default,
+            key="use_profile_system_field_map_main",
+            disabled=profile_lock_critical_options,
+        )
+        default_system_map_for_editor = (
+            api_system_field_map_profile_override
+            if api_system_field_map_profile_override
+            else api_system_field_map_cfg
+        )
+        profile_system_field_map_yaml_text = st.text_area(
+            "Mapování systémových polí (YAML slovník: zdrojový_název -> api_klíč)",
+            value=yaml.safe_dump(default_system_map_for_editor, allow_unicode=True, sort_keys=False),
+            key="profile_system_field_map_yaml_main",
+            height=160,
+            disabled=(not profile_use_system_field_map_override) or profile_lock_critical_options,
+        )
+        if profile_use_system_field_map_override:
+            try:
+                parsed_system_field_map = yaml.safe_load(profile_system_field_map_yaml_text) or {}
+                if not isinstance(parsed_system_field_map, dict):
+                    raise ValueError("Mapování musí být YAML slovník.")
+                api_system_field_map_profile_override = {
+                    str(k).strip(): str(v).strip()
+                    for k, v in parsed_system_field_map.items()
+                    if str(k).strip() and str(v).strip()
+                }
+                if not api_system_field_map_profile_override:
+                    raise ValueError("Mapování je prázdné.")
+                api_system_field_map_for_run = dict(api_system_field_map_profile_override)
+            except Exception as exc:
+                st.error(
+                    "Neplatné profilové mapování systémových polí, používám globální mapování z `mappings.yaml`. "
+                    f"Detail: {exc}"
+                )
+                profile_use_system_field_map_override = False
+                api_system_field_map_for_run = dict(api_system_field_map_cfg)
+                api_system_field_map_profile_override = {}
+        else:
+            api_system_field_map_for_run = dict(api_system_field_map_cfg)
+            api_system_field_map_profile_override = {}
+
+        profile_use_exclude_columns_override = st.checkbox(
+            "Použít vlastní seznam vyloučených sloupců z API importu v tomto profilu",
+            value=profile_use_exclude_columns_override_default,
+            key="use_profile_exclude_columns_main",
+            disabled=profile_lock_critical_options,
+        )
+        default_exclude_for_editor = (
+            profile_exclude_columns_override_values
+            if profile_exclude_columns_override_values
+            else global_exclude_columns_from_api_import
+        )
+        profile_exclude_columns_text = st.text_area(
+            "Vyloučené sloupce z API importu (1 sloupec na řádek)",
+            value="\n".join(default_exclude_for_editor),
+            key="profile_exclude_columns_text_main",
+            height=120,
+            disabled=(not profile_use_exclude_columns_override) or profile_lock_critical_options,
+        )
+        if profile_use_exclude_columns_override:
+            profile_exclude_columns_override_values = [
+                str(x).strip()
+                for x in str(profile_exclude_columns_text).splitlines()
+                if str(x).strip()
+            ]
+            exclude_columns_from_api_import = list(dict.fromkeys(profile_exclude_columns_override_values))
+        else:
+            profile_exclude_columns_override_values = []
+            exclude_columns_from_api_import = list(global_exclude_columns_from_api_import)
+
+        ignore_missing_custom_for_columns = build_ignore_missing_custom_for_columns(
+            field_map_cfg=field_map_cfg,
+            api_system_field_map_cfg=api_system_field_map_for_run,
+            configured_ignore_missing_custom=configured_ignore_missing_custom,
+        )
+        st.caption(
+            "Aktivní systémové mapování: "
+            f"{len(api_system_field_map_for_run)} klíčů | "
+            f"vyloučené sloupce: {len(exclude_columns_from_api_import)}."
+        )
+
         api_canary_size = int(
             st.number_input(
                 "Velikost testovací dávky (první dávka)",
                 min_value=0,
                 value=max(0, api_canary_size),
                 step=10,
+                key="api_canary_size_main",
+                disabled=profile_lock_critical_options,
             )
         )
         api_batch_size = int(
@@ -1402,6 +2020,8 @@ if api_mode_enabled:
                 min_value=1,
                 value=max(1, api_batch_size),
                 step=100,
+                key="api_batch_size_main",
+                disabled=profile_lock_critical_options,
             )
         )
         st.markdown("#### Správa aplikačních custom fields (allowlist)")
@@ -1537,11 +2157,11 @@ if api_mode_enabled:
         if "api_contact_lists_cache_meta" not in st.session_state:
             st.session_state.api_contact_lists_cache_meta = {}
         if "staging_list_manual" not in st.session_state:
-            st.session_state.staging_list_manual = ""
+            st.session_state.staging_list_manual = str(profile_api_saved.get("staging_list_value", "")).strip()
         if "staging_list_select" not in st.session_state:
             st.session_state.staging_list_select = "(ručně)"
 
-        load_lists = st.button("Obnovit listy z API", key="refresh_api_lists_main")
+        load_lists = st.button("Obnovit listy z API", key="refresh_api_lists_main", disabled=profile_lock_critical_options)
         credentials_ready_for_lists = bool(str(api_import_username).strip()) and bool(str(api_import_key).strip())
         lists_fingerprint = hashlib.sha256(
             (
@@ -1624,7 +2244,11 @@ if api_mode_enabled:
                     quick_label = f"★ {list_name} ({list_id})"
                     selected_label_with_id = f"★ {list_name} (id={list_id})"
                     with quick_cols[idx % len(quick_cols)]:
-                        if st.button(quick_label, key=f"quick_select_favorite_{list_id}"):
+                        if st.button(
+                            quick_label,
+                            key=f"quick_select_favorite_{list_id}",
+                            disabled=profile_lock_critical_options,
+                        ):
                             if selected_label_with_id in ["(ručně)"] + labels:
                                 st.session_state["staging_list_select"] = selected_label_with_id
                             st.session_state["staging_list_manual"] = list_id
@@ -1637,6 +2261,7 @@ if api_mode_enabled:
                 "Vyber staging seznam ze SmartEmailingu",
                 options=list_options,
                 key="staging_list_select",
+                disabled=profile_lock_critical_options,
             )
             if selected_list_label != "(ručně)":
                 selected = label_to_list.get(selected_list_label, {"id": "", "name": ""})
@@ -1649,7 +2274,11 @@ if api_mode_enabled:
                     toggle_fav_label = "★ Odebrat z oblíbených" if is_favorite else "☆ Přidat do oblíbených"
                     fav_col_1, fav_col_2 = st.columns([1, 4])
                     with fav_col_1:
-                        if st.button(toggle_fav_label, key=f"toggle_api_favorite_list_{selected_id}"):
+                        if st.button(
+                            toggle_fav_label,
+                            key=f"toggle_api_favorite_list_{selected_id}",
+                            disabled=profile_lock_critical_options,
+                        ):
                             if is_favorite:
                                 favorite_list_ids.discard(selected_id)
                             else:
@@ -1677,11 +2306,14 @@ if api_mode_enabled:
         staging_list_value = st.text_input(
             "Staging seznam ID nebo název (bezpečný/plný režim)",
             key="staging_list_manual",
+            disabled=profile_lock_critical_options,
             help="Doporučeno: použít staging seznam, ne produkční seznam.",
         )
         staging_tag = st.text_input(
             "Staging štítek (volitelný)",
-            value="",
+            value=str(profile_api_saved.get("staging_tag", "")).strip(),
+            key="staging_tag_input",
+            disabled=profile_lock_critical_options,
             placeholder="např. ITF_IMPORT_STAGING",
             help="Některé účty podporují tagy v importních datech.",
         )
@@ -1691,36 +2323,50 @@ if api_mode_enabled:
             "Před importem porovnat připravené kontakty s kontakty v cílovém staging seznamu",
             value=diff_preflight_enabled_default,
             key="diff_preflight_enabled_main",
+            disabled=profile_lock_critical_options,
             help="Načte kontakty ze staging seznamu a vyhodnotí nové / aktualizované / beze změny.",
         )
         diff_send_only_changes = st.checkbox(
             "Odesílat jen nové a změněné kontakty (beze změny přeskočit)",
             value=diff_send_only_changes_default,
             key="diff_send_only_changes_main",
-            disabled=not diff_preflight_enabled,
+            disabled=(not diff_preflight_enabled) or profile_lock_critical_options,
         )
         diff_fallback_send_all_on_error = st.checkbox(
             "Při chybě diff porovnání pokračovat odesláním bez diffu (fallback)",
             value=diff_fallback_send_all_on_error_default,
             key="diff_fallback_send_all_on_error_main",
-            disabled=not diff_preflight_enabled,
+            disabled=(not diff_preflight_enabled) or profile_lock_critical_options,
         )
         skip_blacklisted_contacts = st.checkbox(
             "Přeskočit kontakty, které jsou ve SmartEmailingu na blacklistu",
             value=skip_blacklisted_contacts_default,
             key="skip_blacklisted_contacts_main",
+            disabled=profile_lock_critical_options,
             help="Kontakty s `blacklisted=1` se vyřadí ještě před diffem a importem.",
         )
         clear_removed_program_custom_fields = st.checkbox(
             "Při diffu mazat odebrané kódy aplikací (jen programové custom fields)",
             value=clear_removed_program_custom_fields_default,
             key="clear_removed_program_custom_fields_main",
-            disabled=not diff_preflight_enabled,
+            disabled=(not diff_preflight_enabled) or profile_lock_critical_options,
             help=(
                 "Bezpečnostní režim: maže jen custom fieldy z explicitního allowlistu aplikačních polí. "
                 "Ostatních custom fields se nedotýká."
             ),
         )
+        clear_allowed_prefixes_raw = st.text_input(
+            "Hard-guard: povolené prefixy názvů custom fields pro mazání (odděl čárkou)",
+            value=",".join(clear_allowed_name_prefixes_default),
+            key="clear_allowed_name_prefixes_main",
+            disabled=(not diff_preflight_enabled) or profile_lock_critical_options,
+            help="Volitelné. Pokud vyplníš, mazání se omezí jen na allowlist ID, jejichž název začíná některým prefixem.",
+        )
+        clear_allowed_name_prefixes = [
+            str(x).strip()
+            for x in str(clear_allowed_prefixes_raw).split(",")
+            if str(x).strip()
+        ]
         diff_page_limit = int(
             st.number_input(
                 "Diff: počet kontaktů na stránku při načítání staging seznamu",
@@ -1728,7 +2374,7 @@ if api_mode_enabled:
                 value=max(10, diff_page_limit),
                 step=10,
                 key="diff_page_limit_main",
-                disabled=not diff_preflight_enabled,
+                disabled=(not diff_preflight_enabled) or profile_lock_critical_options,
             )
         )
         diff_max_pages = int(
@@ -1738,7 +2384,7 @@ if api_mode_enabled:
                 value=max(1, diff_max_pages),
                 step=5,
                 key="diff_max_pages_main",
-                disabled=not diff_preflight_enabled,
+                disabled=(not diff_preflight_enabled) or profile_lock_critical_options,
             )
         )
         diff_target_email_batch_size = int(
@@ -1748,7 +2394,7 @@ if api_mode_enabled:
                 value=max(1, diff_target_email_batch_size),
                 step=10,
                 key="diff_target_email_batch_size_main",
-                disabled=not diff_preflight_enabled,
+                disabled=(not diff_preflight_enabled) or profile_lock_critical_options,
             )
         )
         api_read_parallel_workers = int(
@@ -1758,7 +2404,7 @@ if api_mode_enabled:
                 value=max(1, api_read_parallel_workers),
                 step=1,
                 key="api_read_parallel_workers_main",
-                disabled=not diff_preflight_enabled,
+                disabled=(not diff_preflight_enabled) or profile_lock_critical_options,
             )
         )
 
@@ -1780,6 +2426,7 @@ if api_mode_enabled:
                     value=max(1, api_max_contacts_safe),
                     step=100,
                     key="safe_import_limit_main",
+                    disabled=profile_lock_critical_options,
                 )
             )
         with limit_col_full:
@@ -1790,18 +2437,21 @@ if api_mode_enabled:
                     value=max(1, api_max_contacts_full),
                     step=100,
                     key="full_import_limit_main",
+                    disabled=profile_lock_critical_options,
                 )
             )
         auto_create_unknown_program_fields = st.checkbox(
             "Automaticky vytvořit chybějící vlastní pole pro nové kódy aplikací",
             value=auto_create_unknown_program_fields_default,
             key="auto_create_unknown_program_fields_main",
+            disabled=profile_lock_critical_options,
             help=f"Vytvoří nové custom fieldy v SmartEmailingu jako typ '{auto_create_program_field_type}'.",
         )
         auto_add_created_program_fields_to_allowlist = st.checkbox(
             "Automaticky přidat nově vytvořená aplikační pole do allowlistu",
             value=auto_add_created_program_fields_to_allowlist,
             key="auto_add_created_program_fields_to_allowlist_main",
+            disabled=profile_lock_critical_options,
             help="Po vytvoření pole pro nový kód aplikace se jeho custom field ID uloží do allowlistu.",
         )
 
@@ -1844,6 +2494,74 @@ if api_mode_enabled:
                 value="",
                 key="full_import_approval_code_main",
             )
+
+profile_presets_current = load_profile_presets(PROFILE_SETTINGS_PATH)
+profile_settings_to_save = {
+    "ui": {
+        "do_split_emails": bool(do_split_emails),
+        "do_split_names": bool(do_split_names),
+        "do_bucket_country": bool(do_bucket_country),
+        "output_encoding": str(output_encoding).strip() or "cp1250",
+        "dedup_label": str(dedup_label).strip(),
+        "use_cached_schema": bool(use_cached_schema),
+        "use_api_schema": bool(use_api_schema),
+        "refresh_api_schema_on_generate": bool(refresh_api_schema_on_generate),
+        "use_api_cache_on_error": bool(use_api_cache_on_error),
+    },
+    "api": {
+        "execution_mode": str(execution_mode).strip(),
+        "strict_custom_fields": bool(strict_custom_fields),
+        "list_status": str(list_status).strip() or "confirmed",
+        "staging_list_value": str(st.session_state.get("staging_list_manual", "")).strip(),
+        "staging_tag": str(staging_tag).strip(),
+        "canary_size": int(api_canary_size),
+        "batch_size": int(api_batch_size),
+        "max_contacts_safe": int(api_max_contacts_safe),
+        "max_contacts_full": int(api_max_contacts_full),
+        "diff_preflight_enabled": bool(diff_preflight_enabled),
+        "diff_send_only_changes": bool(diff_send_only_changes),
+        "diff_fallback_send_all_on_error": bool(diff_fallback_send_all_on_error),
+        "skip_blacklisted_contacts": bool(skip_blacklisted_contacts),
+        "clear_removed_program_custom_fields_enabled": bool(clear_removed_program_custom_fields),
+        "clear_allowed_name_prefixes": [str(x).strip() for x in clear_allowed_name_prefixes if str(x).strip()],
+        "diff_page_limit": int(diff_page_limit),
+        "diff_max_pages": int(diff_max_pages),
+        "diff_target_email_batch_size": int(diff_target_email_batch_size),
+        "api_read_parallel_workers": int(api_read_parallel_workers),
+        "auto_create_unknown_program_fields": bool(auto_create_unknown_program_fields),
+        "auto_add_created_program_fields_to_allowlist": bool(auto_add_created_program_fields_to_allowlist),
+        "use_profile_system_field_map": bool(profile_use_system_field_map_override),
+        "system_field_map": (
+            dict(api_system_field_map_profile_override)
+            if profile_use_system_field_map_override
+            else {}
+        ),
+        "use_profile_exclude_columns": bool(profile_use_exclude_columns_override),
+        "exclude_columns_from_api_import": (
+            [str(x).strip() for x in profile_exclude_columns_override_values if str(x).strip()]
+            if profile_use_exclude_columns_override
+            else []
+        ),
+    },
+    "safety": {
+        "lock_critical_options": bool(
+            st.session_state.get(
+                "profile_lock_critical_options_main",
+                bool(profile_safety_saved.get("lock_critical_options", False)),
+            )
+        ),
+    },
+}
+try:
+    save_profile_settings(
+        PROFILE_SETTINGS_PATH,
+        settings=profile_settings_to_save,
+        profile_id=active_profile_id,
+        profile_name=active_profile_name,
+        presets=profile_presets_current,
+    )
+except Exception as exc:
+    st.warning(f"Nepodařilo se uložit profilová nastavení: {exc}")
 
 can_load_schema_during_generate = use_api_schema and bool(str(api_username).strip()) and bool(str(api_key).strip())
 api_credentials_ready = bool(str(api_import_username).strip()) and bool(str(api_import_key).strip())
@@ -2440,7 +3158,7 @@ if run_clicked or diff_preview_clicked:
                 import_for_api = import_for_api.drop(columns=exclude_columns_from_api_import, errors="ignore")
             api_contacts, api_issues = build_api_contacts_from_import_df(
                 import_df=import_for_api,
-                api_system_field_map=api_cfg.get("system_field_map", {}),
+                api_system_field_map=api_system_field_map_for_run,
                 custom_fields=custom_fields,
                 list_id=api_resolved_list_id,
                 list_status=list_status,
@@ -2474,9 +3192,18 @@ if run_clicked or diff_preview_clicked:
             summary_metrics["api_diff_removed_nonclearable_custom_fields"] = 0
             summary_metrics["api_diff_status"] = "disabled"
             summary_metrics["api_program_allowlist_total"] = int(len(program_custom_field_allowlist_ids))
+            summary_metrics["api_program_allowlist_hardguard_filtered_out"] = 0
+            summary_metrics["api_program_allowlist_hardguard_prefixes"] = ",".join(
+                [str(x).strip() for x in clear_allowed_name_prefixes if str(x).strip()]
+            )
 
             available_custom_field_ids = {
                 str(field.get("id", "")).strip()
+                for field in custom_fields
+                if str(field.get("id", "")).strip()
+            }
+            custom_field_name_by_id = {
+                str(field.get("id", "")).strip(): str(field.get("name", "")).strip()
                 for field in custom_fields
                 if str(field.get("id", "")).strip()
             }
@@ -2485,6 +3212,28 @@ if run_clicked or diff_preview_clicked:
                 program_custom_field_ids_for_clear = (
                     set(program_custom_field_allowlist_ids) & set(available_custom_field_ids)
                 )
+                hardguard_prefixes = [
+                    str(x).strip().casefold()
+                    for x in clear_allowed_name_prefixes
+                    if str(x).strip()
+                ]
+                if hardguard_prefixes and program_custom_field_ids_for_clear:
+                    before_hardguard = len(program_custom_field_ids_for_clear)
+                    program_custom_field_ids_for_clear = {
+                        field_id
+                        for field_id in program_custom_field_ids_for_clear
+                        if any(
+                            str(custom_field_name_by_id.get(field_id, "")).strip().casefold().startswith(prefix)
+                            for prefix in hardguard_prefixes
+                        )
+                    }
+                    filtered_out = max(0, before_hardguard - len(program_custom_field_ids_for_clear))
+                    summary_metrics["api_program_allowlist_hardguard_filtered_out"] = int(filtered_out)
+                    if filtered_out > 0:
+                        run_status_box.warning(
+                            "Hard-guard pro mazání odfiltroval část allowlistu podle prefixů názvů polí. "
+                            f"Odfiltrováno ID: {filtered_out}."
+                        )
                 missing_allowlist_ids = sorted(
                     set(program_custom_field_allowlist_ids) - set(available_custom_field_ids)
                 )
@@ -3194,6 +3943,10 @@ if run_clicked or diff_preview_clicked:
             "allowlist_aplikacnich_poli_total": summary_metrics.get("api_program_allowlist_total", 0),
             "allowlist_aplikacnich_poli_aktivni": summary_metrics.get("api_program_allowlist_active", 0),
             "allowlist_aplikacnich_poli_chybejici": summary_metrics.get("api_program_allowlist_missing", 0),
+            "allowlist_hardguard_prefixy": summary_metrics.get("api_program_allowlist_hardguard_prefixes", ""),
+            "allowlist_hardguard_odfiltrovano": summary_metrics.get(
+                "api_program_allowlist_hardguard_filtered_out", 0
+            ),
             "blacklist_filtr_zapnut": int(bool(skip_blacklisted_contacts)),
             "blacklist_lookup_status": summary_metrics.get("api_blacklisted_lookup_status", ""),
             "blacklist_nalezeno": summary_metrics.get("api_blacklisted_contacts_found", 0),
@@ -3219,6 +3972,8 @@ if run_clicked or diff_preview_clicked:
             {
                 "mode": execution_mode,
                 "status": api_status if api_mode_enabled else "csv_export_ok",
+                "profile_id": active_profile_id,
+                "profile_name": active_profile_name,
                 "schema_origin": run_schema_origin,
                 "source_files_total": len(source_files),
                 "source_files_processed": processed_files,
@@ -3252,6 +4007,12 @@ if run_clicked or diff_preview_clicked:
                 "api_program_allowlist_total": summary_metrics.get("api_program_allowlist_total", 0),
                 "api_program_allowlist_active": summary_metrics.get("api_program_allowlist_active", 0),
                 "api_program_allowlist_missing": summary_metrics.get("api_program_allowlist_missing", 0),
+                "api_program_allowlist_hardguard_prefixes": summary_metrics.get(
+                    "api_program_allowlist_hardguard_prefixes", ""
+                ),
+                "api_program_allowlist_hardguard_filtered_out": summary_metrics.get(
+                    "api_program_allowlist_hardguard_filtered_out", 0
+                ),
                 "api_skip_blacklisted_contacts_enabled": summary_metrics.get(
                     "api_skip_blacklisted_contacts_enabled", 0
                 ),
@@ -3277,6 +4038,17 @@ with history_action_col:
             st.error(f"Nepodařilo se smazat historii běhů: {exc}")
 
 history_rows = load_job_history(limit=50)
+history_only_active_profile = st.checkbox(
+    "Zobrazit historii jen pro aktivní profil",
+    value=False,
+    key="history_filter_active_profile",
+)
+if history_only_active_profile:
+    history_rows = [
+        row
+        for row in history_rows
+        if str(row.get("profile_id", "")).strip() == str(active_profile_id).strip()
+    ]
 history_alerts = summarize_job_alerts(history_rows)
 if history_alerts["recent_failures"] >= 3:
     st.error("Upozornění: posledních 10 běhů obsahuje 3+ selhání.")
