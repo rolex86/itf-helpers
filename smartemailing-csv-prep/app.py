@@ -230,6 +230,87 @@ def save_api_list_favorites(path: Path, favorite_ids: set[str]) -> None:
         yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
 
 
+def normalize_api_favorite_list_ids(values: Any) -> set[str]:
+    if not isinstance(values, list):
+        return set()
+    return {str(x).strip() for x in values if str(x).strip()}
+
+
+def normalize_api_bucket_favorite_ids_map(values: Any) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {bucket: [] for bucket in COUNTRY_BUCKET_KEYS}
+    if not isinstance(values, dict):
+        return normalized
+    for bucket in COUNTRY_BUCKET_KEYS:
+        raw_values = values.get(bucket, [])
+        if not isinstance(raw_values, list):
+            raw_values = []
+        normalized[bucket] = sorted(
+            {str(x).strip() for x in raw_values if str(x).strip()}
+        )
+    return normalized
+
+
+def load_api_favorite_list_ids_from_preset(preset: dict[str, Any] | None) -> set[str]:
+    if not isinstance(preset, dict):
+        return set()
+    values = preset.get("values", {})
+    if not isinstance(values, dict):
+        return set()
+    return normalize_api_favorite_list_ids(values.get("api_list_favorite_ids", []))
+
+
+def preset_has_api_favorite_list_ids_definition(preset: dict[str, Any] | None) -> bool:
+    if not isinstance(preset, dict):
+        return False
+    values = preset.get("values", {})
+    if not isinstance(values, dict):
+        return False
+    return "api_list_favorite_ids" in values
+
+
+def save_api_favorite_list_ids_to_preset(preset: dict[str, Any], favorite_ids: set[str]) -> None:
+    values = preset.get("values", {})
+    if not isinstance(values, dict):
+        values = {}
+    values["api_list_favorite_ids"] = sorted(
+        {str(x).strip() for x in favorite_ids if str(x).strip()}
+    )
+    preset["values"] = values
+    preset["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def load_api_bucket_favorite_ids_from_preset(preset: dict[str, Any] | None) -> dict[str, list[str]]:
+    if not isinstance(preset, dict):
+        return {bucket: [] for bucket in COUNTRY_BUCKET_KEYS}
+    values = preset.get("values", {})
+    if not isinstance(values, dict):
+        return {bucket: [] for bucket in COUNTRY_BUCKET_KEYS}
+    return normalize_api_bucket_favorite_ids_map(values.get("api_bucket_favorite_list_ids_by_bucket", {}))
+
+
+def preset_has_api_bucket_favorite_ids_definition(preset: dict[str, Any] | None) -> bool:
+    if not isinstance(preset, dict):
+        return False
+    values = preset.get("values", {})
+    if not isinstance(values, dict):
+        return False
+    return "api_bucket_favorite_list_ids_by_bucket" in values
+
+
+def save_api_bucket_favorite_ids_to_preset(
+    preset: dict[str, Any],
+    bucket_favorite_ids: dict[str, list[str]],
+) -> None:
+    values = preset.get("values", {})
+    if not isinstance(values, dict):
+        values = {}
+    values["api_bucket_favorite_list_ids_by_bucket"] = normalize_api_bucket_favorite_ids_map(
+        bucket_favorite_ids
+    )
+    preset["values"] = values
+    preset["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
 def load_program_custom_fields_allowlist(path: Path) -> set[str]:
     if not path.exists():
         return set()
@@ -252,6 +333,41 @@ def save_program_custom_fields_allowlist(path: Path, custom_field_ids: set[str])
     }
     with path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
+
+
+def normalize_allowlist_ids(values: Any) -> set[str]:
+    if not isinstance(values, list):
+        return set()
+    return {str(x).strip() for x in values if str(x).strip()}
+
+
+def load_allowlist_ids_from_preset(preset: dict[str, Any] | None) -> set[str]:
+    if not isinstance(preset, dict):
+        return set()
+    values = preset.get("values", {})
+    if not isinstance(values, dict):
+        return set()
+    return normalize_allowlist_ids(values.get("program_custom_fields_allowlist_ids", []))
+
+
+def preset_has_allowlist_definition(preset: dict[str, Any] | None) -> bool:
+    if not isinstance(preset, dict):
+        return False
+    values = preset.get("values", {})
+    if not isinstance(values, dict):
+        return False
+    return "program_custom_fields_allowlist_ids" in values
+
+
+def save_allowlist_ids_to_preset(preset: dict[str, Any], allowlist_ids: set[str]) -> None:
+    values = preset.get("values", {})
+    if not isinstance(values, dict):
+        values = {}
+    values["program_custom_fields_allowlist_ids"] = sorted(
+        {str(x).strip() for x in allowlist_ids if str(x).strip()}
+    )
+    preset["values"] = values
+    preset["updated_at"] = datetime.now(timezone.utc).isoformat()
 
 
 def build_system_schema_columns(cfg: dict[str, Any]) -> list[str]:
@@ -1126,7 +1242,23 @@ if st.session_state.get("_runtime_active_profile_id", "") != active_profile_id:
 pending_profile_preset_values = st.session_state.pop("pending_profile_preset_values", None)
 if isinstance(pending_profile_preset_values, dict):
     for key, value in pending_profile_preset_values.items():
-        st.session_state[str(key)] = value
+        key_str = str(key)
+        if key_str == "program_custom_fields_allowlist_ids":
+            normalized_ids = sorted(
+                {str(x).strip() for x in (value if isinstance(value, list) else []) if str(x).strip()}
+            )
+            st.session_state[key_str] = normalized_ids
+            st.session_state["program_custom_fields_allowlist_checkbox_seed"] = (
+                int(st.session_state.get("program_custom_fields_allowlist_checkbox_seed", 0)) + 1
+            )
+        elif key_str == "api_list_favorite_ids":
+            st.session_state[key_str] = sorted(
+                normalize_api_favorite_list_ids(value if isinstance(value, list) else [])
+            )
+        elif key_str == "api_bucket_favorite_list_ids_by_bucket":
+            st.session_state[key_str] = normalize_api_bucket_favorite_ids_map(value)
+        else:
+            st.session_state[key_str] = value
     st.session_state["pending_profile_preset_applied_notice"] = True
 
 profile_presets_sidebar = [
@@ -1289,13 +1421,60 @@ with st.sidebar.expander("Profil importu", expanded=False):
         "auto_create_unknown_program_fields_main",
         "auto_add_created_program_fields_to_allowlist_main",
         "profile_lock_critical_options_main",
+        "use_profile_system_field_map_main",
+        "profile_system_field_map_yaml_main",
+        "use_profile_exclude_columns_main",
+        "profile_exclude_columns_text_main",
+        "api_list_favorite_ids",
+        "api_bucket_favorite_list_ids_by_bucket",
+        "program_custom_fields_allowlist_ids",
     ]
 
     def collect_current_preset_values() -> dict[str, Any]:
+        profile_system_map_saved = (
+            profile_api_saved.get("system_field_map", {})
+            if isinstance(profile_api_saved.get("system_field_map", {}), dict)
+            else {}
+        )
+        profile_system_map_clean = {
+            str(k).strip(): str(v).strip()
+            for k, v in profile_system_map_saved.items()
+            if str(k).strip() and str(v).strip()
+        }
+        if not profile_system_map_clean:
+            profile_system_map_cfg_fallback = CFG.get("smartemailing", {}).get("api", {}).get("system_field_map", {})
+            if isinstance(profile_system_map_cfg_fallback, dict):
+                profile_system_map_clean = {
+                    str(k).strip(): str(v).strip()
+                    for k, v in profile_system_map_cfg_fallback.items()
+                    if str(k).strip() and str(v).strip()
+                }
+        profile_system_map_yaml_fallback = yaml.safe_dump(
+            profile_system_map_clean,
+            allow_unicode=True,
+            sort_keys=False,
+        )
+
+        profile_exclude_columns_saved = [
+            str(col).strip()
+            for col in profile_api_saved.get("exclude_columns_from_api_import", [])
+            if str(col).strip()
+        ]
+        profile_exclude_columns_fallback = "\n".join(profile_exclude_columns_saved)
+
+        fallback_values: dict[str, Any] = {
+            "use_profile_system_field_map_main": bool(profile_api_saved.get("use_profile_system_field_map", False)),
+            "profile_system_field_map_yaml_main": profile_system_map_yaml_fallback,
+            "use_profile_exclude_columns_main": bool(profile_api_saved.get("use_profile_exclude_columns", False)),
+            "profile_exclude_columns_text_main": profile_exclude_columns_fallback,
+        }
+
         values: dict[str, Any] = {}
         for tracked_key in tracked_keys:
             if tracked_key in st.session_state:
                 values[tracked_key] = st.session_state.get(tracked_key)
+            elif tracked_key in fallback_values:
+                values[tracked_key] = fallback_values.get(tracked_key)
         return values
 
     if st.session_state.pop("pending_profile_preset_applied_notice", False):
@@ -1422,9 +1601,19 @@ with st.sidebar.expander("Profil importu", expanded=False):
         },
         "payload": load_profile_payload(PROFILE_SETTINGS_PATH),
         "allowlist_custom_field_ids": sorted(
-            load_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
+            {
+                str(x).strip()
+                for x in st.session_state.get("program_custom_fields_allowlist_ids", [])
+                if str(x).strip()
+            }
         ),
-        "favorite_list_ids": sorted(load_api_list_favorites(API_LIST_FAVORITES_PATH)),
+        "favorite_list_ids": sorted(
+            {
+                str(x).strip()
+                for x in st.session_state.get("api_list_favorite_ids", [])
+                if str(x).strip()
+            }
+        ),
     }
     export_profile_yaml = yaml.safe_dump(export_profile_payload, allow_unicode=True, sort_keys=False)
     st.download_button(
@@ -2139,6 +2328,12 @@ diff_fallback_send_all_on_error = diff_fallback_send_all_on_error_default
 skip_blacklisted_contacts = skip_blacklisted_contacts_default
 clear_removed_program_custom_fields = clear_removed_program_custom_fields_default
 clear_allowed_name_prefixes = list(clear_allowed_name_prefixes_default)
+favorites_storage_mode = "profile"
+favorites_active_preset_id = "(žádný)"
+allowlist_storage_mode = "profile"
+allowlist_active_preset_id = "(žádný)"
+active_selected_preset_id = "(žádný)"
+runtime_selected_preset: dict[str, Any] | None = None
 safe_confirm = False
 full_confirm = False
 full_phrase_input = ""
@@ -2154,17 +2349,174 @@ auto_add_created_program_fields_to_allowlist = bool(
 )
 
 if api_mode_enabled:
+    active_selected_preset_id = str(
+        st.session_state.get(
+            "profile_selected_preset_id",
+            str(profile_ui_saved.get("selected_preset_id", "(žádný)")).strip() or "(žádný)",
+        )
+    ).strip() or "(žádný)"
+    runtime_profile_presets = [
+        x for x in load_profile_presets(PROFILE_SETTINGS_PATH) if isinstance(x, dict) and str(x.get("id", "")).strip()
+    ]
+    runtime_selected_preset = next(
+        (x for x in runtime_profile_presets if str(x.get("id", "")).strip() == active_selected_preset_id),
+        None,
+    )
+    if active_selected_preset_id != "(žádný)" and runtime_selected_preset is not None:
+        favorites_storage_mode = "preset"
+        favorites_active_preset_id = active_selected_preset_id
+    else:
+        favorites_storage_mode = "profile"
+        favorites_active_preset_id = "(žádný)"
+
+    disk_favorite_list_ids = load_api_list_favorites(API_LIST_FAVORITES_PATH)
+    preset_favorite_list_ids = load_api_favorite_list_ids_from_preset(runtime_selected_preset)
+    has_preset_favorite_list_ids_definition = preset_has_api_favorite_list_ids_definition(runtime_selected_preset)
+    effective_favorite_list_ids = (
+        set(preset_favorite_list_ids)
+        if favorites_storage_mode == "preset" and has_preset_favorite_list_ids_definition
+        else set(disk_favorite_list_ids)
+    )
+    favorite_list_source_key = (
+        f"{active_profile_id}|{favorites_storage_mode}|{favorites_active_preset_id}|"
+        f"{'preset' if has_preset_favorite_list_ids_definition else 'profile_file'}"
+    )
+
+    preset_bucket_favorite_ids = load_api_bucket_favorite_ids_from_preset(runtime_selected_preset)
+    has_preset_bucket_favorite_ids_definition = preset_has_api_bucket_favorite_ids_definition(runtime_selected_preset)
+    effective_bucket_favorite_ids_by_bucket = (
+        normalize_api_bucket_favorite_ids_map(preset_bucket_favorite_ids)
+        if favorites_storage_mode == "preset" and has_preset_bucket_favorite_ids_definition
+        else normalize_api_bucket_favorite_ids_map(bucket_favorite_list_ids_by_bucket_default)
+    )
+    bucket_favorite_source_key = (
+        f"{active_profile_id}|{favorites_storage_mode}|{favorites_active_preset_id}|"
+        f"{'preset' if has_preset_bucket_favorite_ids_definition else 'profile_settings'}"
+    )
+
+    disk_allowlist_ids = load_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
+    preset_allowlist_ids = load_allowlist_ids_from_preset(runtime_selected_preset)
+    has_preset_allowlist_definition = preset_has_allowlist_definition(runtime_selected_preset)
+    if active_selected_preset_id != "(žádný)" and runtime_selected_preset is not None:
+        allowlist_storage_mode = "preset"
+        allowlist_active_preset_id = active_selected_preset_id
+    else:
+        allowlist_storage_mode = "profile"
+        allowlist_active_preset_id = "(žádný)"
+    effective_allowlist_ids = (
+        set(preset_allowlist_ids)
+        if allowlist_storage_mode == "preset" and has_preset_allowlist_definition
+        else set(disk_allowlist_ids)
+    )
+    allowlist_runtime_source_key = (
+        f"{active_profile_id}|{allowlist_storage_mode}|{allowlist_active_preset_id}|"
+        f"{'preset' if has_preset_allowlist_definition else 'disk'}"
+    )
+
+    preset_values_for_runtime = (
+        runtime_selected_preset.get("values", {})
+        if isinstance(runtime_selected_preset, dict)
+        and isinstance(runtime_selected_preset.get("values", {}), dict)
+        else {}
+    )
+    has_preset_system_map_definition = (
+        "use_profile_system_field_map_main" in preset_values_for_runtime
+        or "profile_system_field_map_yaml_main" in preset_values_for_runtime
+    )
+    profile_system_map_yaml_default = yaml.safe_dump(
+        api_system_field_map_profile_override
+        if api_system_field_map_profile_override
+        else api_system_field_map_cfg,
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    effective_use_profile_system_map = (
+        bool(preset_values_for_runtime.get("use_profile_system_field_map_main", profile_use_system_field_map_override_default))
+        if active_selected_preset_id != "(žádný)"
+        and runtime_selected_preset is not None
+        and has_preset_system_map_definition
+        else bool(profile_use_system_field_map_override_default)
+    )
+    effective_profile_system_map_yaml = (
+        str(preset_values_for_runtime.get("profile_system_field_map_yaml_main", profile_system_map_yaml_default))
+        if active_selected_preset_id != "(žádný)"
+        and runtime_selected_preset is not None
+        and has_preset_system_map_definition
+        else str(profile_system_map_yaml_default)
+    )
+    system_map_runtime_source_key = (
+        f"{active_profile_id}|{active_selected_preset_id}|"
+        f"{'preset' if has_preset_system_map_definition else 'profile'}"
+    )
+
+    has_preset_exclude_columns_definition = (
+        "use_profile_exclude_columns_main" in preset_values_for_runtime
+        or "profile_exclude_columns_text_main" in preset_values_for_runtime
+    )
+    profile_exclude_columns_text_default = "\n".join(
+        profile_exclude_columns_override_values
+        if profile_exclude_columns_override_values
+        else global_exclude_columns_from_api_import
+    )
+    effective_use_profile_exclude_columns = (
+        bool(preset_values_for_runtime.get("use_profile_exclude_columns_main", profile_use_exclude_columns_override_default))
+        if active_selected_preset_id != "(žádný)"
+        and runtime_selected_preset is not None
+        and has_preset_exclude_columns_definition
+        else bool(profile_use_exclude_columns_override_default)
+    )
+    effective_profile_exclude_columns_text = (
+        str(preset_values_for_runtime.get("profile_exclude_columns_text_main", profile_exclude_columns_text_default))
+        if active_selected_preset_id != "(žádný)"
+        and runtime_selected_preset is not None
+        and has_preset_exclude_columns_definition
+        else str(profile_exclude_columns_text_default)
+    )
+    exclude_columns_runtime_source_key = (
+        f"{active_profile_id}|{active_selected_preset_id}|"
+        f"{'preset' if has_preset_exclude_columns_definition else 'profile'}"
+    )
+
     if "api_contact_lists_cache" not in st.session_state:
         st.session_state.api_contact_lists_cache = []
     if "api_list_favorite_ids" not in st.session_state:
-        st.session_state.api_list_favorite_ids = sorted(load_api_list_favorites(API_LIST_FAVORITES_PATH))
+        st.session_state.api_list_favorite_ids = sorted(effective_favorite_list_ids)
+    if str(st.session_state.get("_runtime_favorite_list_source_key", "")).strip() != favorite_list_source_key:
+        st.session_state.api_list_favorite_ids = sorted(effective_favorite_list_ids)
+        st.session_state["_runtime_favorite_list_source_key"] = favorite_list_source_key
     if "api_bucket_favorite_list_ids_by_bucket" not in st.session_state:
-        st.session_state.api_bucket_favorite_list_ids_by_bucket = {
-            bucket: list(bucket_favorite_list_ids_by_bucket_default.get(bucket, []))
-            for bucket in COUNTRY_BUCKET_KEYS
-        }
+        st.session_state.api_bucket_favorite_list_ids_by_bucket = normalize_api_bucket_favorite_ids_map(
+            effective_bucket_favorite_ids_by_bucket
+        )
+    if str(st.session_state.get("_runtime_bucket_favorite_source_key", "")).strip() != bucket_favorite_source_key:
+        st.session_state.api_bucket_favorite_list_ids_by_bucket = normalize_api_bucket_favorite_ids_map(
+            effective_bucket_favorite_ids_by_bucket
+        )
+        st.session_state["_runtime_bucket_favorite_source_key"] = bucket_favorite_source_key
     if "program_custom_fields_allowlist_ids" not in st.session_state:
-        st.session_state.program_custom_fields_allowlist_ids = sorted(program_custom_field_allowlist_ids)
+        st.session_state.program_custom_fields_allowlist_ids = sorted(effective_allowlist_ids)
+    if str(st.session_state.get("_runtime_allowlist_source_key", "")).strip() != allowlist_runtime_source_key:
+        st.session_state.program_custom_fields_allowlist_ids = sorted(effective_allowlist_ids)
+        st.session_state["program_custom_fields_allowlist_checkbox_seed"] = (
+            int(st.session_state.get("program_custom_fields_allowlist_checkbox_seed", 0)) + 1
+        )
+        st.session_state["_runtime_allowlist_source_key"] = allowlist_runtime_source_key
+    if "use_profile_system_field_map_main" not in st.session_state:
+        st.session_state["use_profile_system_field_map_main"] = bool(effective_use_profile_system_map)
+    if "profile_system_field_map_yaml_main" not in st.session_state:
+        st.session_state["profile_system_field_map_yaml_main"] = str(effective_profile_system_map_yaml)
+    if str(st.session_state.get("_runtime_system_map_source_key", "")).strip() != system_map_runtime_source_key:
+        st.session_state["use_profile_system_field_map_main"] = bool(effective_use_profile_system_map)
+        st.session_state["profile_system_field_map_yaml_main"] = str(effective_profile_system_map_yaml)
+        st.session_state["_runtime_system_map_source_key"] = system_map_runtime_source_key
+    if "use_profile_exclude_columns_main" not in st.session_state:
+        st.session_state["use_profile_exclude_columns_main"] = bool(effective_use_profile_exclude_columns)
+    if "profile_exclude_columns_text_main" not in st.session_state:
+        st.session_state["profile_exclude_columns_text_main"] = str(effective_profile_exclude_columns_text)
+    if str(st.session_state.get("_runtime_exclude_columns_source_key", "")).strip() != exclude_columns_runtime_source_key:
+        st.session_state["use_profile_exclude_columns_main"] = bool(effective_use_profile_exclude_columns)
+        st.session_state["profile_exclude_columns_text_main"] = str(effective_profile_exclude_columns_text)
+        st.session_state["_runtime_exclude_columns_source_key"] = exclude_columns_runtime_source_key
     if "program_custom_fields_catalog" not in st.session_state:
         st.session_state.program_custom_fields_catalog = []
     if "program_custom_fields_catalog_meta" not in st.session_state:
@@ -2355,6 +2707,43 @@ if api_mode_enabled:
         st.caption(
             "Bezpečnostní pravidlo: diff/clear odebraných kódů aplikací se aplikuje jen na custom field ID z tohoto seznamu."
         )
+        allowlist_selected_preset_id = str(
+            st.session_state.get("profile_selected_preset_id", "(žádný)")
+        ).strip() or "(žádný)"
+        allowlist_profile_presets = [
+            x for x in load_profile_presets(PROFILE_SETTINGS_PATH) if isinstance(x, dict) and str(x.get("id", "")).strip()
+        ]
+        allowlist_selected_preset = next(
+            (x for x in allowlist_profile_presets if str(x.get("id", "")).strip() == allowlist_selected_preset_id),
+            None,
+        )
+        allowlist_storage_mode = (
+            "preset"
+            if allowlist_selected_preset_id != "(žádný)" and allowlist_selected_preset is not None
+            else "profile"
+        )
+        allowlist_active_preset_id = (
+            allowlist_selected_preset_id if allowlist_storage_mode == "preset" else "(žádný)"
+        )
+        preset_allowlist_ids_now = load_allowlist_ids_from_preset(allowlist_selected_preset)
+        preset_allowlist_defined_now = preset_has_allowlist_definition(allowlist_selected_preset)
+        if allowlist_storage_mode == "preset":
+            if preset_allowlist_defined_now:
+                st.caption(
+                    "Ukládání allowlistu: aktivní preset "
+                    f"`{allowlist_active_preset_id}` (per preset)."
+                )
+            else:
+                st.caption(
+                    "Ukládání allowlistu: aktivní preset "
+                    f"`{allowlist_active_preset_id}` (per preset). "
+                    "Preset zatím nemá vlastní allowlist, aktuálně je použit fallback z profilového souboru."
+                )
+        else:
+            st.caption(
+                "Ukládání allowlistu: per profil "
+                f"(`{PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH}`)."
+            )
         load_program_custom_fields_catalog = st.button(
             "Načíst custom fields z API (pro allowlist)",
             key="load_program_custom_fields_catalog_btn",
@@ -2483,33 +2872,102 @@ if api_mode_enabled:
 
         program_allowlist_cols = st.columns(3)
         with program_allowlist_cols[0]:
-            if st.button("Uložit allowlist na disk", key="save_program_custom_fields_allowlist_btn"):
+            if st.button("Uložit allowlist", key="save_program_custom_fields_allowlist_btn"):
                 try:
                     allowlist_to_save = {
                         str(x).strip()
                         for x in st.session_state.get("program_custom_fields_allowlist_ids", [])
                         if str(x).strip()
                     }
-                    save_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH, allowlist_to_save)
-                    st.success(
-                        f"Allowlist uložen: {len(allowlist_to_save)} položek "
-                        f"(`{PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH}`)"
-                    )
+                    if allowlist_storage_mode == "preset" and allowlist_selected_preset is not None:
+                        selected_idx = next(
+                            (
+                                idx
+                                for idx, item in enumerate(allowlist_profile_presets)
+                                if str(item.get("id", "")).strip() == allowlist_active_preset_id
+                            ),
+                            None,
+                        )
+                        if selected_idx is None:
+                            st.error("Aktivní preset pro allowlist nebyl nalezen.")
+                        else:
+                            save_allowlist_ids_to_preset(
+                                allowlist_profile_presets[selected_idx],
+                                allowlist_to_save,
+                            )
+                            save_profile_presets(
+                                PROFILE_SETTINGS_PATH,
+                                allowlist_profile_presets,
+                                profile_id=active_profile_id,
+                                profile_name=active_profile_name,
+                            )
+                            st.success(
+                                "Allowlist uložen do aktivního presetu: "
+                                f"`{allowlist_active_preset_id}` ({len(allowlist_to_save)} položek)."
+                            )
+                    else:
+                        save_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH, allowlist_to_save)
+                        st.success(
+                            f"Allowlist uložen: {len(allowlist_to_save)} položek "
+                            f"(`{PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH}`)"
+                        )
                 except Exception as exc:
                     st.error(f"Nepodařilo se uložit allowlist: {exc}")
         with program_allowlist_cols[1]:
-            if st.button("Načíst allowlist z disku", key="reload_program_custom_fields_allowlist_btn"):
-                loaded_ids = load_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
+            if st.button("Načíst allowlist", key="reload_program_custom_fields_allowlist_btn"):
+                if allowlist_storage_mode == "preset" and allowlist_selected_preset is not None:
+                    if preset_has_allowlist_definition(allowlist_selected_preset):
+                        loaded_ids = load_allowlist_ids_from_preset(allowlist_selected_preset)
+                    else:
+                        loaded_ids = load_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
+                else:
+                    loaded_ids = load_program_custom_fields_allowlist(PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH)
                 st.session_state.program_custom_fields_allowlist_ids = sorted(loaded_ids)
                 st.session_state["program_custom_fields_allowlist_checkbox_seed"] = (
                     int(st.session_state.get("program_custom_fields_allowlist_checkbox_seed", 0)) + 1
                 )
-                st.success(f"Allowlist načten z disku: {len(loaded_ids)} položek.")
+                if allowlist_storage_mode == "preset" and allowlist_selected_preset is not None:
+                    st.success(
+                        "Allowlist načten pro aktivní preset "
+                        f"`{allowlist_active_preset_id}`: {len(loaded_ids)} položek."
+                    )
+                else:
+                    st.success(f"Allowlist načten z disku: {len(loaded_ids)} položek.")
                 st.rerun()
         with program_allowlist_cols[2]:
-            if st.button("Smazat allowlist z disku", key="delete_program_custom_fields_allowlist_btn"):
+            if st.button("Smazat allowlist", key="delete_program_custom_fields_allowlist_btn"):
                 try:
-                    if PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH.exists():
+                    if allowlist_storage_mode == "preset" and allowlist_selected_preset is not None:
+                        selected_idx = next(
+                            (
+                                idx
+                                for idx, item in enumerate(allowlist_profile_presets)
+                                if str(item.get("id", "")).strip() == allowlist_active_preset_id
+                            ),
+                            None,
+                        )
+                        if selected_idx is None:
+                            st.error("Aktivní preset pro allowlist nebyl nalezen.")
+                        else:
+                            target_preset = allowlist_profile_presets[selected_idx]
+                            preset_values = target_preset.get("values", {})
+                            if not isinstance(preset_values, dict):
+                                preset_values = {}
+                            preset_values["program_custom_fields_allowlist_ids"] = []
+                            target_preset["values"] = preset_values
+                            target_preset["updated_at"] = datetime.now(timezone.utc).isoformat()
+                            save_profile_presets(
+                                PROFILE_SETTINGS_PATH,
+                                allowlist_profile_presets,
+                                profile_id=active_profile_id,
+                                profile_name=active_profile_name,
+                            )
+                            st.session_state.program_custom_fields_allowlist_ids = []
+                            st.success(
+                                "Allowlist v aktivním presetu byl smazán: "
+                                f"`{allowlist_active_preset_id}`."
+                            )
+                    elif PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH.exists():
                         PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH.unlink()
                         st.success(f"Soubor allowlistu smazán: `{PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH}`")
                     else:
@@ -2524,10 +2982,17 @@ if api_mode_enabled:
                 if str(x).strip()
             }
         )
-        st.caption(
-            f"Aktivní allowlist: {current_allowlist_count} custom field ID "
-            f"(`{PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH}`)."
-        )
+        if allowlist_storage_mode == "preset" and allowlist_selected_preset is not None:
+            st.caption(
+                "Aktivní allowlist: "
+                f"{current_allowlist_count} custom field ID "
+                f"(preset `{allowlist_active_preset_id}`)."
+            )
+        else:
+            st.caption(
+                f"Aktivní allowlist: {current_allowlist_count} custom field ID "
+                f"(`{PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH}`)."
+            )
 
     program_custom_field_allowlist_ids = {
         str(x).strip()
@@ -2682,7 +3147,34 @@ if api_mode_enabled:
                                     favorite_list_ids.add(selected_id)
                                 st.session_state["api_list_favorite_ids"] = sorted(favorite_list_ids)
                                 try:
-                                    save_api_list_favorites(API_LIST_FAVORITES_PATH, favorite_list_ids)
+                                    if favorites_storage_mode == "preset" and favorites_active_preset_id != "(žádný)":
+                                        presets_for_save = [
+                                            x
+                                            for x in load_profile_presets(PROFILE_SETTINGS_PATH)
+                                            if isinstance(x, dict) and str(x.get("id", "")).strip()
+                                        ]
+                                        preset_idx = next(
+                                            (
+                                                idx
+                                                for idx, item in enumerate(presets_for_save)
+                                                if str(item.get("id", "")).strip() == favorites_active_preset_id
+                                            ),
+                                            None,
+                                        )
+                                        if preset_idx is None:
+                                            raise RuntimeError("Aktivní preset pro uložení oblíbených seznamů nebyl nalezen.")
+                                        save_api_favorite_list_ids_to_preset(
+                                            presets_for_save[preset_idx],
+                                            favorite_list_ids,
+                                        )
+                                        save_profile_presets(
+                                            PROFILE_SETTINGS_PATH,
+                                            presets_for_save,
+                                            profile_id=active_profile_id,
+                                            profile_name=active_profile_name,
+                                        )
+                                    else:
+                                        save_api_list_favorites(API_LIST_FAVORITES_PATH, favorite_list_ids)
                                 except Exception as exc:
                                     st.error(f"Nepodařilo se uložit oblíbené seznamy: {exc}")
                                 st.rerun()
@@ -2735,11 +3227,51 @@ if api_mode_enabled:
                     str(x).strip() for x in raw_ids if str(x).strip()
                 }
 
-            def _persist_bucket_favorites_state() -> None:
-                st.session_state["api_bucket_favorite_list_ids_by_bucket"] = {
-                    bucket: sorted({str(x).strip() for x in bucket_favorite_ids_by_bucket.get(bucket, set()) if str(x).strip()})
+            def _persist_bucket_favorites_state(persist_to_storage: bool = False) -> None:
+                normalized_bucket_favorites = {
+                    bucket: sorted(
+                        {
+                            str(x).strip()
+                            for x in bucket_favorite_ids_by_bucket.get(bucket, set())
+                            if str(x).strip()
+                        }
+                    )
                     for bucket in COUNTRY_BUCKET_KEYS
                 }
+                st.session_state["api_bucket_favorite_list_ids_by_bucket"] = normalized_bucket_favorites
+                if not persist_to_storage:
+                    return
+                try:
+                    if favorites_storage_mode == "preset" and favorites_active_preset_id != "(žádný)":
+                        presets_for_save = [
+                            x
+                            for x in load_profile_presets(PROFILE_SETTINGS_PATH)
+                            if isinstance(x, dict) and str(x.get("id", "")).strip()
+                        ]
+                        preset_idx = next(
+                            (
+                                idx
+                                for idx, item in enumerate(presets_for_save)
+                                if str(item.get("id", "")).strip() == favorites_active_preset_id
+                            ),
+                            None,
+                        )
+                        if preset_idx is None:
+                            raise RuntimeError(
+                                "Aktivní preset pro uložení bucket oblíbených seznamů nebyl nalezen."
+                            )
+                        save_api_bucket_favorite_ids_to_preset(
+                            presets_for_save[preset_idx],
+                            normalized_bucket_favorites,
+                        )
+                        save_profile_presets(
+                            PROFILE_SETTINGS_PATH,
+                            presets_for_save,
+                            profile_id=active_profile_id,
+                            profile_name=active_profile_name,
+                        )
+                except Exception as exc:
+                    st.error(f"Nepodařilo se uložit bucket oblíbené seznamy: {exc}")
 
             def _bucket_select(bucket_key: str, title: str, session_key: str) -> str:
                 bucket_favorites = set(bucket_favorite_ids_by_bucket.get(bucket_key, set()))
@@ -2808,7 +3340,7 @@ if api_mode_enabled:
                             bucket_favorite_ids_by_bucket[bucket_key].discard(selected_list_id)
                         else:
                             bucket_favorite_ids_by_bucket[bucket_key].add(selected_list_id)
-                        _persist_bucket_favorites_state()
+                        _persist_bucket_favorites_state(persist_to_storage=True)
                         st.rerun()
                 return selected_list_id
 
@@ -3023,6 +3555,36 @@ if api_mode_enabled:
             )
 
 profile_presets_current = load_profile_presets(PROFILE_SETTINGS_PATH)
+if favorites_storage_mode == "preset" and favorites_active_preset_id != "(žádný)":
+    bucket_favorite_list_ids_for_profile_save = normalize_api_bucket_favorite_ids_map(
+        bucket_favorite_list_ids_by_bucket_default
+    )
+else:
+    bucket_favorite_list_ids_for_profile_save = normalize_api_bucket_favorite_ids_map(
+        st.session_state.get("api_bucket_favorite_list_ids_by_bucket", {})
+    )
+if active_selected_preset_id != "(žádný)" and runtime_selected_preset is not None:
+    use_profile_system_field_map_for_profile_save = bool(
+        profile_api_saved.get("use_profile_system_field_map", False)
+    )
+    system_field_map_for_profile_save = dict(api_system_field_map_profile_override)
+    use_profile_exclude_columns_for_profile_save = bool(
+        profile_api_saved.get("use_profile_exclude_columns", False)
+    )
+    exclude_columns_for_profile_save = list(profile_exclude_columns_override_saved)
+else:
+    use_profile_system_field_map_for_profile_save = bool(profile_use_system_field_map_override)
+    system_field_map_for_profile_save = (
+        dict(api_system_field_map_profile_override)
+        if profile_use_system_field_map_override
+        else {}
+    )
+    use_profile_exclude_columns_for_profile_save = bool(profile_use_exclude_columns_override)
+    exclude_columns_for_profile_save = (
+        [str(x).strip() for x in profile_exclude_columns_override_values if str(x).strip()]
+        if profile_use_exclude_columns_override
+        else []
+    )
 profile_settings_to_save = {
     "ui": {
         "do_split_emails": bool(do_split_emails),
@@ -3054,17 +3616,7 @@ profile_settings_to_save = {
             if str(bucket_routing_list_values.get(bucket, "")).strip()
         },
         "bucket_favorite_list_ids": {
-            bucket: sorted(
-                {
-                    str(x).strip()
-                    for x in (
-                        st.session_state.get("api_bucket_favorite_list_ids_by_bucket", {}).get(bucket, [])
-                        if isinstance(st.session_state.get("api_bucket_favorite_list_ids_by_bucket", {}), dict)
-                        else []
-                    )
-                    if str(x).strip()
-                }
-            )
+            bucket: list(bucket_favorite_list_ids_for_profile_save.get(bucket, []))
             for bucket in COUNTRY_BUCKET_KEYS
         },
         "staging_tag": str(staging_tag).strip(),
@@ -3084,18 +3636,10 @@ profile_settings_to_save = {
         "api_read_parallel_workers": int(api_read_parallel_workers),
         "auto_create_unknown_program_fields": bool(auto_create_unknown_program_fields),
         "auto_add_created_program_fields_to_allowlist": bool(auto_add_created_program_fields_to_allowlist),
-        "use_profile_system_field_map": bool(profile_use_system_field_map_override),
-        "system_field_map": (
-            dict(api_system_field_map_profile_override)
-            if profile_use_system_field_map_override
-            else {}
-        ),
-        "use_profile_exclude_columns": bool(profile_use_exclude_columns_override),
-        "exclude_columns_from_api_import": (
-            [str(x).strip() for x in profile_exclude_columns_override_values if str(x).strip()]
-            if profile_use_exclude_columns_override
-            else []
-        ),
+        "use_profile_system_field_map": bool(use_profile_system_field_map_for_profile_save),
+        "system_field_map": dict(system_field_map_for_profile_save),
+        "use_profile_exclude_columns": bool(use_profile_exclude_columns_for_profile_save),
+        "exclude_columns_from_api_import": list(exclude_columns_for_profile_save),
     },
     "safety": {
         "lock_critical_options": bool(
@@ -3834,14 +4378,47 @@ if run_clicked or diff_preview_clicked:
                     int(st.session_state.get("program_custom_fields_allowlist_checkbox_seed", 0)) + 1
                 )
                 try:
-                    save_program_custom_fields_allowlist(
-                        PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH,
-                        updated_allowlist_ids,
-                    )
-                    run_status_box.info(
-                        "Nově vytvořená aplikační pole byla přidána do allowlistu: "
-                        f"{len(created_field_ids)}."
-                    )
+                    if allowlist_storage_mode == "preset" and allowlist_active_preset_id != "(žádný)":
+                        presets_for_save = [
+                            x
+                            for x in load_profile_presets(PROFILE_SETTINGS_PATH)
+                            if isinstance(x, dict) and str(x.get("id", "")).strip()
+                        ]
+                        preset_idx = next(
+                            (
+                                idx
+                                for idx, item in enumerate(presets_for_save)
+                                if str(item.get("id", "")).strip() == allowlist_active_preset_id
+                            ),
+                            None,
+                        )
+                        if preset_idx is None:
+                            raise RuntimeError(
+                                "Aktivní preset pro uložení allowlistu nebyl nalezen."
+                            )
+                        save_allowlist_ids_to_preset(
+                            presets_for_save[preset_idx],
+                            updated_allowlist_ids,
+                        )
+                        save_profile_presets(
+                            PROFILE_SETTINGS_PATH,
+                            presets_for_save,
+                            profile_id=active_profile_id,
+                            profile_name=active_profile_name,
+                        )
+                        run_status_box.info(
+                            "Nově vytvořená aplikační pole byla přidána do allowlistu "
+                            f"aktivního presetu `{allowlist_active_preset_id}`: {len(created_field_ids)}."
+                        )
+                    else:
+                        save_program_custom_fields_allowlist(
+                            PROGRAM_CUSTOM_FIELDS_ALLOWLIST_PATH,
+                            updated_allowlist_ids,
+                        )
+                        run_status_box.info(
+                            "Nově vytvořená aplikační pole byla přidána do allowlistu: "
+                            f"{len(created_field_ids)}."
+                        )
                 except Exception as exc:
                     run_status_box.warning(
                         "Nově vytvořená pole vznikla, ale nepodařilo se uložit allowlist: "
