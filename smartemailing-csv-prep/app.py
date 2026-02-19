@@ -65,7 +65,7 @@ from src.transforms import (
 
 
 st.set_page_config(page_title="SmartEmailing CSV Prep", layout="wide")
-st.title("SmartEmailing CSV Prep – generátor importů (API/CSV)")
+st.title("SmartEmailing – generátor importů (API/CSV)")
 st.markdown(
     """
     <style>
