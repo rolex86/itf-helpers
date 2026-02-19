@@ -1269,12 +1269,17 @@ profile_preset_name_by_id_sidebar = {
     for x in profile_presets_sidebar
 }
 preset_options_sidebar = ["(žádný)"] + [str(x.get("id", "")).strip() for x in profile_presets_sidebar]
+pending_selected_preset_for_sidebar = str(
+    st.session_state.get("profile_selected_preset_id_pending", "")
+).strip()
 selected_preset_for_sidebar = str(
     st.session_state.get(
         "profile_selected_preset_id",
         str(profile_ui_saved.get("selected_preset_id", "(žádný)")).strip() or "(žádný)",
     )
 ).strip() or "(žádný)"
+if pending_selected_preset_for_sidebar and pending_selected_preset_for_sidebar in preset_options_sidebar:
+    selected_preset_for_sidebar = pending_selected_preset_for_sidebar
 if selected_preset_for_sidebar not in preset_options_sidebar:
     selected_preset_for_sidebar = "(žádný)"
 if selected_preset_for_sidebar == "(žádný)":
@@ -1287,6 +1292,74 @@ else:
 st.sidebar.markdown(
     f"**Aktivní profil:** `{active_profile_name}`"
 )
+
+profile_options_sidebar = [item.id for item in profile_items]
+if "quick_active_profile_selectbox" not in st.session_state or str(
+    st.session_state.get("quick_active_profile_selectbox", "")
+).strip() not in profile_options_sidebar:
+    st.session_state["quick_active_profile_selectbox"] = active_profile_id
+if "quick_profile_selected_preset_id" not in st.session_state or str(
+    st.session_state.get("quick_profile_selected_preset_id", "")
+).strip() not in preset_options_sidebar:
+    st.session_state["quick_profile_selected_preset_id"] = selected_preset_for_sidebar
+
+st.sidebar.caption("Rychlá změna bez rozkliknutí konfigurace")
+quick_profile_selected = st.sidebar.selectbox(
+    "Profil",
+    options=profile_options_sidebar,
+    index=(
+        profile_options_sidebar.index(st.session_state.get("quick_active_profile_selectbox", active_profile_id))
+        if profile_options_sidebar and st.session_state.get("quick_active_profile_selectbox", active_profile_id) in profile_options_sidebar
+        else 0
+    ),
+    format_func=lambda profile_id: profile_id_to_name.get(profile_id, profile_id),
+    key="quick_active_profile_selectbox",
+)
+if quick_profile_selected != active_profile_id:
+    profiles_index = set_active_profile(profiles_index, quick_profile_selected)
+    save_profiles_index(PROFILES_INDEX_PATH, profiles_index)
+    st.rerun()
+
+quick_preset_selected = st.sidebar.selectbox(
+    "Preset",
+    options=preset_options_sidebar,
+    format_func=lambda preset_id: (
+        "(žádný)"
+        if preset_id == "(žádný)"
+        else profile_preset_name_by_id_sidebar.get(preset_id, preset_id)
+    ),
+    key="quick_profile_selected_preset_id",
+)
+if quick_preset_selected != selected_preset_for_sidebar:
+    st.session_state["profile_selected_preset_id_pending"] = quick_preset_selected
+    st.rerun()
+
+if st.sidebar.button(
+    "Aplikovat preset",
+    key="quick_apply_profile_preset_btn",
+    disabled=quick_preset_selected == "(žádný)",
+    use_container_width=True,
+):
+    quick_selected_preset = next(
+        (
+            item
+            for item in profile_presets_sidebar
+            if str(item.get("id", "")).strip() == str(quick_preset_selected).strip()
+        ),
+        None,
+    )
+    if quick_selected_preset is None:
+        st.sidebar.error("Vybraný preset nebyl nalezen.")
+    else:
+        preset_values = quick_selected_preset.get("values", {})
+        if isinstance(preset_values, dict):
+            st.session_state["pending_profile_preset_values"] = {
+                str(key): value for key, value in preset_values.items()
+            }
+            st.session_state["profile_selected_preset_id_pending"] = str(quick_preset_selected).strip()
+            st.rerun()
+        else:
+            st.sidebar.error("Preset nemá validní `values`.")
 
 with st.sidebar.expander("Profil importu", expanded=False):
     profile_options = [item.id for item in profile_items]
@@ -3696,6 +3769,8 @@ if "approved_api_import_confirmation_fingerprint" not in st.session_state:
     st.session_state["approved_api_import_confirmation_fingerprint"] = ""
 if "auto_resume_run_after_api_import_confirm" not in st.session_state:
     st.session_state["auto_resume_run_after_api_import_confirm"] = False
+if "safe_import_confirm_latched" not in st.session_state:
+    st.session_state["safe_import_confirm_latched"] = False
 if "diff_preview_rows" not in st.session_state:
     st.session_state["diff_preview_rows"] = []
 if "diff_preview_summary" not in st.session_state:
@@ -4105,14 +4180,20 @@ with run_step_container:
             ),
             help="Spočítá diff proti vybranému staging seznamu a zobrazí prvních 200 řádků nad tlačítky.",
         )
-    if bool(st.session_state.get("auto_resume_run_after_custom_fields_confirm", False)) or bool(
+    auto_resume_requested = bool(st.session_state.get("auto_resume_run_after_custom_fields_confirm", False)) or bool(
         st.session_state.get("auto_resume_run_after_api_import_confirm", False)
-    ):
+    )
+    if auto_resume_requested:
         run_clicked = True
         st.session_state["auto_resume_run_after_custom_fields_confirm"] = False
         st.session_state["auto_resume_run_after_api_import_confirm"] = False
 
 preview_only = diff_preview_clicked and not run_clicked
+safe_confirm_effective = bool(safe_confirm)
+if run_clicked and not preview_only and execution_mode == "api_safe_import":
+    if not auto_resume_requested:
+        st.session_state["safe_import_confirm_latched"] = bool(st.session_state.get("safe_import_confirm_main", False))
+    safe_confirm_effective = bool(st.session_state.get("safe_import_confirm_latched", False))
 
 if run_clicked or diff_preview_clicked:
     clear_run_log_state()
@@ -4135,7 +4216,7 @@ if run_clicked or diff_preview_clicked:
             st.stop()
         run_status_box.info("Načítám diff preview (bez odeslání importu do API).")
 
-    if not preview_only and execution_mode == "api_safe_import" and not safe_confirm:
+    if not preview_only and execution_mode == "api_safe_import" and not safe_confirm_effective:
         run_status_box.error(
             "Bezpečný import nelze spustit: zaškrtni povinné potvrzení "
             "`Rozumím dopadu: bezpečný import běží jen jako přidání/aktualizace, bez mazání.`"
@@ -5255,7 +5336,7 @@ if run_clicked or diff_preview_clicked:
                         f"překračuje limit režimu ({max_contacts_limit})."
                     )
                 elif execution_mode == "api_safe_import":
-                    if not safe_confirm:
+                    if not safe_confirm_effective:
                         block_reason = "Bezpečný import je blokovaný: chybí potvrzení dopadu."
                     elif bucket_routing_enabled and api_missing_bucket_lists_with_data:
                         block_reason = (
