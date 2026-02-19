@@ -537,6 +537,8 @@ def build_import_confirmation_summary(
     diff_removed_program_custom_fields: int | None = None,
     clear_removed_program_custom_fields_enabled: bool = False,
     bucket_routing: dict[str, str] | None = None,
+    staging_list_label: str = "",
+    bucket_routing_labels: dict[str, str] | None = None,
     bucket_contacts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     emails_preview: list[str] = []
@@ -593,9 +595,15 @@ def build_import_confirmation_summary(
         "contacts_total": len(contacts),
         "issues_count": int(issues_count),
         "staging_list_id": str(list_id).strip(),
+        "staging_list_label": str(staging_list_label).strip(),
         "bucket_routing": {
             str(k).strip(): str(v).strip()
             for k, v in (bucket_routing or {}).items()
+            if str(k).strip() and str(v).strip()
+        },
+        "bucket_routing_labels": {
+            str(k).strip(): str(v).strip()
+            for k, v in (bucket_routing_labels or {}).items()
             if str(k).strip() and str(v).strip()
         },
         "bucket_contacts": {
@@ -1259,6 +1267,10 @@ if isinstance(pending_profile_preset_values, dict):
             st.session_state[key_str] = normalize_api_bucket_favorite_ids_map(value)
         else:
             st.session_state[key_str] = value
+        if key_str == "staging_list_manual":
+            # Po aplikaci presetu jednorázově synchronizuj dropdown staging seznamu
+            # podle ID uloženého v presetu (jinak by mohl zůstat starý label z minulého presetu).
+            st.session_state["_sync_staging_select_from_manual_once"] = True
     st.session_state["pending_profile_preset_applied_notice"] = True
 
 profile_presets_sidebar = [
@@ -3251,12 +3263,17 @@ if api_mode_enabled:
                     if current_selected_label != "(ručně)"
                     else ""
                 )
-                if matched_label_for_manual and current_selected_id != manual_selected_id:
-                    st.session_state["staging_list_select"] = matched_label_for_manual
-                elif not matched_label_for_manual and current_selected_label not in list_options:
-                    st.session_state["staging_list_select"] = "(ručně)"
-                elif not manual_selected_id and current_selected_label not in list_options:
-                    st.session_state["staging_list_select"] = "(ručně)"
+                sync_from_manual_once = bool(st.session_state.pop("_sync_staging_select_from_manual_once", False))
+                if sync_from_manual_once:
+                    if matched_label_for_manual:
+                        st.session_state["staging_list_select"] = matched_label_for_manual
+                    else:
+                        st.session_state["staging_list_select"] = "(ručně)"
+                elif current_selected_label not in list_options:
+                    if matched_label_for_manual:
+                        st.session_state["staging_list_select"] = matched_label_for_manual
+                    else:
+                        st.session_state["staging_list_select"] = "(ručně)"
 
                 selected_list_label = st.selectbox(
                     "Vyber staging seznam ze SmartEmailingu",
@@ -4158,10 +4175,16 @@ with run_step_container:
                 metric_col_4.metric("Chyby payloadu", int(pending_import_confirmation.get("issues_count", 0)))
                 with st.expander("Detail potvrzení importu", expanded=False):
                     pending_bucket_routing = pending_import_confirmation.get("bucket_routing", {})
+                    pending_bucket_routing_labels = pending_import_confirmation.get("bucket_routing_labels", {})
                     if isinstance(pending_bucket_routing, dict) and pending_bucket_routing:
                         routing_label = ", ".join(
                             [
-                                f"{bucket}→{str(pending_bucket_routing.get(bucket, '')).strip()}"
+                                (
+                                    f"{bucket}→{str(pending_bucket_routing_labels.get(bucket, '')).strip()}"
+                                    if isinstance(pending_bucket_routing_labels, dict)
+                                    and str(pending_bucket_routing_labels.get(bucket, "")).strip()
+                                    else f"{bucket}→{str(pending_bucket_routing.get(bucket, '')).strip()}"
+                                )
                                 for bucket in COUNTRY_BUCKET_KEYS
                                 if str(pending_bucket_routing.get(bucket, "")).strip()
                             ]
@@ -4172,9 +4195,14 @@ with run_step_container:
                             f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
                         )
                     else:
+                        pending_staging_label = str(pending_import_confirmation.get("staging_list_label", "")).strip()
+                        pending_staging_id = str(pending_import_confirmation.get("staging_list_id", "")).strip()
+                        pending_staging_display = pending_staging_label or (
+                            f"id={pending_staging_id}" if pending_staging_id else "není"
+                        )
                         st.caption(
                             f"Režim: {pending_import_confirmation.get('mode_label', '')} | "
-                            f"Staging list ID: {pending_import_confirmation.get('staging_list_id', '') or 'není'} | "
+                            f"Staging seznam: {pending_staging_display} | "
                             f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
                         )
                     st.caption(
@@ -4677,9 +4705,32 @@ if run_clicked or diff_preview_clicked:
     api_route_details: list[dict[str, Any]] = []
     api_ping = {}
     extra_report_frames: list[pd.DataFrame] = []
+    api_list_name_by_id: dict[str, str] = {}
+
+    def _format_target_list_label(list_id: Any, list_name: Any, list_value: Any = "") -> str:
+        normalized_id = str(list_id).strip()
+        normalized_name = str(list_name).strip()
+        normalized_value = str(list_value).strip()
+        if normalized_name and normalized_id:
+            return f"{normalized_name} (id={normalized_id})"
+        if normalized_name:
+            return normalized_name
+        if normalized_id:
+            return f"id={normalized_id}"
+        if normalized_value:
+            return normalized_value
+        return ""
 
     if api_mode_enabled:
         try:
+            for item in st.session_state.get("api_contact_lists_cache", []):
+                if not isinstance(item, dict):
+                    continue
+                list_id = str(item.get("id", "")).strip()
+                list_name = str(item.get("name", "")).strip()
+                if list_id and list_name and not list_name.casefold().startswith("segment id #"):
+                    api_list_name_by_id[list_id] = list_name
+
             client = SmartEmailingApiClient(
                 SmartEmailingCredentials(
                     username=str(api_import_username).strip(),
@@ -4733,6 +4784,12 @@ if run_clicked or diff_preview_clicked:
                         if route_list_value
                         else ""
                     )
+                    resolved_route_list_name = str(api_list_name_by_id.get(resolved_route_list_id, "")).strip()
+                    resolved_route_label = _format_target_list_label(
+                        resolved_route_list_id,
+                        resolved_route_list_name,
+                        route_list_value,
+                    )
                     route_import_df = raw_df.drop(columns=["__row_order"], errors="ignore")
                     if exclude_columns_from_api_import:
                         route_import_df = route_import_df.drop(columns=exclude_columns_from_api_import, errors="ignore")
@@ -4742,6 +4799,7 @@ if run_clicked or diff_preview_clicked:
                             "route_name": f"bucket:{bucket}",
                             "list_value": route_list_value,
                             "resolved_list_id": resolved_route_list_id,
+                            "resolved_list_label": resolved_route_label,
                             "import_df": route_import_df,
                         }
                     )
@@ -4758,6 +4816,12 @@ if run_clicked or diff_preview_clicked:
                     if str(staging_list_value).strip()
                     else ""
                 )
+                api_resolved_list_name = str(api_list_name_by_id.get(api_resolved_list_id, "")).strip()
+                api_resolved_list_label = _format_target_list_label(
+                    api_resolved_list_id,
+                    api_resolved_list_name,
+                    staging_list_value,
+                )
                 import_for_api = final_import_df.drop(
                     columns=["country_bucket", "__row_order", "__source_file", "__source_row_index"],
                     errors="ignore",
@@ -4770,6 +4834,7 @@ if run_clicked or diff_preview_clicked:
                         "route_name": "single",
                         "list_value": str(staging_list_value).strip(),
                         "resolved_list_id": api_resolved_list_id,
+                        "resolved_list_label": api_resolved_list_label,
                         "import_df": import_for_api,
                     }
                 )
@@ -5485,6 +5550,27 @@ if run_clicked or diff_preview_clicked:
                             st.session_state.get("approved_api_import_confirmation_fingerprint", "")
                         ).strip()
                         if approved_import_fingerprint != import_confirmation_fingerprint:
+                            api_bucket_routing_labels_for_summary = {
+                                str(route.get("bucket", "")).strip() or "ALL": str(
+                                    route.get("resolved_list_label", "")
+                                ).strip()
+                                for route in api_route_details
+                                if str(route.get("bucket", "")).strip() in COUNTRY_BUCKET_KEYS
+                                and str(route.get("resolved_list_label", "")).strip()
+                            }
+                            api_staging_list_label_for_summary = ""
+                            if not bucket_routing_enabled:
+                                first_route_single = next(
+                                    (
+                                        route
+                                        for route in api_route_details
+                                        if (str(route.get("bucket", "")).strip() or "ALL") == "ALL"
+                                    ),
+                                    {},
+                                )
+                                api_staging_list_label_for_summary = str(
+                                    first_route_single.get("resolved_list_label", "")
+                                ).strip()
                             st.session_state["pending_api_import_confirmation"] = build_import_confirmation_summary(
                                 execution_mode=execution_mode,
                                 list_id=api_resolved_list_id,
@@ -5530,6 +5616,10 @@ if run_clicked or diff_preview_clicked:
                                     }
                                     if bucket_routing_enabled
                                     else {}
+                                ),
+                                staging_list_label=api_staging_list_label_for_summary,
+                                bucket_routing_labels=(
+                                    api_bucket_routing_labels_for_summary if bucket_routing_enabled else {}
                                 ),
                                 bucket_contacts=(
                                     {
