@@ -1540,6 +1540,7 @@ with st.sidebar.expander("Profil importu", expanded=False):
             "profile_system_field_map_yaml_main": profile_system_map_yaml_fallback,
             "use_profile_exclude_columns_main": bool(profile_api_saved.get("use_profile_exclude_columns", False)),
             "profile_exclude_columns_text_main": profile_exclude_columns_fallback,
+            "staging_list_manual": str(profile_api_saved.get("staging_list_value", "")).strip(),
         }
 
         values: dict[str, Any] = {}
@@ -3146,6 +3147,44 @@ if api_mode_enabled:
         label_to_list: dict[str, dict[str, str]] = {}
         labels: list[str] = []
         list_options = ["(ručně)"]
+
+        def _persist_staging_list_to_active_preset(list_id: str) -> None:
+            target_list_id = str(list_id).strip()
+            if active_selected_preset_id == "(žádný)" or runtime_selected_preset is None:
+                return
+            try:
+                presets_for_save = [
+                    x
+                    for x in load_profile_presets(PROFILE_SETTINGS_PATH)
+                    if isinstance(x, dict) and str(x.get("id", "")).strip()
+                ]
+                preset_idx = next(
+                    (
+                        idx
+                        for idx, item in enumerate(presets_for_save)
+                        if str(item.get("id", "")).strip() == str(active_selected_preset_id).strip()
+                    ),
+                    None,
+                )
+                if preset_idx is None:
+                    return
+                preset_values = presets_for_save[preset_idx].get("values", {})
+                if not isinstance(preset_values, dict):
+                    preset_values = {}
+                if str(preset_values.get("staging_list_manual", "")).strip() == target_list_id:
+                    return
+                preset_values["staging_list_manual"] = target_list_id
+                presets_for_save[preset_idx]["values"] = preset_values
+                presets_for_save[preset_idx]["updated_at"] = datetime.now(timezone.utc).isoformat()
+                save_profile_presets(
+                    PROFILE_SETTINGS_PATH,
+                    presets_for_save,
+                    profile_id=active_profile_id,
+                    profile_name=active_profile_name,
+                )
+            except Exception as exc:
+                st.warning(f"Nepodařilo se uložit staging seznam do aktivního presetu: {exc}")
+
         if lists_cache_for_staging:
             def _list_sort_tuple(item: dict[str, Any]) -> tuple[int, int, int, str]:
                 raw_id = str(item.get("id", "")).strip()
@@ -3188,10 +3227,33 @@ if api_mode_enabled:
                                 if selected_label_with_id in ["(ručně)"] + labels:
                                     st.session_state["staging_list_select"] = selected_label_with_id
                                 st.session_state["staging_list_manual"] = list_id
+                                _persist_staging_list_to_active_preset(list_id)
                                 st.rerun()
 
-                if st.session_state.get("staging_list_select") not in list_options:
+                manual_selected_id = str(st.session_state.get("staging_list_manual", "")).strip()
+                current_selected_label = str(st.session_state.get("staging_list_select", "(ručně)")).strip() or "(ručně)"
+                matched_label_for_manual = ""
+                if manual_selected_id:
+                    matched_label_for_manual = next(
+                        (
+                            label
+                            for label, meta in label_to_list.items()
+                            if str(meta.get("id", "")).strip() == manual_selected_id
+                        ),
+                        "",
+                    )
+                current_selected_id = (
+                    str(label_to_list.get(current_selected_label, {}).get("id", "")).strip()
+                    if current_selected_label != "(ručně)"
+                    else ""
+                )
+                if matched_label_for_manual and current_selected_id != manual_selected_id:
+                    st.session_state["staging_list_select"] = matched_label_for_manual
+                elif not matched_label_for_manual and current_selected_label not in list_options:
                     st.session_state["staging_list_select"] = "(ručně)"
+                elif not manual_selected_id and current_selected_label not in list_options:
+                    st.session_state["staging_list_select"] = "(ručně)"
+
                 selected_list_label = st.selectbox(
                     "Vyber staging seznam ze SmartEmailingu",
                     options=list_options,
@@ -3204,6 +3266,7 @@ if api_mode_enabled:
                     selected_name = str(selected.get("name", "")).strip()
                     if selected_id:
                         st.session_state["staging_list_manual"] = selected_id
+                        _persist_staging_list_to_active_preset(selected_id)
                         st.caption(f"Vybraný staging seznam: `{selected_name}` (id `{selected_id}`)")
                         is_favorite = selected_id in favorite_list_ids
                         toggle_fav_label = "★ Odebrat z oblíbených" if is_favorite else "☆ Přidat do oblíbených"
@@ -3274,6 +3337,7 @@ if api_mode_enabled:
                     disabled=profile_lock_critical_options,
                     help="Doporučeno: použít staging seznam, ne produkční seznam.",
                 )
+                _persist_staging_list_to_active_preset(staging_list_value)
             with staging_tag_col:
                 staging_tag = st.text_input(
                     "Staging štítek (volitelný)",
@@ -3848,126 +3912,16 @@ with run_step_container:
         st.session_state.pop("diff_preview_editor", None)
     pending_fields = [str(x).strip() for x in st.session_state.get("pending_custom_fields_to_create", []) if str(x).strip()]
     pending_fingerprint = str(st.session_state.get("pending_custom_fields_fingerprint", "")).strip()
-    if pending_fields and pending_fingerprint:
-        st.warning(
-            "Běh čeká na potvrzení vytvoření nových vlastních polí ve SmartEmailingu. "
-            "Zkontroluj seznam níže a potvrď pokračování."
-        )
-        st.code("\n".join([f"- {x}" for x in pending_fields]), language="text")
-        confirm_col, cancel_col = st.columns(2)
-        with confirm_col:
-            if st.button("Potvrdit vytvoření a pokračovat", key="confirm_custom_fields_create"):
-                st.session_state["approved_custom_fields_fingerprint"] = pending_fingerprint
-                st.session_state["auto_resume_run_after_custom_fields_confirm"] = True
-                st.session_state["pending_custom_fields_to_create"] = []
-                st.session_state["pending_custom_fields_fingerprint"] = ""
-                st.rerun()
-        with cancel_col:
-            if st.button("Zrušit vytvoření polí", key="cancel_custom_fields_create"):
-                st.session_state["approved_custom_fields_fingerprint"] = ""
-                st.session_state["auto_resume_run_after_custom_fields_confirm"] = False
-                st.session_state["pending_custom_fields_to_create"] = []
-                st.session_state["pending_custom_fields_fingerprint"] = ""
-                run_status_box.warning("Vytvoření nových vlastních polí bylo zrušeno.")
+    pending_custom_fields_action = bool(pending_fields and pending_fingerprint)
 
     pending_import_confirmation = st.session_state.get("pending_api_import_confirmation", {})
     pending_import_fingerprint = str(st.session_state.get("pending_api_import_confirmation_fingerprint", "")).strip()
-    if (
+    pending_api_import_action = bool(
         execution_mode in {"api_safe_import", "api_full_import"}
         and isinstance(pending_import_confirmation, dict)
         and pending_import_confirmation
         and pending_import_fingerprint
-    ):
-        st.warning(
-            "Běh čeká na potvrzení odeslání importu do SmartEmailingu API. "
-            "Zkontroluj souhrn a potvrď pokračování."
-        )
-        metric_col_1, metric_col_2, metric_col_3, metric_col_4 = st.columns(4)
-        metric_col_1.metric("Kontakty k odeslání", int(pending_import_confirmation.get("contacts_total", 0)))
-        metric_col_2.metric("Kontakty s custom fields", int(pending_import_confirmation.get("contacts_with_custom_fields", 0)))
-        metric_col_3.metric("Kontakty se seznamem", int(pending_import_confirmation.get("contacts_with_list_assignment", 0)))
-        metric_col_4.metric("Chyby payloadu", int(pending_import_confirmation.get("issues_count", 0)))
-        pending_bucket_routing = pending_import_confirmation.get("bucket_routing", {})
-        if isinstance(pending_bucket_routing, dict) and pending_bucket_routing:
-            routing_label = ", ".join(
-                [
-                    f"{bucket}→{str(pending_bucket_routing.get(bucket, '')).strip()}"
-                    for bucket in COUNTRY_BUCKET_KEYS
-                    if str(pending_bucket_routing.get(bucket, "")).strip()
-                ]
-            )
-            st.caption(
-                f"Režim: {pending_import_confirmation.get('mode_label', '')} | "
-                f"Bucket routing: {routing_label or 'není'} | "
-                f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
-            )
-        else:
-            st.caption(
-                f"Režim: {pending_import_confirmation.get('mode_label', '')} | "
-                f"Staging list ID: {pending_import_confirmation.get('staging_list_id', '') or 'není'} | "
-                f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
-            )
-        st.caption(
-            f"Canary dávka: {pending_import_confirmation.get('canary_size', 0)} | "
-            f"Velikost dávky: {pending_import_confirmation.get('batch_size', 0)} | "
-            f"Limit režimu: {pending_import_confirmation.get('max_contacts_limit', 0)}"
-        )
-        if bool(pending_import_confirmation.get("diff_available", False)):
-            st.caption(
-                "Diff porovnání: "
-                f"existující={int(pending_import_confirmation.get('diff_existing_contacts', 0))}, "
-                f"nové={int(pending_import_confirmation.get('diff_new_contacts', 0))}, "
-                f"aktualizace={int(pending_import_confirmation.get('diff_updated_contacts', 0))}, "
-                f"beze změny={int(pending_import_confirmation.get('diff_unchanged_contacts', 0))}."
-            )
-            pending_bucket_contacts = pending_import_confirmation.get("bucket_contacts", {})
-            if isinstance(pending_bucket_contacts, dict) and pending_bucket_contacts:
-                bucket_counts = ", ".join(
-                    [
-                        f"{bucket}={int(pending_bucket_contacts.get(bucket, 0) or 0)}"
-                        for bucket in COUNTRY_BUCKET_KEYS
-                    ]
-                )
-                st.caption(f"Kontakty po bucketech: {bucket_counts}.")
-            if bool(pending_import_confirmation.get("clear_removed_program_custom_fields_enabled", False)):
-                st.caption(
-                    "Čištění odebraných kódů aplikací: "
-                    f"{int(pending_import_confirmation.get('diff_removed_program_custom_fields', 0))} změn."
-                )
-        payload_system_fields = [
-            str(x).strip()
-            for x in pending_import_confirmation.get("payload_system_fields", [])
-            if str(x).strip()
-        ]
-        if payload_system_fields:
-            st.caption(
-                "Systémová pole v payloadu: "
-                + ", ".join(payload_system_fields[:12])
-                + (" ..." if len(payload_system_fields) > 12 else "")
-            )
-        emails_preview = [
-            str(x).strip()
-            for x in pending_import_confirmation.get("emails_preview", [])
-            if str(x).strip()
-        ]
-        if emails_preview:
-            st.code("\n".join([f"- {x}" for x in emails_preview]), language="text")
-        st.info(str(pending_import_confirmation.get("new_vs_update_note", "")).strip())
-        confirm_import_col, cancel_import_col = st.columns(2)
-        with confirm_import_col:
-            if st.button("Potvrdit API import a pokračovat", key="confirm_api_import_send"):
-                st.session_state["approved_api_import_confirmation_fingerprint"] = pending_import_fingerprint
-                st.session_state["auto_resume_run_after_api_import_confirm"] = True
-                st.session_state["pending_api_import_confirmation"] = {}
-                st.session_state["pending_api_import_confirmation_fingerprint"] = ""
-                st.rerun()
-        with cancel_import_col:
-            if st.button("Zrušit API import", key="cancel_api_import_send"):
-                st.session_state["approved_api_import_confirmation_fingerprint"] = ""
-                st.session_state["auto_resume_run_after_api_import_confirm"] = False
-                st.session_state["pending_api_import_confirmation"] = {}
-                st.session_state["pending_api_import_confirmation_fingerprint"] = ""
-                run_status_box.warning("API import byl zrušen před odesláním.")
+    )
 
     preview_summary = st.session_state.get("diff_preview_summary", {})
     preview_rows = st.session_state.get("diff_preview_rows", [])
@@ -4159,6 +4113,120 @@ with run_step_container:
                         "(typicky nové kontakty nebo fallback bez detailních field diffů)."
                     )
 
+    auto_resume_requested = bool(st.session_state.get("auto_resume_run_after_custom_fields_confirm", False)) or bool(
+        st.session_state.get("auto_resume_run_after_api_import_confirm", False)
+    )
+    blocking_action_active = bool(pending_custom_fields_action or pending_api_import_action)
+
+    if blocking_action_active:
+        with st.container(border=True):
+            st.markdown("#### Čekající akce")
+            if pending_custom_fields_action:
+                st.warning(
+                    "Před pokračováním potvrď vytvoření nových vlastních polí ve SmartEmailingu."
+                )
+                st.caption(f"Nová pole k vytvoření: {len(pending_fields)}")
+                with st.expander("Seznam nových polí", expanded=False):
+                    st.code("\n".join([f"- {x}" for x in pending_fields]), language="text")
+                confirm_col, cancel_col = st.columns(2)
+                with confirm_col:
+                    if st.button("Potvrdit vytvoření a pokračovat", key="confirm_custom_fields_create"):
+                        st.session_state["approved_custom_fields_fingerprint"] = pending_fingerprint
+                        st.session_state["auto_resume_run_after_custom_fields_confirm"] = True
+                        st.session_state["pending_custom_fields_to_create"] = []
+                        st.session_state["pending_custom_fields_fingerprint"] = ""
+                        st.rerun()
+                with cancel_col:
+                    if st.button("Zrušit vytvoření polí", key="cancel_custom_fields_create"):
+                        st.session_state["approved_custom_fields_fingerprint"] = ""
+                        st.session_state["auto_resume_run_after_custom_fields_confirm"] = False
+                        st.session_state["pending_custom_fields_to_create"] = []
+                        st.session_state["pending_custom_fields_fingerprint"] = ""
+                        run_status_box.warning("Vytvoření nových vlastních polí bylo zrušeno.")
+            elif pending_api_import_action:
+                st.warning(
+                    "Import čeká na finální potvrzení odeslání do SmartEmailingu API."
+                )
+                metric_col_1, metric_col_2, metric_col_3, metric_col_4 = st.columns(4)
+                metric_col_1.metric("Kontakty k odeslání", int(pending_import_confirmation.get("contacts_total", 0)))
+                metric_col_2.metric("S custom fields", int(pending_import_confirmation.get("contacts_with_custom_fields", 0)))
+                metric_col_3.metric("Se seznamem", int(pending_import_confirmation.get("contacts_with_list_assignment", 0)))
+                metric_col_4.metric("Chyby payloadu", int(pending_import_confirmation.get("issues_count", 0)))
+                with st.expander("Detail potvrzení importu", expanded=False):
+                    pending_bucket_routing = pending_import_confirmation.get("bucket_routing", {})
+                    if isinstance(pending_bucket_routing, dict) and pending_bucket_routing:
+                        routing_label = ", ".join(
+                            [
+                                f"{bucket}→{str(pending_bucket_routing.get(bucket, '')).strip()}"
+                                for bucket in COUNTRY_BUCKET_KEYS
+                                if str(pending_bucket_routing.get(bucket, "")).strip()
+                            ]
+                        )
+                        st.caption(
+                            f"Režim: {pending_import_confirmation.get('mode_label', '')} | "
+                            f"Bucket routing: {routing_label or 'není'} | "
+                            f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
+                        )
+                    else:
+                        st.caption(
+                            f"Režim: {pending_import_confirmation.get('mode_label', '')} | "
+                            f"Staging list ID: {pending_import_confirmation.get('staging_list_id', '') or 'není'} | "
+                            f"Staging tag: {pending_import_confirmation.get('staging_tag', '') or 'není'}"
+                        )
+                    st.caption(
+                        f"Canary dávka: {pending_import_confirmation.get('canary_size', 0)} | "
+                        f"Velikost dávky: {pending_import_confirmation.get('batch_size', 0)} | "
+                        f"Limit režimu: {pending_import_confirmation.get('max_contacts_limit', 0)}"
+                    )
+                    if bool(pending_import_confirmation.get("diff_available", False)):
+                        st.caption(
+                            "Diff porovnání: "
+                            f"existující={int(pending_import_confirmation.get('diff_existing_contacts', 0))}, "
+                            f"nové={int(pending_import_confirmation.get('diff_new_contacts', 0))}, "
+                            f"aktualizace={int(pending_import_confirmation.get('diff_updated_contacts', 0))}, "
+                            f"beze změny={int(pending_import_confirmation.get('diff_unchanged_contacts', 0))}."
+                        )
+                    payload_system_fields = [
+                        str(x).strip()
+                        for x in pending_import_confirmation.get("payload_system_fields", [])
+                        if str(x).strip()
+                    ]
+                    if payload_system_fields:
+                        st.caption(
+                            "Systémová pole v payloadu: "
+                            + ", ".join(payload_system_fields[:12])
+                            + (" ..." if len(payload_system_fields) > 12 else "")
+                        )
+                    emails_preview = [
+                        str(x).strip()
+                        for x in pending_import_confirmation.get("emails_preview", [])
+                        if str(x).strip()
+                    ]
+                    if emails_preview:
+                        st.code("\n".join([f"- {x}" for x in emails_preview]), language="text")
+                    note = str(pending_import_confirmation.get("new_vs_update_note", "")).strip()
+                    if note:
+                        st.info(note)
+                confirm_import_col, cancel_import_col = st.columns(2)
+                with confirm_import_col:
+                    if st.button(
+                        "Potvrdit API import a pokračovat",
+                        key="confirm_api_import_send",
+                        type="primary",
+                    ):
+                        st.session_state["approved_api_import_confirmation_fingerprint"] = pending_import_fingerprint
+                        st.session_state["auto_resume_run_after_api_import_confirm"] = True
+                        st.session_state["pending_api_import_confirmation"] = {}
+                        st.session_state["pending_api_import_confirmation_fingerprint"] = ""
+                        st.rerun()
+                with cancel_import_col:
+                    if st.button("Zrušit API import", key="cancel_api_import_send"):
+                        st.session_state["approved_api_import_confirmation_fingerprint"] = ""
+                        st.session_state["auto_resume_run_after_api_import_confirm"] = False
+                        st.session_state["pending_api_import_confirmation"] = {}
+                        st.session_state["pending_api_import_confirmation_fingerprint"] = ""
+                        run_status_box.warning("API import byl zrušen před odesláním.")
+
     if execution_mode == "api_safe_import":
         safe_confirm = st.checkbox(
             "Rozumím dopadu: bezpečný import běží jen jako přidání/aktualizace, bez mazání.",
@@ -4166,23 +4234,22 @@ with run_step_container:
             key="safe_import_confirm_main",
         )
 
+    run_controls_disabled = bool(generate_disabled or (blocking_action_active and not auto_resume_requested))
     diff_preview_clicked = False
     run_button_col, preview_button_col = st.columns(2)
     with run_button_col:
-        run_clicked = st.button("Spustit zpracování", type="primary", disabled=generate_disabled)
+        run_clicked = st.button("Spustit zpracování", type="primary", disabled=run_controls_disabled)
     with preview_button_col:
         diff_preview_clicked = st.button(
             "Načíst diff preview (bez importu)",
             disabled=(
-                generate_disabled
+                run_controls_disabled
                 or execution_mode not in {"api_safe_import", "api_full_import"}
                 or not diff_preflight_enabled
             ),
             help="Spočítá diff proti vybranému staging seznamu a zobrazí prvních 200 řádků nad tlačítky.",
         )
-    auto_resume_requested = bool(st.session_state.get("auto_resume_run_after_custom_fields_confirm", False)) or bool(
-        st.session_state.get("auto_resume_run_after_api_import_confirm", False)
-    )
+
     if auto_resume_requested:
         run_clicked = True
         st.session_state["auto_resume_run_after_custom_fields_confirm"] = False
@@ -5856,6 +5923,16 @@ if run_clicked or diff_preview_clicked:
                 "status": api_status if api_mode_enabled else "csv_export_ok",
                 "profile_id": active_profile_id,
                 "profile_name": active_profile_name,
+                "preset_id": (
+                    str(active_selected_preset_id).strip()
+                    if str(active_selected_preset_id).strip() not in {"", "(žádný)"}
+                    else ""
+                ),
+                "preset_name": (
+                    str(runtime_selected_preset.get("name", "")).strip()
+                    if isinstance(runtime_selected_preset, dict)
+                    else ""
+                ),
                 "schema_origin": run_schema_origin,
                 "source_files_total": len(source_files),
                 "source_files_processed": processed_files,
@@ -5940,6 +6017,28 @@ else:
     st.caption("Historie běhů bez kritického alertu.")
 
 if history_rows:
-    st.dataframe(to_streamlit_safe_dataframe(pd.DataFrame(history_rows)), use_container_width=True)
+    history_df = pd.DataFrame(history_rows)
+    if not history_df.empty:
+        preset_name_series = history_df.get("preset_name", pd.Series(index=history_df.index, dtype="object")).fillna("")
+        preset_id_series = history_df.get("preset_id", pd.Series(index=history_df.index, dtype="object")).fillna("")
+        preset_display = preset_name_series.astype(str).str.strip()
+        needs_fallback = preset_display == ""
+        preset_display.loc[needs_fallback] = (
+            preset_id_series.astype(str).str.strip().replace({"(žádný)": "", "none": "", "None": ""})
+        ).loc[needs_fallback]
+        needs_fallback = preset_display == ""
+        preset_display.loc[needs_fallback] = "(žádný)"
+
+        if "profile_id" in history_df.columns:
+            profile_idx = list(history_df.columns).index("profile_id")
+            history_df.insert(profile_idx, "preset", preset_display)
+            history_df = history_df.drop(columns=["profile_id"])
+        elif "preset" not in history_df.columns:
+            history_df.insert(0, "preset", preset_display)
+
+        drop_tech_cols = [col for col in ["preset_id", "preset_name"] if col in history_df.columns]
+        if drop_tech_cols:
+            history_df = history_df.drop(columns=drop_tech_cols)
+    st.dataframe(to_streamlit_safe_dataframe(history_df), use_container_width=True)
 else:
     st.caption("Historie běhů je zatím prázdná.")
