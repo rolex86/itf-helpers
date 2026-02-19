@@ -1330,36 +1330,40 @@ quick_preset_selected = st.sidebar.selectbox(
     ),
     key="quick_profile_selected_preset_id",
 )
-if quick_preset_selected != selected_preset_for_sidebar:
-    st.session_state["profile_selected_preset_id_pending"] = quick_preset_selected
-    st.rerun()
 
-if st.sidebar.button(
-    "Aplikovat preset",
-    key="quick_apply_profile_preset_btn",
-    disabled=quick_preset_selected == "(žádný)",
-    use_container_width=True,
-):
-    quick_selected_preset = next(
+def _apply_sidebar_preset(selected_preset_id_value: str) -> bool:
+    preset_id_value = str(selected_preset_id_value).strip() or "(žádný)"
+    if preset_id_value == "(žádný)":
+        st.session_state["profile_selected_preset_id_pending"] = "(žádný)"
+        return True
+
+    selected_preset_item = next(
         (
             item
             for item in profile_presets_sidebar
-            if str(item.get("id", "")).strip() == str(quick_preset_selected).strip()
+            if str(item.get("id", "")).strip() == preset_id_value
         ),
         None,
     )
-    if quick_selected_preset is None:
+    if selected_preset_item is None:
         st.sidebar.error("Vybraný preset nebyl nalezen.")
-    else:
-        preset_values = quick_selected_preset.get("values", {})
-        if isinstance(preset_values, dict):
-            st.session_state["pending_profile_preset_values"] = {
-                str(key): value for key, value in preset_values.items()
-            }
-            st.session_state["profile_selected_preset_id_pending"] = str(quick_preset_selected).strip()
-            st.rerun()
-        else:
-            st.sidebar.error("Preset nemá validní `values`.")
+        return False
+
+    preset_values = selected_preset_item.get("values", {})
+    if not isinstance(preset_values, dict):
+        st.sidebar.error("Preset nemá validní `values`.")
+        return False
+
+    st.session_state["pending_profile_preset_values"] = {
+        str(key): value for key, value in preset_values.items()
+    }
+    st.session_state["profile_selected_preset_id_pending"] = preset_id_value
+    return True
+
+
+if quick_preset_selected != selected_preset_for_sidebar:
+    if _apply_sidebar_preset(quick_preset_selected):
+        st.rerun()
 
 with st.sidebar.expander("Profil importu", expanded=False):
     profile_options = [item.id for item in profile_items]
