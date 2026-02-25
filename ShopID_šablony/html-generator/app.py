@@ -742,16 +742,19 @@ with tab_editor:
 
     n = st.session_state.editor_nonce
 
+    # Tyto přepínače jsou mimo form, aby se média překreslila hned po kliknutí.
+    media_toggles = st.columns([1, 1], gap="large")
+    with media_toggles[0]:
+        st.toggle("Zobrazit video", value=bool(m.has_video), key=f"tg_has_video_{n}")
+    with media_toggles[1]:
+        st.toggle("Zobrazit 3D / spin", value=bool(m.has_spin), key=f"tg_has_spin_{n}")
+
+    has_video = bool(st.session_state.get(f"tg_has_video_{n}", bool(m.has_video)))
+    has_spin = bool(st.session_state.get(f"tg_has_spin_{n}", bool(m.has_spin)))
+
     # FORM = žádné reruny při přechodu mezi buňkami v data_editoru
     with st.form(key=f"form_editor_{n}", clear_on_submit=False):
-
-        top = st.columns([1, 1, 1], gap="large")
-        with top[0]:
-            lang_editor = _lang_picker("Jazyk", key=f"lang_editor_{n}", default=(m.language or "cs"))
-        with top[1]:
-            has_video = st.toggle("Zobrazit video", value=bool(m.has_video), key=f"tg_has_video_{n}")
-        with top[2]:
-            has_spin = st.toggle("Zobrazit 3D / spin", value=bool(m.has_spin), key=f"tg_has_spin_{n}")
+        lang_editor = _lang_picker("Jazyk", key=f"lang_editor_{n}", default=(m.language or "cs"))
 
         st.divider()
 
