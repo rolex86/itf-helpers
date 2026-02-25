@@ -44,5 +44,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='D:\\Dropbox\\Filip\\ShopID_šablony\\html-generator\\pyi_version_file.txt',
+    version='D:\\projekty\\itf-helpers\\ShopID_šablony\\html-generator\\pyi_version_file.txt',
 )
