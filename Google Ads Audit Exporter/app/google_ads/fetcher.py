@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,14 +36,17 @@ class GoogleAdsFetcher:
         resolved_range: ResolvedDateRange,
     ) -> FetchResult:
         query_template = report.query_path(self.project_root).read_text(encoding="utf-8")
-        variants: list[tuple[FieldSpec, ...]] = [report.fields]
-        if report.required_fields != report.fields:
-            variants.append(report.required_fields)
-
         query_attempts: list[dict[str, Any]] = []
         last_exception: Exception | None = None
+        field_variant = report.fields
+        attempted_variants: set[tuple[str, ...]] = set()
 
-        for field_variant in variants:
+        while True:
+            signature = tuple(field.path for field in field_variant)
+            if signature in attempted_variants:
+                break
+            attempted_variants.add(signature)
+
             query = self._render_query(
                 query_template=query_template,
                 fields=field_variant,
@@ -93,6 +97,14 @@ class GoogleAdsFetcher:
                     ",".join(field.alias for field in field_variant),
                     self._format_exception(exc),
                 )
+
+                next_variant = self._build_next_field_variant(
+                    exc=exc,
+                    selected_fields=field_variant,
+                )
+                if next_variant is None:
+                    break
+                field_variant = next_variant
 
         if last_exception is None:
             raise RuntimeError(f"Unknown failure while fetching report {report.key}")
@@ -163,3 +175,69 @@ class GoogleAdsFetcher:
                     message = f"{message} ({'.'.join(field_paths)})"
             error_messages.append(message)
         return " | ".join(error_messages) if error_messages else str(exc)
+
+    def _build_next_field_variant(
+        self,
+        exc: Exception,
+        selected_fields: tuple[FieldSpec, ...],
+    ) -> tuple[FieldSpec, ...] | None:
+        optional_fields = [field for field in selected_fields if field.optional]
+        if not optional_fields:
+            return None
+
+        invalid_paths = self._extract_invalid_field_paths(exc=exc, selected_fields=selected_fields)
+        if invalid_paths:
+            filtered_fields = tuple(
+                field for field in selected_fields if field.path not in invalid_paths
+            )
+            if filtered_fields != selected_fields:
+                return filtered_fields
+
+        fallback_field = optional_fields[-1]
+        return tuple(field for field in selected_fields if field.path != fallback_field.path)
+
+    def _extract_invalid_field_paths(
+        self,
+        exc: Exception,
+        selected_fields: tuple[FieldSpec, ...],
+    ) -> set[str]:
+        searchable_text = self._format_exception(exc)
+        raw_text = str(exc)
+        haystacks = [searchable_text, raw_text]
+        matched_paths: set[str] = set()
+
+        for field in selected_fields:
+            if not field.optional:
+                continue
+            if any(field.path in haystack for haystack in haystacks):
+                matched_paths.add(field.path)
+
+        if matched_paths:
+            return matched_paths
+
+        failure = getattr(exc, "failure", None)
+        if not failure:
+            return set()
+
+        token_candidates: set[str] = set()
+        for error in getattr(failure, "errors", []):
+            location = getattr(error, "location", None)
+            if not location:
+                continue
+            names = [
+                getattr(element, "field_name", "")
+                for element in getattr(location, "field_path_elements", [])
+                if getattr(element, "field_name", "")
+            ]
+            token_candidates.update(names)
+
+        if not token_candidates:
+            return set()
+
+        for field in selected_fields:
+            if not field.optional:
+                continue
+            field_tokens = set(re.split(r"[._]", field.path))
+            if token_candidates & field_tokens:
+                matched_paths.add(field.path)
+        return matched_paths
