@@ -29,6 +29,16 @@ class ExportRunState:
     account_info: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class ExportExecutionResult:
+    exit_code: int
+    export_paths: ExportPaths
+    resolved_range: ResolvedDateRange
+    errors: list[dict[str, Any]]
+    report_rows: list[dict[str, Any]]
+    account_info: dict[str, Any]
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -177,7 +187,7 @@ def _record_report_failure(
     )
 
 
-def run_export(settings: AppSettings, project_root: Path, config_path: Path) -> int:
+def execute_export(settings: AppSettings, project_root: Path, config_path: Path) -> ExportExecutionResult:
     resolved_range = resolve_date_range(settings.date_range)
     export_paths = prepare_export_paths(
         project_root=project_root,
@@ -211,7 +221,14 @@ def run_export(settings: AppSettings, project_root: Path, config_path: Path) -> 
         logger.exception(message)
         _record_auth_failure(state, message)
         _persist_metadata(export_paths, state, settings.output.include_metadata)
-        return 1
+        return ExportExecutionResult(
+            exit_code=1,
+            export_paths=export_paths,
+            resolved_range=resolved_range,
+            errors=list(state.errors),
+            report_rows=list(state.report_rows),
+            account_info=dict(state.account_info),
+        )
 
     fetcher = GoogleAdsFetcher(client=client, project_root=project_root, logger=logger)
 
@@ -305,4 +322,19 @@ def run_export(settings: AppSettings, project_root: Path, config_path: Path) -> 
 
     _persist_metadata(export_paths, state, settings.output.include_metadata)
     logger.info("Finished export path=%s", export_paths.base_dir)
-    return 0
+    return ExportExecutionResult(
+        exit_code=0,
+        export_paths=export_paths,
+        resolved_range=resolved_range,
+        errors=list(state.errors),
+        report_rows=list(state.report_rows),
+        account_info=dict(state.account_info),
+    )
+
+
+def run_export(settings: AppSettings, project_root: Path, config_path: Path) -> int:
+    return execute_export(
+        settings=settings,
+        project_root=project_root,
+        config_path=config_path,
+    ).exit_code

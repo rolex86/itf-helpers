@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Google Ads Audit Exporter</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Interni nastroj</p>
+          <h1>Google Ads Audit Exporter</h1>
+          <p class="brand-copy">Read-only workspace pro exporty, audity a dalsi rozsireni bez nutnosti ovladani pres terminal.</p>
+        </div>
+
+        <nav class="nav-block">
+          <a href="#credentials">Pristupy</a>
+          <a href="#scope">Rozsah exportu</a>
+          <a href="#flags">Flagy</a>
+          <a href="#history">Historie</a>
+          <a href="#roadmap">Dalsi moduly</a>
+        </nav>
+
+        <div class="roadmap-mini">
+          <p class="eyebrow">Pripraveno do budoucna</p>
+          <ul>
+            <li>Srovnani obdobi</li>
+            <li>Export do Google Sheets</li>
+            <li>Pokrocilejsi auditni score</li>
+            <li>Workflow pro navrhy zmen</li>
+          </ul>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="hero">
+          <div>
+            <p class="eyebrow">Ovladani v prohlizeci</p>
+            <h2>Vypln konfiguraci, spust export a pracuj s tim bez terminalu</h2>
+            <p>CLI i web pouzivaji stejny exportni zaklad, takze mame jednu logiku, jeden workflow a lepsi prostor pro dalsi funkce.</p>
+          </div>
+          <div class="hero-badge">
+            <span>Bezpecny rezim</span>
+            <strong>Pouze read-only export</strong>
+          </div>
+        </section>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <section class="flash-stack">
+              {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+              {% endfor %}
+            </section>
+          {% endif %}
+        {% endwith %}
+
+        <form method="post" action="{{ url_for('web.run_export') }}" class="dashboard-grid">
+          <section id="credentials" class="panel panel-wide">
+            <div class="panel-header">
+              <div>
+                <h3>Pristupy a ucet</h3>
+                <p>Vsechno se uklada lokalne do `.env` a `config.yaml`.</p>
+              </div>
+              <button class="btn btn-secondary btn-small" type="submit" formaction="{{ url_for('web.save_configuration') }}">Ulozit udaje</button>
+            </div>
+
+            <div class="field-grid">
+              <label>
+                <span>Customer ID uctu</span>
+                <input name="customer_id" value="{{ state.config_payload.customer_id }}" placeholder="1234567890">
+              </label>
+              <label>
+                <span>Login customer ID</span>
+                <input name="login_customer_id" value="{{ state.env_config.login_customer_id }}" placeholder="Volitelne MCC login ID">
+              </label>
+              <label>
+                <span>Developer token</span>
+                <input type="password" name="developer_token" value="{{ state.env_config.developer_token }}">
+              </label>
+              <label>
+                <span>Client ID</span>
+                <input type="password" name="client_id" value="{{ state.env_config.client_id }}">
+              </label>
+              <label>
+                <span>Client secret</span>
+                <input type="password" name="client_secret" value="{{ state.env_config.client_secret }}">
+              </label>
+              <label>
+                <span>Refresh token</span>
+                <textarea name="refresh_token" rows="3">{{ state.env_config.refresh_token }}</textarea>
+              </label>
+            </div>
+          </section>
+
+          <section id="scope" class="panel">
+            <div class="panel-header">
+              <h3>Obdobi a vystup</h3>
+              <p>Vyber preset nebo si nastav vlastni datumy.</p>
+            </div>
+
+            <div class="preset-row">
+              {% for preset in state.preset_options %}
+                <label class="radio-pill">
+                  <input
+                    type="radio"
+                    name="preset"
+                    value="{{ preset }}"
+                    {% if selected_preset == preset or (preset == 'CUSTOM' and state.config_payload.date_range.date_from and state.config_payload.date_range.date_to and selected_preset == 'CUSTOM') %}checked{% endif %}
+                  >
+                  <span>{{ state.preset_labels.get(preset, preset) }}</span>
+                </label>
+              {% endfor %}
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>Datum od</span>
+                <input type="date" name="date_from" value="{{ state.config_payload.date_range.date_from or '' }}">
+              </label>
+              <label>
+                <span>Datum do</span>
+                <input type="date" name="date_to" value="{{ state.config_payload.date_range.date_to or '' }}">
+              </label>
+            </div>
+
+            <div class="field-grid compact">
+              <label class="field-with-action">
+                <span>Slozka exportu</span>
+                <div class="inline-field-row">
+                  <input id="base-dir-input" name="base_dir" value="{{ state.config_payload.output.base_dir }}">
+                  <button class="btn btn-secondary btn-small btn-inline" type="button" id="pick-folder-button">Vybrat</button>
+                </div>
+              </label>
+              <label>
+                <span>Nazev XLSX souboru</span>
+                <input name="xlsx_filename" value="{{ state.config_payload.output.xlsx_filename }}">
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <label class="toggle">
+                <input type="checkbox" name="include_raw_csv" {% if state.config_payload.output.include_raw_csv %}checked{% endif %}>
+                <span>Ulozit raw CSV</span>
+              </label>
+              <label class="toggle">
+                <input type="checkbox" name="include_metadata" {% if state.config_payload.output.include_metadata %}checked{% endif %}>
+                <span>Ulozit metadata JSON</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Reporty</h3>
+              <p>Zapni nebo vypni jednotlive casti exportu pro aktualni beh.</p>
+            </div>
+
+            <div class="checkbox-grid">
+              {% for report_key, enabled in state.config_payload.reports.items() %}
+                <label class="check-card">
+                  <input type="checkbox" name="report_{{ report_key }}" {% if enabled %}checked{% endif %}>
+                  <span>{{ state.report_labels.get(report_key, report_key) }}</span>
+                </label>
+              {% endfor %}
+            </div>
+          </section>
+
+          <section id="flags" class="panel">
+            <div class="panel-header">
+              <h3>Prahy pro zakladni flagy</h3>
+              <p>Tyhle hodnoty ridi prvni auditni vrstvu v listu Basic flags.</p>
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>Minimalni spend v micros</span>
+                <input name="min_spend_micros" value="{{ state.config_payload.flags.min_spend_micros }}">
+              </label>
+              <label>
+                <span>Minimalni pocet kliku</span>
+                <input name="min_clicks" value="{{ state.config_payload.flags.min_clicks }}">
+              </label>
+              <label>
+                <span>Cilove CPA v micros</span>
+                <input name="target_cpa_micros" value="{{ state.config_payload.flags.target_cpa_micros or '' }}">
+              </label>
+              <label>
+                <span>Cilovy ROAS</span>
+                <input name="target_roas" value="{{ state.config_payload.flags.target_roas or '' }}">
+              </label>
+              <label>
+                <span>Prahovy nizky CTR</span>
+                <input name="low_ctr_threshold" value="{{ state.config_payload.flags.low_ctr_threshold }}">
+              </label>
+            </div>
+          </section>
+
+          <section class="panel action-panel">
+            <div>
+              <h3>Spusteni</h3>
+              <p>Konfiguraci muzes ulozit nebo rovnou spustit export z jednoho mista.</p>
+            </div>
+            <div class="action-row">
+              <button class="btn btn-secondary" type="submit" formaction="{{ url_for('web.save_configuration') }}">Ulozit konfiguraci</button>
+              <button class="btn btn-primary" type="submit" id="run-button">Spustit export</button>
+            </div>
+          </section>
+        </form>
+
+        {% if run_result %}
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Posledni spusteni</h3>
+              <p>Vysledek exportu, ktery jsi prave spustil.</p>
+            </div>
+
+            <div class="result-grid">
+              <div class="result-card">
+                <span>Stav</span>
+                <strong>{{ 'Hotovo' if run_result.exit_code == 0 else 'Chyba' }}</strong>
+              </div>
+              <div class="result-card">
+                <span>Vystupni slozka</span>
+                <strong>{{ run_result.export_paths.base_dir }}</strong>
+              </div>
+              <div class="result-card">
+                <span>Obdobi</span>
+                <strong>{{ run_result.resolved_range.date_from }} -> {{ run_result.resolved_range.date_to }}</strong>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Report</th>
+                    <th>Stav</th>
+                    <th>Radku</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in run_result.report_rows %}
+                    <tr>
+                      <td>{{ state.report_labels.get(row.name, row.name) }}</td>
+                      <td>{{ 'OK' if row.status == 'ok' else ('Varovani' if row.status == 'warning' else 'Chyba') }}</td>
+                      <td>{{ row.rows }}</td>
+                      <td>{{ row.details }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            {% if run_result.errors %}
+              <div class="error-list">
+                {% for error in run_result.errors %}
+                  <div class="flash flash-error">
+                    <strong>{{ state.report_labels.get(error.report, error.report) }}</strong>: {{ error.message }}
+                  </div>
+                {% endfor %}
+              </div>
+            {% endif %}
+          </section>
+        {% endif %}
+
+        <section id="history" class="panel">
+          <div class="panel-header">
+            <h3>Historie exportu</h3>
+            <p>Dosavadni exporty nalezene v lokalni slozce `exports/`.</p>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Slozka</th>
+                  <th>Customer ID</th>
+                  <th>Obdobi</th>
+                  <th>Chyby</th>
+                  <th>Dotazu</th>
+                  <th>Soubor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in state.export_history %}
+                  <tr>
+                    <td>{{ item.directory_name }}</td>
+                    <td>{{ item.customer_id }}</td>
+                    <td>{{ state.preset_labels.get(item.date_label, item.date_label) }}</td>
+                    <td>{{ item.error_count }}</td>
+                    <td>{{ item.query_count }}</td>
+                    <td>
+                      {% if item.xlsx_path %}
+                        <a href="{{ url_for('web.download_file', relative_path=item.relative_xlsx_path) }}">Stahnout XLSX</a>
+                      {% else %}
+                        <span class="muted">Bez workbooku</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% else %}
+                  <tr>
+                    <td colspan="6" class="muted">Zatim tu nejsou zadne exporty.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="roadmap" class="panel roadmap-panel">
+          <div class="panel-header">
+            <h3>Pripraveny prostor pro rozsireni</h3>
+            <p>Rozhrani je schvalne navrzene jako workspace, ne jen jako jednorazovy formular.</p>
+          </div>
+
+          <div class="roadmap-grid">
+            <article>
+              <h4>Srovnani obdobi</h4>
+              <p>Porovnani vykonu mezi obdobi, trendu a zmen v kampanich.</p>
+            </article>
+            <article>
+              <h4>Auditni pravidla</h4>
+              <p>Pokrocilejsi heuristiky, vlastni prahy a scorecardy pro konkretni ucty.</p>
+            </article>
+            <article>
+              <h4>Sheets a sdileni</h4>
+              <p>Predani do Google Sheets nebo do prehlednejsich vystupu pro dalsi lidi.</p>
+            </article>
+            <article>
+              <h4>Navrhy zmen</h4>
+              <p>Budouci write-back vrstva s preview, kontrolou a schvalovacim workflow.</p>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const form = document.querySelector("form");
+      const runButton = document.getElementById("run-button");
+      const pickFolderButton = document.getElementById("pick-folder-button");
+      const baseDirInput = document.getElementById("base-dir-input");
+
+      if (form && runButton) {
+        form.addEventListener("submit", (event) => {
+          if (event.submitter === runButton) {
+            runButton.disabled = true;
+            runButton.textContent = "Spoustim export...";
+          }
+        });
+      }
+
+      if (pickFolderButton && baseDirInput) {
+        pickFolderButton.addEventListener("click", async () => {
+          const originalLabel = pickFolderButton.textContent;
+          pickFolderButton.disabled = true;
+          pickFolderButton.textContent = "Oteviram...";
+
+          try {
+            const response = await fetch("{{ url_for('web.pick_folder') }}", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                initial_dir: baseDirInput.value
+              })
+            });
+
+            const payload = await response.json();
+            if (payload.ok && payload.path) {
+              baseDirInput.value = payload.path;
+            } else if (!payload.ok) {
+              window.alert(payload.error || "Vyber slozky se nepodaril.");
+            }
+          } catch (error) {
+            window.alert("Vyber slozky se nepodaril.");
+          } finally {
+            pickFolderButton.disabled = false;
+            pickFolderButton.textContent = originalLabel;
+          }
+        });
+      }
+    </script>
+  </body>
+</html>

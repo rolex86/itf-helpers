@@ -1,6 +1,6 @@
 # Google Ads Audit Exporter v1
 
-Read-only CLI exporter pro interni audit Google Ads uctu. Nastroj stahuje vybrane reporty pres Google Ads API, uklada raw CSV, metadata a sestavuje jeden `audit_export.xlsx` soubor s vice listy.
+Read-only exporter pro interni audit Google Ads uctu. Nastroj stahuje vybrane reporty pres Google Ads API, uklada raw CSV, metadata a sestavuje jeden `audit_export.xlsx` soubor s vice listy. Ovlada se pres CLI i browser UI nad stejnym export workflow.
 
 ## Co umi
 
@@ -10,6 +10,7 @@ Read-only CLI exporter pro interni audit Google Ads uctu. Nastroj stahuje vybran
 - Raw CSV export, metadata JSON a souhrnny XLSX
 - Pokracovani exportu i pri selhani jednotliveho reportu
 - Jednoduche auditni flagy pro rychlou orientaci
+- Browser rozhrani pro konfiguraci a spousteni bez terminalu
 
 ## Bezpecnost
 
@@ -92,6 +93,42 @@ flags:
 
 ## Spusteni
 
+### Browser UI
+
+Spusteni lokalniho rozhrani:
+
+```bash
+python -m app.web.main
+```
+
+Nebo na Windows jednoduse dvojklikem:
+
+```text
+Spustit Google Ads Audit Exporter.bat
+```
+
+Volitelne:
+
+```bash
+python -m app.web.main --host 127.0.0.1 --port 5000
+```
+
+Pak otevri v prohlizeci:
+
+```text
+http://127.0.0.1:5000
+```
+
+V rozhrani muzes:
+
+- vyplnit OAuth a Google Ads hodnoty
+- ulozit `.env` a `config.yaml`
+- zapinat a vypinat reporty
+- spustit export
+- prohlizet historii exportu a stahnout XLSX
+
+### CLI
+
 Zakladni spusteni:
 
 ```bash
@@ -150,6 +187,7 @@ app/
   main.py
   auth/
   config/
+  web/
   google_ads/
     queries/
   export/
