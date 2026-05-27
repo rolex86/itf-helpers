@@ -1,0 +1,69 @@
+# Python cache and virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+
+# Local editor / tooling noise
+.idea/
+.vscode/
+.codex
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Large downloaded certificate/document archives
+chainway_downloads/
+jen_CE_RoHS_FCC_EN18031/
+_work_v2/chainway_downloads/
+
+# Browser profiles, probe captures and other runtime artifacts
+rqst/chainway_probe_output/
+rqst/chainway_probe_profile/
+_work_v2/rqst/chainway_probe_output/
+_work_v2/rqst/chainway_probe_profile/
+_work_v2/chainway_mis_profile/
+_work_v2/ui_runtime/
+_work_v2/chainway_debug_v13/
+
+# Runtime state and logs
+*.log
+*.har
+*.jsonl
+*.part
+
+# Generated runtime JSON state files
+_work_v2/chainway_download_state_v*.json
+_work_v2/chainway_download_state_v*.backup_*.json
+_work_v2/chainway_runtime_status_v*.json
+
+# Keep the static downloader config in git
+!_work_v2/chainway_downloader_config_v1.json
+
+# If any nested caches still appear outside ignored directories
+**/Crashpad/
+**/ShaderCache/
+**/GrShaderCache/
+**/GraphiteDawnCache/
+**/component_crx_cache/
+**/extensions_crx_cache/
+**/segmentation_platform/
+**/Safe Browsing/
+
+# Debug captures
+*.png
+*.html
+
+# Common local databases from Chromium profiles
+*.db
+*.db-journal
+*.pma
+*.pb
+*.baf
+*.baj
+*.dat
+

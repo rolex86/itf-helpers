@@ -1,0 +1,36 @@
+customer_id: "1234567890"
+
+date_range:
+  preset: "LAST_90_DAYS"
+  date_from: null
+  date_to: null
+
+output:
+  base_dir: "exports"
+  xlsx_filename: "audit_export.xlsx"
+  include_raw_csv: true
+  include_metadata: true
+
+reports:
+  account: true
+  campaigns: true
+  campaigns_monthly: true
+  ad_groups: true
+  keywords: true
+  search_terms: true
+  ads: true
+  assets: true
+  devices: true
+  locations: true
+  landing_pages: true
+  conversion_actions: true
+  pmax_campaigns: true
+  pmax_asset_groups: true
+  change_history: true
+
+flags:
+  min_spend_micros: 100000000
+  min_clicks: 50
+  target_cpa_micros: null
+  target_roas: null
+  low_ctr_threshold: 0.01

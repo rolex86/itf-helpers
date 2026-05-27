@@ -1,0 +1,187 @@
+{
+  "server": {
+    "base_url": "http://119.136.31.217:9890/",
+    "filemanager_url": "http://119.136.31.217:9890/filemanager/filemanager.aspx",
+    "main_hash_url": "http://119.136.31.217:9890/main.aspx#/filemanager/filemanager.aspx",
+    "download_url_template": "http://119.136.31.217:9890/filemanager/FileDownload.ashx?id={guid}"
+  },
+  "login": {
+    "username": "john-chainway",
+    "password": "cw123456",
+    "username_env": "CHAINWAY_MIS_USERNAME",
+    "password_env": "CHAINWAY_MIS_PASSWORD"
+  },
+  "search": {
+    "terms": [
+      "C61",
+      "R1",
+      "MC50",
+      "P100",
+      "MC51",
+      "P80",
+      "MC95",
+      "C63",
+      "C66",
+      "R3",
+      "MC62",
+      "C5",
+      "CP30",
+      "R5",
+      "MC21",
+      "R6",
+      "C6000",
+      "MR20",
+      "C71",
+      "SR160",
+      "C72",
+      "CM710-1",
+      "CM710-4",
+      "CM710-8",
+      "CM710-16",
+      "UR4",
+      "URA4",
+      "U300",
+      "UR1A"
+    ],
+    "group_options": [
+      {
+        "label": "Certificate",
+        "value": "ABA900B305DB751D1FE1135E46CAA9130000"
+      },
+      {
+        "label": "Accessories Guide",
+        "value": "ABA900B305DA9CE9D717CC294561BF0C0000"
+      },
+      {
+        "label": "Antenna For Fixed UHF Reader",
+        "value": "ABA900B305DB8E1FE1359EA3437DAF6D0000"
+      },
+      {
+        "label": "Company",
+        "value": "ABA900B305DEAF0D7EB65BF2453D97AD0000"
+      },
+      {
+        "label": "Data Sheet (Chainway)",
+        "value": "ABA900B305DE24392EDA02ED446B94E40000"
+      },
+      {
+        "label": "Data Sheet (Neutral)",
+        "value": "ABA900B305DE6B80772411A14C5CABA60000"
+      },
+      {
+        "label": "Demo software",
+        "value": "ABA900B305E14E3F7EDC85F044BD98B90000"
+      },
+      {
+        "label": "Driving Training",
+        "value": "ABA900B305E1E5676B74622224299A8E60000"
+      },
+      {
+        "label": "Healthcare",
+        "value": "ABA900B305E19CE222EE49AA741E1A8DB0000"
+      },
+      {
+        "label": "Keyboardemulator EN User Manual",
+        "value": "ABA900B305E1E34ED2205BCC406FB8EE0000"
+      },
+      {
+        "label": "Logistics",
+        "value": "ABA900B305E198FE198AE583849FDA1970000"
+      },
+      {
+        "label": "Maintenance Center",
+        "value": "ABA900B305E11A997C4BB10241B9A3530000"
+      },
+      {
+        "label": "MDM",
+        "value": "ABA900B305E1E0D7A14457E84D8BB7A00000"
+      },
+      {
+        "label": "Product Picture",
+        "value": "ABA900B305E119BE6FBDBBB04350BCBB0000"
+      },
+      {
+        "label": "Publicity Materials",
+        "value": "ABA900B305E23A25406D3D9B463CBBC40000"
+      },
+      {
+        "label": "Device Quick Guide",
+        "value": "ABA900B305E1112E9721153A47EDB7430000"
+      },
+      {
+        "label": "Retail",
+        "value": "ABA900B305E2B3750AF69B8849759D460000"
+      },
+      {
+        "label": "User Manual",
+        "value": "ABA900B305E21AA3FEA0B43D4FEFBCA10000"
+      },
+      {
+        "label": "Vehicle",
+        "value": "ABA900B305E3409E3AAD26784354B2990000"
+      },
+      {
+        "label": "Product Video",
+        "value": "ABA900B305E365B05FD5D36E49578DC40000"
+      }
+    ],
+    "selected_group_values": [
+      "ABA900B305E119BE6FBDBBB04350BCBB0000"
+    ],
+    "group_keywords": [
+      "certificate"
+    ],
+    "path_fragments": [
+      "/certificate/"
+    ],
+    "page_size": 100
+  },
+  "filters": {
+    "allowed_extensions": [
+      ".pdf",
+      ".zip",
+      ".rar",
+      ".doc",
+      ".docx",
+      ".xls",
+      ".xlsx"
+    ],
+    "blocked_extensions": [
+      ".mp4",
+      ".avi",
+      ".mov",
+      ".mkv",
+      ".wmv",
+      ".flv",
+      ".webm",
+      ".mp3",
+      ".wav",
+      ".aac",
+      ".m4a",
+      ".ogg",
+      ".flac",
+      ".wma"
+    ]
+  },
+  "paths": {
+    "profile_dir": "chainway_mis_profile",
+    "download_dir": "D:/projekty/itf-helpers/chnw_MIS_downloader/chainway_downloads",
+    "state_file": "chainway_download_state_v13.json",
+    "legacy_state_file": "chainway_download_state_v12.json",
+    "debug_dir": "chainway_debug_v13",
+    "status_file": "chainway_runtime_status_v1.json"
+  },
+  "runtime": {
+    "headless": false,
+    "chunk_size": 524288,
+    "progress_update_interval": 0.35,
+    "postback_wait_seconds": 3.5,
+    "between_downloads_seconds": 1.0,
+    "between_searches_seconds": 0.8,
+    "max_session_recovery_per_search": 2,
+    "keepalive_interval_seconds": 45.0,
+    "session_recovery_timeout_seconds": 900.0,
+    "session_recovery_poll_seconds": 2.0,
+    "prompt_for_manual_ready": true
+  }
+}
