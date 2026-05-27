@@ -230,7 +230,23 @@
                 <span>Obdobi</span>
                 <strong>{{ run_result.resolved_range.date_from }} -> {{ run_result.resolved_range.date_to }}</strong>
               </div>
+              <div class="result-card {% if run_result.fallback_report_count %}result-card-warning{% endif %}">
+                <span>Dropped fields</span>
+                <strong>{{ run_result.fallback_report_count }}</strong>
+              </div>
             </div>
+
+            {% if run_result.fallback_report_count %}
+              <div class="flash flash-warning">
+                {{ run_result.fallback_report_count }} report{% if run_result.fallback_report_count != 1 %}u{% endif %} bezel s fallbackem a nektera optional pole byla zahozena.
+              </div>
+            {% endif %}
+
+            {% if run_result.account_info.get("time_zone") %}
+              <div class="flash flash-info">
+                Casova zona uctu je <strong>{{ run_result.account_info.get("time_zone") }}</strong>. U dennich dat a hranic obdobi pocitej s interpretaci podle teto casove zony.
+              </div>
+            {% endif %}
 
             <div class="table-wrap">
               <table>
@@ -244,7 +260,7 @@
                 </thead>
                 <tbody>
                   {% for row in run_result.report_rows %}
-                    <tr>
+                    <tr class="{% if row.status == 'warning' %}row-warning{% elif row.status == 'error' %}row-error{% endif %}">
                       <td>{{ state.report_labels.get(row.name, row.name) }}</td>
                       <td>{{ 'OK' if row.status == 'ok' else ('Varovani' if row.status == 'warning' else 'Chyba') }}</td>
                       <td>{{ row.rows }}</td>

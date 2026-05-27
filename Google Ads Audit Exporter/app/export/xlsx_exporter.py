@@ -38,8 +38,13 @@ def _summary_frame(summary_rows: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(summary_rows, columns=["section", "name", "value", "details", "status", "rows"])
 
 
-def _ordered_sheets(datasets: dict[str, pd.DataFrame], flags_df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+def _ordered_sheets(
+    datasets: dict[str, pd.DataFrame],
+    flags_df: pd.DataFrame,
+    derived_sheets: list[tuple[str, pd.DataFrame]],
+) -> list[tuple[str, pd.DataFrame]]:
     ordered: list[tuple[str, pd.DataFrame]] = [("Basic flags", flags_df)]
+    ordered.extend(derived_sheets)
     for report_key in REPORT_ORDER:
         if report_key in datasets:
             ordered.append((get_report_definition(report_key).sheet_name, datasets[report_key]))
@@ -88,13 +93,19 @@ def export_workbook(
     summary_rows: list[dict[str, Any]],
     datasets: dict[str, pd.DataFrame],
     flags_df: pd.DataFrame,
+    derived_sheets: list[tuple[str, pd.DataFrame]] | None = None,
 ) -> None:
     xlsx_path.parent.mkdir(parents=True, exist_ok=True)
     summary_df = _summary_frame(summary_rows)
+    derived_sheets = derived_sheets or []
 
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         summary_df.to_excel(writer, sheet_name="Summary", index=False)
-        for sheet_name, dataframe in _ordered_sheets(datasets=datasets, flags_df=flags_df):
+        for sheet_name, dataframe in _ordered_sheets(
+            datasets=datasets,
+            flags_df=flags_df,
+            derived_sheets=derived_sheets,
+        ):
             dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
 
         workbook = writer.book

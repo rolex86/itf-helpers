@@ -11,9 +11,11 @@ from app.audit.basic_flags import build_basic_flags
 from app.auth.google_ads_client import build_google_ads_client
 from app.config.settings import AppSettings
 from app.export.csv_exporter import export_csv
+from app.export.derived_summaries import build_landing_pages_summary, build_locations_summary
 from app.export.metadata_exporter import write_json
 from app.export.xlsx_exporter import export_workbook
 from app.google_ads.fetcher import GoogleAdsFetcher
+from app.google_ads.postprocess import postprocess_report_dataframe
 from app.google_ads.report_definitions import REPORT_ORDER, empty_report_frame, get_report_definition
 from app.utils.dates import ResolvedDateRange, resolve_date_range
 from app.utils.logging import configure_logging
@@ -37,6 +39,7 @@ class ExportExecutionResult:
     errors: list[dict[str, Any]]
     report_rows: list[dict[str, Any]]
     account_info: dict[str, Any]
+    fallback_report_count: int
 
 
 def _timestamp() -> str:
@@ -147,6 +150,8 @@ def _record_report_success(
     sheet_name: str,
     rows: int,
     notes: list[str],
+    status: str,
+    dropped_fields: list[str],
 ) -> None:
     state.report_rows.append(
         {
@@ -154,8 +159,9 @@ def _record_report_success(
             "name": report_key,
             "value": sheet_name,
             "details": " | ".join(notes),
-            "status": "ok",
+            "status": status,
             "rows": rows,
+            "dropped_fields": dropped_fields,
         }
     )
 
@@ -228,6 +234,7 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
             errors=list(state.errors),
             report_rows=list(state.report_rows),
             account_info=dict(state.account_info),
+            fallback_report_count=0,
         )
 
     fetcher = GoogleAdsFetcher(client=client, project_root=project_root, logger=logger)
@@ -246,14 +253,18 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
                 customer_id=settings.customer_id,
                 resolved_range=resolved_range,
             )
-            state.datasets[report.key] = result.dataframe
+            processed_dataframe = postprocess_report_dataframe(
+                report_key=report.key,
+                dataframe=result.dataframe,
+            )
+            state.datasets[report.key] = processed_dataframe
             state.query_log.extend(result.query_attempts)
 
             if settings.output.include_raw_csv:
-                export_csv(result.dataframe, export_paths.raw_dir / f"{report.key}.csv")
+                export_csv(processed_dataframe, export_paths.raw_dir / f"{report.key}.csv")
 
-            if report.key == "account" and not result.dataframe.empty:
-                state.account_info = result.dataframe.iloc[0].to_dict()
+            if report.key == "account" and not processed_dataframe.empty:
+                state.account_info = processed_dataframe.iloc[0].to_dict()
 
             notes = list(result.notes)
             if result.dropped_optional_fields:
@@ -263,10 +274,12 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
                 state=state,
                 report_key=report.key,
                 sheet_name=report.sheet_name,
-                rows=int(len(result.dataframe)),
+                rows=int(len(processed_dataframe)),
                 notes=notes,
+                status="warning" if result.dropped_optional_fields else "ok",
+                dropped_fields=list(result.dropped_optional_fields),
             )
-            logger.info("Finished report=%s rows=%s", report.key, len(result.dataframe))
+            logger.info("Finished report=%s rows=%s", report.key, len(processed_dataframe))
         except Exception as exc:  # pragma: no cover - API dependent
             logger.exception("Report failed report=%s", report.key)
             state.datasets[report.key] = empty_report_frame(report)
@@ -302,12 +315,36 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         errors=state.errors,
     )
 
+    derived_sheets = [
+        (
+            "Landing pages summary",
+            build_landing_pages_summary(
+                landing_pages=state.datasets.get(
+                    "landing_pages",
+                    empty_report_frame(get_report_definition("landing_pages")),
+                ),
+                flags_config=settings.flags,
+            ),
+        ),
+        (
+            "Locations summary",
+            build_locations_summary(
+                locations=state.datasets.get(
+                    "locations",
+                    empty_report_frame(get_report_definition("locations")),
+                ),
+                flags_config=settings.flags,
+            ),
+        ),
+    ]
+
     try:
         export_workbook(
             xlsx_path=export_paths.xlsx_path,
             summary_rows=summary_rows,
             datasets=state.datasets,
             flags_df=flags_df,
+            derived_sheets=derived_sheets,
         )
     except Exception as exc:  # pragma: no cover - environment dependent
         logger.exception("Workbook export failed")
@@ -322,6 +359,7 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
 
     _persist_metadata(export_paths, state, settings.output.include_metadata)
     logger.info("Finished export path=%s", export_paths.base_dir)
+    fallback_report_count = sum(1 for row in state.report_rows if row.get("status") == "warning")
     return ExportExecutionResult(
         exit_code=0,
         export_paths=export_paths,
@@ -329,6 +367,7 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         errors=list(state.errors),
         report_rows=list(state.report_rows),
         account_info=dict(state.account_info),
+        fallback_report_count=fallback_report_count,
     )
 
 

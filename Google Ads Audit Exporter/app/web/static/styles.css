@@ -176,6 +176,18 @@ body {
   color: #fca5a5;
 }
 
+.flash-warning {
+  border-color: rgba(245, 158, 11, 0.34);
+  color: #fcd34d;
+  margin-bottom: 14px;
+}
+
+.flash-info {
+  border-color: rgba(59, 130, 246, 0.28);
+  color: #93c5fd;
+  margin-bottom: 14px;
+}
+
 .dashboard-grid {
   display: grid;
   gap: 20px;
@@ -411,6 +423,10 @@ textarea:focus {
   margin-top: 6px;
 }
 
+.result-card-warning {
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -434,6 +450,14 @@ th {
   font-size: 0.82rem;
   text-transform: uppercase;
   letter-spacing: 0.12em;
+}
+
+.row-warning td {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.row-error td {
+  background: rgba(239, 68, 68, 0.07);
 }
 
 a {
