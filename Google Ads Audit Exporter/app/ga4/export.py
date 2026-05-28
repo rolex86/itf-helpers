@@ -230,8 +230,9 @@ def _reshape_funnel_rows(
 
     source = pd.DataFrame(rows)
     for metric in ["eventCount", "totalRevenue", "transactions"]:
-        if metric in source.columns:
-            source[metric] = pd.to_numeric(source[metric], errors="coerce").fillna(0)
+        if metric not in source.columns:
+            source[metric] = 0
+        source[metric] = pd.to_numeric(source[metric], errors="coerce").fillna(0)
 
     event_names = ["view_item", "add_to_cart", "begin_checkout", "purchase"]
     pivot = (
@@ -272,14 +273,13 @@ def _reshape_funnel_rows(
         elif begin_checkout > 0 and purchase / begin_checkout < 0.4:
             diagnosis = "checkout_problem"
 
+        breakdown_key = key_dimensions[1] if len(key_dimensions) > 1 else key_dimensions[0]
         records.append(
             {
                 "breakdown_type": breakdown_type,
                 "parent_campaign": row.get("sessionCampaignName", ""),
-                "breakdown_value": row.get(key_dimensions[1] if len(key_dimensions) > 1 else key_dimensions[0], ""),
-                "breakdown_label": row.get(label_dimension, "") if label_dimension else row.get(
-                    key_dimensions[1] if len(key_dimensions) > 1 else key_dimensions[0], ""
-                ),
+                "breakdown_value": row.get(breakdown_key, ""),
+                "breakdown_label": row.get(label_dimension, "") if label_dimension else row.get(breakdown_key, ""),
                 "secondary_value": row.get(secondary_dimension, "") if secondary_dimension else "",
                 "view_item_count": view_item,
                 "add_to_cart_count": add_to_cart,
@@ -297,6 +297,94 @@ def _reshape_funnel_rows(
 
     frame = pd.DataFrame(records, columns=get_report_definition("ga4_ecommerce_funnel").aliases)
     return frame.sort_values(by="view_item_count", ascending=False).reset_index(drop=True)
+
+
+def _reshape_product_metric_rows(
+    rows: list[dict[str, Any]],
+    *,
+    breakdown_type: str,
+    key_dimensions: list[str],
+    label_dimension: str | None = None,
+    secondary_dimension: str | None = None,
+) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame(columns=get_report_definition("ga4_ecommerce_funnel").aliases)
+
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        view_item = _safe_float(row.get("itemsViewed"))
+        add_to_cart = _safe_float(row.get("itemsAddedToCart"))
+        begin_checkout = _safe_float(row.get("itemsCheckedOut"))
+        purchase = _safe_float(row.get("itemsPurchased"))
+        total_revenue = _safe_float(row.get("itemRevenue"))
+
+        dropoff_after_view = max(view_item - add_to_cart, 0)
+        dropoff_after_cart = max(add_to_cart - begin_checkout, 0)
+        dropoff_after_checkout = max(begin_checkout - purchase, 0)
+        purchase_rate = purchase / view_item if view_item else 0
+
+        diagnosis = "ok"
+        if view_item > 0 and add_to_cart / view_item < 0.2:
+            diagnosis = "product_page_or_offer_problem"
+        elif add_to_cart > 0 and begin_checkout / add_to_cart < 0.35:
+            diagnosis = "cart_friction_problem"
+        elif begin_checkout > 0 and purchase / begin_checkout < 0.4:
+            diagnosis = "checkout_problem"
+
+        breakdown_key = key_dimensions[1] if len(key_dimensions) > 1 else key_dimensions[0]
+        records.append(
+            {
+                "breakdown_type": breakdown_type,
+                "parent_campaign": row.get("sessionCampaignName", ""),
+                "breakdown_value": row.get(breakdown_key, ""),
+                "breakdown_label": row.get(label_dimension, "") if label_dimension else row.get(breakdown_key, ""),
+                "secondary_value": row.get(secondary_dimension, "") if secondary_dimension else "",
+                "view_item_count": view_item,
+                "add_to_cart_count": add_to_cart,
+                "begin_checkout_count": begin_checkout,
+                "purchase_count": purchase,
+                "dropoff_after_view_item": dropoff_after_view,
+                "dropoff_after_add_to_cart": dropoff_after_cart,
+                "dropoff_after_begin_checkout": dropoff_after_checkout,
+                "purchase_rate_from_view_item": purchase_rate,
+                "total_revenue": total_revenue,
+                "transactions": purchase,
+                "diagnosis": diagnosis,
+            }
+        )
+
+    frame = pd.DataFrame(records, columns=get_report_definition("ga4_ecommerce_funnel").aliases)
+    return frame.sort_values(by="view_item_count", ascending=False).reset_index(drop=True)
+
+
+def _run_ga4_report_or_empty(
+    *,
+    result: Ga4ExportResult,
+    client: Ga4ApiClient,
+    label: str,
+    dimensions: list[str],
+    metrics: list[str],
+    resolved_range: ResolvedDateRange,
+    dimension_filter: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    try:
+        return client.run_report(
+            dimensions=dimensions,
+            metrics=metrics,
+            date_from=resolved_range.date_from.isoformat(),
+            date_to=resolved_range.date_to.isoformat(),
+            dimension_filter=dimension_filter,
+        )
+    except Ga4ApiError as exc:
+        result.errors.append(
+            {
+                "report": f"ga4_{label}",
+                "message": exc.message,
+                "details": exc.details,
+                "timestamp": _timestamp(),
+            }
+        )
+        return []
 
 
 def build_ga4_exports(
@@ -327,71 +415,86 @@ def build_ga4_exports(
         return result
 
     client = Ga4ApiClient.from_env_config(env_config)
+    funnel_event_names = ["view_item", "add_to_cart", "begin_checkout", "purchase"]
 
-    try:
-        ga4_landing_rows = client.run_report(
-            dimensions=[
-                "landingPage",
-                "sessionSourceMedium",
-                "sessionCampaignName",
-                "deviceCategory",
-                "country",
-            ],
-            metrics=[
-                "sessions",
-                "engagedSessions",
-                "engagementRate",
-                "averageSessionDuration",
-                "keyEvents",
-                "totalRevenue",
-            ],
-            date_from=resolved_range.date_from.isoformat(),
-            date_to=resolved_range.date_to.isoformat(),
-        )
+    ga4_landing_rows = _run_ga4_report_or_empty(
+        result=result,
+        client=client,
+        label="landing_pages",
+        dimensions=[
+            "landingPage",
+            "sessionSourceMedium",
+            "sessionCampaignName",
+            "deviceCategory",
+            "country",
+        ],
+        metrics=[
+            "sessions",
+            "engagedSessions",
+            "engagementRate",
+            "averageSessionDuration",
+            "keyEvents",
+            "totalRevenue",
+        ],
+        resolved_range=resolved_range,
+    )
 
-        funnel_event_names = ["view_item", "add_to_cart", "begin_checkout", "purchase"]
-        campaign_rows = client.run_report(
-            dimensions=["sessionCampaignName", "itemId", "itemName", "itemCategory", "eventName"],
-            metrics=["eventCount"],
-            date_from=resolved_range.date_from.isoformat(),
-            date_to=resolved_range.date_to.isoformat(),
-            dimension_filter=_event_filter(funnel_event_names),
-        )
-        landing_rows = client.run_report(
-            dimensions=["landingPage", "eventName"],
-            metrics=["eventCount"],
-            date_from=resolved_range.date_from.isoformat(),
-            date_to=resolved_range.date_to.isoformat(),
-            dimension_filter=_event_filter(funnel_event_names),
-        )
-        device_rows = client.run_report(
-            dimensions=["deviceCategory", "eventName"],
-            metrics=["eventCount"],
-            date_from=resolved_range.date_from.isoformat(),
-            date_to=resolved_range.date_to.isoformat(),
-            dimension_filter=_event_filter(funnel_event_names),
-        )
-    except Ga4ApiError as exc:
-        result.errors.append(
-            {
-                "report": "ga4_api",
-                "message": exc.message,
-                "details": exc.details,
-                "timestamp": _timestamp(),
-            }
-        )
-        for key in enabled_report_keys:
-            result.datasets[key] = _empty_report(key)
-            result.report_notes[key] = ["GA4 API dotaz selhal, ale Ads export pokracoval dal."]
-            result.report_warning_keys.add(key)
-        return result
+    campaign_rows = _run_ga4_report_or_empty(
+        result=result,
+        client=client,
+        label="funnel_campaign",
+        dimensions=["sessionCampaignName", "eventName"],
+        metrics=["eventCount"],
+        resolved_range=resolved_range,
+        dimension_filter=_event_filter(funnel_event_names),
+    )
+
+    product_rows = _run_ga4_report_or_empty(
+        result=result,
+        client=client,
+        label="funnel_product",
+        dimensions=["itemId", "itemName", "itemCategory"],
+        metrics=[
+            "itemsViewed",
+            "itemsAddedToCart",
+            "itemsCheckedOut",
+            "itemsPurchased",
+            "itemRevenue",
+        ],
+        resolved_range=resolved_range,
+    )
+
+    landing_rows = _run_ga4_report_or_empty(
+        result=result,
+        client=client,
+        label="funnel_page_path",
+        dimensions=["pagePath", "eventName"],
+        metrics=["eventCount"],
+        resolved_range=resolved_range,
+        dimension_filter=_event_filter(funnel_event_names),
+    )
+
+    device_rows = _run_ga4_report_or_empty(
+        result=result,
+        client=client,
+        label="funnel_device",
+        dimensions=["deviceCategory", "eventName"],
+        metrics=["eventCount"],
+        resolved_range=resolved_range,
+        dimension_filter=_event_filter(funnel_event_names),
+    )
 
     ga4_landing_pages = _ga4_landing_pages_frame(ga4_landing_rows)
     if reports_enabled.get("ga4_landing_pages", False):
         result.datasets["ga4_landing_pages"] = ga4_landing_pages
-    result.report_notes["ga4_landing_pages"] = [
-        "GA4 landing pages doplnuji engagement, sessions a revenue pro dalsi diagnostiku webu."
-    ]
+        result.report_notes["ga4_landing_pages"] = [
+            "GA4 landing pages doplnuji engagement, sessions a revenue pro dalsi diagnostiku webu."
+        ]
+        if not ga4_landing_rows and any(error["report"] == "ga4_landing_pages" for error in result.errors):
+            result.report_notes["ga4_landing_pages"] = [
+                "GA4 landing pages dotaz selhal, ale ostatni GA4 dotazy mohly pokracovat dal."
+            ]
+            result.report_warning_keys.add("ga4_landing_pages")
 
     if reports_enabled.get("landing_page_diagnostics", False):
         landing_page_summary = datasets.get("landing_pages", pd.DataFrame())
@@ -402,28 +505,51 @@ def build_ga4_exports(
         )
         result.datasets["landing_page_diagnostics"] = diagnostics
         result.report_notes["landing_page_diagnostics"] = [
-            "Diagnostika spouje spend a konverze z Ads s engagementem a transakcemi z GA4."
+            "Diagnostika spojuje spend a konverze z Ads s engagementem a transakcemi z GA4."
         ]
+        if not ga4_landing_rows and any(error["report"] == "ga4_landing_pages" for error in result.errors):
+            result.report_notes["landing_page_diagnostics"] = [
+                "Diagnostika cilovych stranek nema GA4 landing page data, proto pracuje jen s dostupnymi Ads signaly."
+            ]
+            result.report_warning_keys.add("landing_page_diagnostics")
 
     if reports_enabled.get("ga4_ecommerce_funnel", False):
         campaign_funnel = _reshape_funnel_rows(
             campaign_rows,
-            breakdown_type="campaign_item",
-            key_dimensions=["sessionCampaignName", "itemId", "itemName", "itemCategory"],
+            breakdown_type="campaign",
+            key_dimensions=["sessionCampaignName"],
+        )
+
+        product_funnel = _reshape_product_metric_rows(
+            product_rows,
+            breakdown_type="product",
+            key_dimensions=["itemId", "itemName", "itemCategory"],
             label_dimension="itemName",
             secondary_dimension="itemCategory",
         )
+
         landing_funnel = _reshape_funnel_rows(
             landing_rows,
-            breakdown_type="landing_page",
-            key_dimensions=["landingPage"],
+            breakdown_type="page_path",
+            key_dimensions=["pagePath"],
         )
+
         device_funnel = _reshape_funnel_rows(
             device_rows,
             breakdown_type="device",
             key_dimensions=["deviceCategory"],
         )
-        funnel = pd.concat([campaign_funnel, landing_funnel, device_funnel], ignore_index=True)
+
+        funnel_frames = [
+            frame
+            for frame in [campaign_funnel, product_funnel, landing_funnel, device_funnel]
+            if not frame.empty
+        ]
+        funnel = (
+            pd.concat(funnel_frames, ignore_index=True)
+            if funnel_frames
+            else pd.DataFrame(columns=get_report_definition("ga4_ecommerce_funnel").aliases)
+        )
         if not funnel.empty:
             funnel = funnel.sort_values(
                 by=["breakdown_type", "view_item_count"],
@@ -433,5 +559,17 @@ def build_ga4_exports(
         result.report_notes["ga4_ecommerce_funnel"] = [
             "Funnel rozlisuje propad mezi view_item, add_to_cart, begin_checkout a purchase."
         ]
+
+        funnel_error_reports = {
+            "ga4_funnel_campaign",
+            "ga4_funnel_product",
+            "ga4_funnel_page_path",
+            "ga4_funnel_device",
+        }
+        if any(error["report"] in funnel_error_reports for error in result.errors):
+            result.report_notes["ga4_ecommerce_funnel"].append(
+                "Nektery GA4 funnel breakdown selhal, export ale zachoval ostatni dostupne GA4 funnel breakdowny."
+            )
+            result.report_warning_keys.add("ga4_ecommerce_funnel")
 
     return result

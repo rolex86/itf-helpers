@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,9 @@ DECIMAL_COLUMNS = {
     "speed_index",
 }
 
+_MAX_SHEET_NAME_LENGTH = 31
+_INVALID_SHEET_NAME_CHARS = re.compile(r"[\[\]:*?/\\]")
+
 
 def _summary_frame(summary_rows: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(summary_rows, columns=["section", "name", "value", "details", "status", "rows"])
@@ -65,6 +69,29 @@ def _ordered_sheets(
         if report_key in datasets:
             ordered.append((get_report_definition(report_key).sheet_name, datasets[report_key]))
     return ordered
+
+
+def _clean_sheet_name(sheet_name: str) -> str:
+    cleaned = _INVALID_SHEET_NAME_CHARS.sub("-", str(sheet_name or "")).strip()
+    if not cleaned:
+        cleaned = "Sheet"
+    return cleaned[:_MAX_SHEET_NAME_LENGTH]
+
+
+def _unique_sheet_name(sheet_name: str, used_names: set[str]) -> str:
+    base = _clean_sheet_name(sheet_name)
+    if base not in used_names:
+        used_names.add(base)
+        return base
+
+    counter = 2
+    while True:
+        suffix = f" {counter}"
+        candidate = f"{base[: _MAX_SHEET_NAME_LENGTH - len(suffix)]}{suffix}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        counter += 1
 
 
 def _apply_common_formatting(worksheet) -> None:
@@ -114,20 +141,21 @@ def export_workbook(
     xlsx_path.parent.mkdir(parents=True, exist_ok=True)
     summary_df = _summary_frame(summary_rows)
     derived_sheets = derived_sheets or []
+    used_sheet_names: set[str] = set()
 
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, sheet_name="Summary", index=False)
-        for sheet_name, dataframe in _ordered_sheets(
+        summary_sheet_name = _unique_sheet_name("Summary", used_sheet_names)
+        summary_df.to_excel(writer, sheet_name=summary_sheet_name, index=False)
+
+        for raw_sheet_name, dataframe in _ordered_sheets(
             datasets=datasets,
             flags_df=flags_df,
             derived_sheets=derived_sheets,
         ):
+            sheet_name = _unique_sheet_name(raw_sheet_name, used_sheet_names)
             dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
 
         workbook = writer.book
-        summary_sheet = workbook["Summary"]
-        _apply_common_formatting(summary_sheet)
-
         for sheet_name in workbook.sheetnames:
             worksheet = workbook[sheet_name]
             _apply_common_formatting(worksheet)

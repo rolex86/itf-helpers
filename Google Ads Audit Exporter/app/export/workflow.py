@@ -219,6 +219,49 @@ def _persist_dataset_as_csv(
         export_csv(dataset, export_paths.raw_dir / f"{report_key}.csv")
 
 
+def _merge_export_result_datasets(
+    *,
+    state: ExportRunState,
+    export_paths: ExportPaths,
+    datasets: dict[str, pd.DataFrame],
+    report_notes: dict[str, list[str]],
+    report_warning_keys: set[str],
+    include_raw_csv: bool,
+) -> None:
+    for report_key, dataset in datasets.items():
+        state.datasets[report_key] = dataset
+        _persist_dataset_as_csv(
+            export_paths=export_paths,
+            dataset=dataset,
+            report_key=report_key,
+            enabled=include_raw_csv,
+        )
+        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
+        notes = list(report_notes.get(report_key, []))
+        if existing_row is not None:
+            existing_details = existing_row.get("details", "")
+            extra_details = " | ".join(note for note in notes if note)
+            if extra_details:
+                existing_row["details"] = (
+                    f"{existing_details} | {extra_details}" if existing_details else extra_details
+                )
+            existing_row["rows"] = int(len(dataset))
+            if report_key in report_warning_keys and existing_row.get("status") != "error":
+                existing_row["status"] = "warning"
+            continue
+
+        report = get_report_definition(report_key)
+        _record_report_success(
+            state=state,
+            report_key=report_key,
+            sheet_name=report.sheet_name,
+            rows=int(len(dataset)),
+            notes=notes,
+            status="warning" if report_key in report_warning_keys else "ok",
+            dropped_fields=[],
+        )
+
+
 def execute_export(settings: AppSettings, project_root: Path, config_path: Path) -> ExportExecutionResult:
     resolved_range = resolve_date_range(settings.date_range)
     export_paths = prepare_export_paths(
@@ -351,40 +394,16 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
     )
     state.query_log.extend(supplemental.query_attempts)
     state.errors.extend(supplemental.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=supplemental.datasets,
+        report_notes=supplemental.report_notes,
+        report_warning_keys=supplemental.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
 
-    for report_key, dataset in supplemental.datasets.items():
-        state.datasets[report_key] = dataset
-        _persist_dataset_as_csv(
-            export_paths=export_paths,
-            dataset=dataset,
-            report_key=report_key,
-            enabled=settings.output.include_raw_csv,
-        )
-        notes = list(supplemental.report_notes.get(report_key, []))
-        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
-        if existing_row is not None:
-            existing_details = existing_row.get("details", "")
-            extra_details = " | ".join(note for note in notes if note)
-            if extra_details:
-                existing_row["details"] = (
-                    f"{existing_details} | {extra_details}" if existing_details else extra_details
-                )
-            existing_row["rows"] = int(len(dataset))
-            if report_key in supplemental.report_warning_keys and existing_row.get("status") != "error":
-                existing_row["status"] = "warning"
-            continue
-
-        report = get_report_definition(report_key)
-        _record_report_success(
-            state=state,
-            report_key=report_key,
-            sheet_name=report.sheet_name,
-            rows=int(len(dataset)),
-            notes=notes,
-            status="warning" if report_key in supplemental.report_warning_keys else "ok",
-            dropped_fields=[],
-        )
-
+    logger.info("Starting synthetic module=merchant")
     merchant_result = build_merchant_exports(
         env_config=env_config,
         datasets=state.datasets,
@@ -392,40 +411,17 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         flags_config=settings.flags,
     )
     state.errors.extend(merchant_result.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=merchant_result.datasets,
+        report_notes=merchant_result.report_notes,
+        report_warning_keys=merchant_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=merchant")
 
-    for report_key, dataset in merchant_result.datasets.items():
-        state.datasets[report_key] = dataset
-        _persist_dataset_as_csv(
-            export_paths=export_paths,
-            dataset=dataset,
-            report_key=report_key,
-            enabled=settings.output.include_raw_csv,
-        )
-        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
-        notes = list(merchant_result.report_notes.get(report_key, []))
-        if existing_row is not None:
-            existing_details = existing_row.get("details", "")
-            extra_details = " | ".join(note for note in notes if note)
-            if extra_details:
-                existing_row["details"] = (
-                    f"{existing_details} | {extra_details}" if existing_details else extra_details
-                )
-            existing_row["rows"] = int(len(dataset))
-            if report_key in merchant_result.report_warning_keys and existing_row.get("status") != "error":
-                existing_row["status"] = "warning"
-            continue
-
-        report = get_report_definition(report_key)
-        _record_report_success(
-            state=state,
-            report_key=report_key,
-            sheet_name=report.sheet_name,
-            rows=int(len(dataset)),
-            notes=notes,
-            status="warning" if report_key in merchant_result.report_warning_keys else "ok",
-            dropped_fields=[],
-        )
-
+    logger.info("Starting synthetic module=ga4")
     ga4_result = build_ga4_exports(
         env_config=env_config,
         datasets=state.datasets,
@@ -434,40 +430,17 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         flags_config=settings.flags,
     )
     state.errors.extend(ga4_result.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=ga4_result.datasets,
+        report_notes=ga4_result.report_notes,
+        report_warning_keys=ga4_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=ga4")
 
-    for report_key, dataset in ga4_result.datasets.items():
-        state.datasets[report_key] = dataset
-        _persist_dataset_as_csv(
-            export_paths=export_paths,
-            dataset=dataset,
-            report_key=report_key,
-            enabled=settings.output.include_raw_csv,
-        )
-        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
-        notes = list(ga4_result.report_notes.get(report_key, []))
-        if existing_row is not None:
-            existing_details = existing_row.get("details", "")
-            extra_details = " | ".join(note for note in notes if note)
-            if extra_details:
-                existing_row["details"] = (
-                    f"{existing_details} | {extra_details}" if existing_details else extra_details
-                )
-            existing_row["rows"] = int(len(dataset))
-            if report_key in ga4_result.report_warning_keys and existing_row.get("status") != "error":
-                existing_row["status"] = "warning"
-            continue
-
-        report = get_report_definition(report_key)
-        _record_report_success(
-            state=state,
-            report_key=report_key,
-            sheet_name=report.sheet_name,
-            rows=int(len(dataset)),
-            notes=notes,
-            status="warning" if report_key in ga4_result.report_warning_keys else "ok",
-            dropped_fields=[],
-        )
-
+    logger.info("Starting synthetic module=search_console")
     gsc_result = build_search_console_exports(
         env_config=env_config,
         datasets=state.datasets,
@@ -477,40 +450,17 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         cache_dir=project_root / "exports" / "_cache" / "search_console",
     )
     state.errors.extend(gsc_result.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=gsc_result.datasets,
+        report_notes=gsc_result.report_notes,
+        report_warning_keys=gsc_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=search_console")
 
-    for report_key, dataset in gsc_result.datasets.items():
-        state.datasets[report_key] = dataset
-        _persist_dataset_as_csv(
-            export_paths=export_paths,
-            dataset=dataset,
-            report_key=report_key,
-            enabled=settings.output.include_raw_csv,
-        )
-        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
-        notes = list(gsc_result.report_notes.get(report_key, []))
-        if existing_row is not None:
-            existing_details = existing_row.get("details", "")
-            extra_details = " | ".join(note for note in notes if note)
-            if extra_details:
-                existing_row["details"] = (
-                    f"{existing_details} | {extra_details}" if existing_details else extra_details
-                )
-            existing_row["rows"] = int(len(dataset))
-            if report_key in gsc_result.report_warning_keys and existing_row.get("status") != "error":
-                existing_row["status"] = "warning"
-            continue
-
-        report = get_report_definition(report_key)
-        _record_report_success(
-            state=state,
-            report_key=report_key,
-            sheet_name=report.sheet_name,
-            rows=int(len(dataset)),
-            notes=notes,
-            status="warning" if report_key in gsc_result.report_warning_keys else "ok",
-            dropped_fields=[],
-        )
-
+    logger.info("Starting synthetic module=pagespeed")
     pagespeed_result = build_pagespeed_export(
         env_config=env_config,
         pagespeed_config=settings.pagespeed,
@@ -520,78 +470,31 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         cache_dir=project_root / "exports" / "_cache" / "pagespeed",
     )
     state.errors.extend(pagespeed_result.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=pagespeed_result.datasets,
+        report_notes=pagespeed_result.report_notes,
+        report_warning_keys=pagespeed_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=pagespeed")
 
-    for report_key, dataset in pagespeed_result.datasets.items():
-        state.datasets[report_key] = dataset
-        _persist_dataset_as_csv(
-            export_paths=export_paths,
-            dataset=dataset,
-            report_key=report_key,
-            enabled=settings.output.include_raw_csv,
-        )
-        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
-        notes = list(pagespeed_result.report_notes.get(report_key, []))
-        if existing_row is not None:
-            existing_details = existing_row.get("details", "")
-            extra_details = " | ".join(note for note in notes if note)
-            if extra_details:
-                existing_row["details"] = (
-                    f"{existing_details} | {extra_details}" if existing_details else extra_details
-                )
-            existing_row["rows"] = int(len(dataset))
-            if report_key in pagespeed_result.report_warning_keys and existing_row.get("status") != "error":
-                existing_row["status"] = "warning"
-            continue
-
-        report = get_report_definition(report_key)
-        _record_report_success(
-            state=state,
-            report_key=report_key,
-            sheet_name=report.sheet_name,
-            rows=int(len(dataset)),
-            notes=notes,
-            status="warning" if report_key in pagespeed_result.report_warning_keys else "ok",
-            dropped_fields=[],
-        )
-
+    logger.info("Starting synthetic module=gtm")
     gtm_result = build_gtm_exports(
         env_config=env_config,
         reports_enabled=settings.reports,
     )
     state.errors.extend(gtm_result.errors)
-
-    for report_key, dataset in gtm_result.datasets.items():
-        state.datasets[report_key] = dataset
-        _persist_dataset_as_csv(
-            export_paths=export_paths,
-            dataset=dataset,
-            report_key=report_key,
-            enabled=settings.output.include_raw_csv,
-        )
-        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
-        notes = list(gtm_result.report_notes.get(report_key, []))
-        if existing_row is not None:
-            existing_details = existing_row.get("details", "")
-            extra_details = " | ".join(note for note in notes if note)
-            if extra_details:
-                existing_row["details"] = (
-                    f"{existing_details} | {extra_details}" if existing_details else extra_details
-                )
-            existing_row["rows"] = int(len(dataset))
-            if report_key in gtm_result.report_warning_keys and existing_row.get("status") != "error":
-                existing_row["status"] = "warning"
-            continue
-
-        report = get_report_definition(report_key)
-        _record_report_success(
-            state=state,
-            report_key=report_key,
-            sheet_name=report.sheet_name,
-            rows=int(len(dataset)),
-            notes=notes,
-            status="warning" if report_key in gtm_result.report_warning_keys else "ok",
-            dropped_fields=[],
-        )
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=gtm_result.datasets,
+        report_notes=gtm_result.report_notes,
+        report_warning_keys=gtm_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=gtm")
 
     summary_rows = _build_summary_rows(
         customer_id=settings.customer_id,
@@ -602,6 +505,7 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         errors=state.errors,
     )
 
+    logger.info("Starting workbook export")
     try:
         export_workbook(
             xlsx_path=export_paths.xlsx_path,
@@ -641,10 +545,16 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
                 "timestamp": _timestamp(),
             }
         )
+    logger.info("Finished workbook export phase")
 
     _persist_metadata(export_paths, state, settings.output.include_metadata)
     logger.info("Finished export path=%s", export_paths.base_dir)
-    fallback_report_count = sum(1 for row in state.report_rows if row.get("status") == "warning")
+
+    fallback_report_count = sum(
+        1
+        for row in state.report_rows
+        if row.get("dropped_fields")
+)
     return ExportExecutionResult(
         exit_code=0,
         export_paths=export_paths,

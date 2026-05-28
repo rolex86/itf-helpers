@@ -445,7 +445,7 @@ REPORTS: dict[str, ReportDefinition] = {
     ),
     "product_custom_label_performance": ReportDefinition(
         key="product_custom_label_performance",
-        sheet_name="Product custom label performance",
+        sheet_name="Product custom label perf",
         query_file=None,
         fields=(
             FieldSpec("label_name", "label_name"),
@@ -697,10 +697,7 @@ REPORTS: dict[str, ReportDefinition] = {
             FieldSpec("campaign.name", "campaign_name", optional=True),
             FieldSpec("recommendation.campaign", "campaign_resource_name", optional=True),
             FieldSpec("recommendation.type", "recommendation_type"),
-            FieldSpec("recommendation.impact.base_metrics", "impact_base_metrics", optional=True),
-            FieldSpec("recommendation.impact.potential_metrics", "impact_potential_metrics", optional=True),
             FieldSpec("recommendation.dismissed", "dismissed", optional=True),
-            FieldSpec("recommendation", "details_json", optional=True),
         ),
     ),
     "conversion_actions": ReportDefinition(

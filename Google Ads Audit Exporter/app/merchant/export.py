@@ -277,19 +277,69 @@ def _apply_merchant_match(
         "custom_label_3",
         "custom_label_4",
     ]
-    merchant_lookup = merchant_lookup.loc[:, merchant_fields].drop_duplicates(subset=["product_item_id"])
+    merchant_fields = [column for column in merchant_fields if column in merchant_lookup.columns]
+
+    if "product_item_id" not in merchant_fields:
+        if not shopping_products.empty:
+            shopping_products = shopping_products.copy()
+            shopping_products["missing_in_merchant_export"] = True
+        if not shopping_summary.empty:
+            shopping_summary = shopping_summary.copy()
+            shopping_summary["missing_in_merchant_export"] = True
+        return shopping_products, shopping_summary
+
+    merchant_lookup = (
+        merchant_lookup.loc[:, merchant_fields]
+        .drop_duplicates(subset=["product_item_id"])
+        .copy()
+    )
+    merchant_lookup["_merchant_match"] = True
 
     def _merge(frame: pd.DataFrame) -> pd.DataFrame:
-        if frame.empty or "product_item_id" not in frame.columns:
+        if frame.empty:
             return frame
-        merged = frame.merge(
+
+        merged = frame.copy()
+        if "product_item_id" not in merged.columns:
+            merged["missing_in_merchant_export"] = True
+            return merged
+
+        merged = merged.merge(
             merchant_lookup,
             on="product_item_id",
             how="left",
             suffixes=("", "_merchant"),
         )
-        merged["missing_in_merchant_export"] = merged["title_merchant"].isna()
-        return merged
+
+        merchant_match = merged["_merchant_match"].eq(True)
+        merged["missing_in_merchant_export"] = ~merchant_match
+
+        # Když Ads dataset nemá některé feedové hodnoty, doplníme je z Merchantu.
+        # Když už je Ads dataset má, necháme je jako primární a Merchant verzi použijeme jen pro prázdné hodnoty.
+        fill_pairs = [
+            ("title", "title_merchant"),
+            ("availability", "availability_merchant"),
+            ("custom_label_0", "custom_label_0_merchant"),
+            ("custom_label_1", "custom_label_1_merchant"),
+            ("custom_label_2", "custom_label_2_merchant"),
+            ("custom_label_3", "custom_label_3_merchant"),
+            ("custom_label_4", "custom_label_4_merchant"),
+        ]
+
+        for base_column, merchant_column in fill_pairs:
+            if merchant_column in merged.columns:
+                if base_column not in merged.columns:
+                    merged[base_column] = merged[merchant_column]
+                else:
+                    base_is_empty = merged[base_column].isna() | (
+                        merged[base_column].astype(str).str.strip() == ""
+                    )
+                    merged.loc[base_is_empty, base_column] = merged.loc[
+                        base_is_empty,
+                        merchant_column,
+                    ]
+
+        return merged.drop(columns=["_merchant_match"], errors="ignore")
 
     return _merge(shopping_products), _merge(shopping_summary)
 

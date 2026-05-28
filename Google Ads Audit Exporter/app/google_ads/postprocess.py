@@ -29,10 +29,16 @@ def _postprocess_assets(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def _resource_name_id(resource_name: object) -> str:
-    if not resource_name:
+    if resource_name in (None, ""):
         return ""
     parts = str(resource_name).rstrip("/").split("/")
     return parts[-1] if parts else ""
+
+
+def _normalize_text_column(dataframe: pd.DataFrame, column: str) -> pd.Series:
+    if column not in dataframe.columns:
+        return pd.Series("", index=dataframe.index, dtype="string")
+    return dataframe[column].fillna("").astype("string")
 
 
 def _postprocess_recommendations(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -42,14 +48,24 @@ def _postprocess_recommendations(dataframe: pd.DataFrame) -> pd.DataFrame:
         return dataframe
 
     dataframe = dataframe.copy()
-    if "campaign_resource_name" in dataframe.columns and "campaign_id" in dataframe.columns:
-        missing_campaign_id = dataframe["campaign_id"].isin([None, ""])
-        dataframe.loc[missing_campaign_id, "campaign_id"] = dataframe.loc[
-            missing_campaign_id, "campaign_resource_name"
-        ].apply(_resource_name_id)
+
+    if "campaign_resource_name" in dataframe.columns:
+        campaign_ids = _normalize_text_column(dataframe, "campaign_id")
+        campaign_resource_names = _normalize_text_column(dataframe, "campaign_resource_name")
+        missing_campaign_id = campaign_ids.str.strip().eq("")
+        derived_campaign_ids = campaign_resource_names.map(_resource_name_id).astype("string")
+
+        dataframe["campaign_id"] = campaign_ids
+        dataframe.loc[missing_campaign_id, "campaign_id"] = derived_campaign_ids.loc[missing_campaign_id]
 
     if "optimization_score_uplift" not in dataframe.columns:
-        dataframe["optimization_score_uplift"] = None
+        dataframe["optimization_score_uplift"] = pd.Series(0.0, index=dataframe.index, dtype="float64")
+    else:
+        dataframe["optimization_score_uplift"] = pd.to_numeric(
+            dataframe["optimization_score_uplift"],
+            errors="coerce",
+        ).fillna(0.0)
+
     return dataframe
 
 

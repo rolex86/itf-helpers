@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pandas as pd
 
@@ -13,6 +16,9 @@ from app.config.settings import FlagsConfig, PageSpeedConfig
 from app.google_ads.report_definitions import get_report_definition
 from app.pagespeed.cache import PageSpeedCache
 from app.pagespeed.client import PageSpeedApiClient, PageSpeedApiError, PageSpeedClientConfig
+
+
+LOGGER = logging.getLogger("google_ads_audit_exporter")
 
 
 @dataclass(slots=True)
@@ -39,6 +45,44 @@ def _safe_float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+_TRACKING_QUERY_PREFIXES = ("utm_",)
+_TRACKING_QUERY_PARAMS = {
+    "gad_source",
+    "gad_campaignid",
+    "gclid",
+    "gbraid",
+    "wbraid",
+    "fbclid",
+    "msclkid",
+}
+
+
+def _normalize_pagespeed_url(url: str) -> str:
+    """Return a stable URL for Lighthouse testing while keeping the landing page path intact."""
+    parsed = urlsplit(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return str(url or "").strip()
+
+    kept_params = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        lower_key = key.lower()
+        if lower_key in _TRACKING_QUERY_PARAMS:
+            continue
+        if any(lower_key.startswith(prefix) for prefix in _TRACKING_QUERY_PREFIXES):
+            continue
+        kept_params.append((key, value))
+
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path or "/",
+            urlencode(kept_params, doseq=True),
+            "",
+        )
+    )
 
 
 def _top_landing_pages(landing_pages: pd.DataFrame, max_urls: int) -> list[str]:
@@ -105,13 +149,13 @@ def _opportunities_json(
     performance_score: float | None,
     lcp: float | None,
     cls: float | None,
-    cost_lookup: dict[str, float],
+    cost_micros: float,
     recommendations: list[str],
 ) -> str:
     payload = {
         "url": url,
         "strategy": strategy,
-        "cost_micros": cost_lookup.get(url, 0),
+        "cost_micros": cost_micros,
         "rules": recommendations,
         "note": "Nejdřív opravit stránku, ne vypnout kampaň." if recommendations else "",
         "performance_score": performance_score,
@@ -171,26 +215,89 @@ def build_pagespeed_export(
             if str(row["expanded_final_url"]).strip()
         }
 
+    total_requests = len(top_urls) * len(pagespeed_config.strategies)
+    LOGGER.info(
+        "PageSpeed selected %s URL(s), strategies=%s, total_requests=%s, source=%s, cache_days=%s",
+        len(top_urls),
+        ",".join(pagespeed_config.strategies),
+        total_requests,
+        pagespeed_config.source,
+        pagespeed_config.cache_days,
+    )
+    for index, url in enumerate(top_urls, start=1):
+        LOGGER.info(
+            "PageSpeed selected URL %s/%s cost_micros=%s url=%s",
+            index,
+            len(top_urls),
+            int(cost_lookup.get(url, 0)),
+            url,
+        )
+
     rows: list[dict[str, Any]] = []
     had_error = False
+    request_index = 0
     for url in top_urls:
+        tested_url = _normalize_pagespeed_url(url)
+        url_cost_micros = cost_lookup.get(url, 0)
+        if tested_url != url:
+            LOGGER.info(
+                "PageSpeed normalized URL source_url=%s tested_url=%s",
+                url,
+                tested_url,
+            )
+
         for strategy in pagespeed_config.strategies:
+            request_index += 1
             request_payload = {
-                "url": url,
+                "url": tested_url,
                 "strategy": strategy,
                 "has_api_key": bool(env_config.pagespeed_api_key),
             }
             payload = cache.load(request_payload)
-            if payload is None:
+            if payload is not None:
+                LOGGER.info(
+                    "PageSpeed %s/%s cache HIT strategy=%s url=%s",
+                    request_index,
+                    total_requests,
+                    strategy,
+                    tested_url,
+                )
+            else:
+                LOGGER.info(
+                    "PageSpeed %s/%s API start strategy=%s url=%s",
+                    request_index,
+                    total_requests,
+                    strategy,
+                    tested_url,
+                )
+                started_at = perf_counter()
                 try:
-                    payload = client.run_pagespeed(url=url, strategy=strategy)
+                    payload = client.run_pagespeed(url=tested_url, strategy=strategy)
                     cache.save(request_payload, payload)
+                    LOGGER.info(
+                        "PageSpeed %s/%s API finished strategy=%s seconds=%.1f url=%s",
+                        request_index,
+                        total_requests,
+                        strategy,
+                        perf_counter() - started_at,
+                        tested_url,
+                    )
                 except PageSpeedApiError as exc:
                     had_error = True
+                    LOGGER.warning(
+                        "PageSpeed %s/%s API failed strategy=%s seconds=%.1f url=%s source_url=%s error=%s",
+                        request_index,
+                        total_requests,
+                        strategy,
+                        perf_counter() - started_at,
+                        tested_url,
+                        url,
+                        exc.message,
+                    )
                     result.errors.append(
                         {
                             "report": "pagespeed_api",
-                            "message": f"{url} [{strategy}]: {exc.message}",
+                            "message": f"{tested_url} [{strategy}]: {exc.message}",
                             "details": exc.details,
                             "timestamp": _timestamp(),
                         }
@@ -212,7 +319,7 @@ def build_pagespeed_export(
             speed_index = _audit_value(audits, "speed-index")
 
             recommendations: list[str] = []
-            high_spend = cost_lookup.get(url, 0) >= flags_config.min_spend_micros
+            high_spend = url_cost_micros >= flags_config.min_spend_micros
             if high_spend and strategy == "mobile" and (performance_score or 0) < 60:
                 recommendations.append("high_spend_slow_mobile")
             if high_spend and (lcp or 0) > 4000:
@@ -224,7 +331,7 @@ def build_pagespeed_export(
 
             rows.append(
                 {
-                    "url": url,
+                    "url": tested_url,
                     "strategy": strategy,
                     "performance_score": performance_score,
                     "accessibility_score": accessibility_score,
@@ -237,12 +344,12 @@ def build_pagespeed_export(
                     "speed_index": speed_index,
                     "diagnostics_json": json.dumps(_collect_diagnostics(payload), ensure_ascii=False),
                     "opportunities_json": _opportunities_json(
-                        url=url,
+                        url=tested_url,
                         strategy=strategy,
                         performance_score=performance_score,
                         lcp=lcp,
                         cls=cls,
-                        cost_lookup=cost_lookup,
+                        cost_micros=url_cost_micros,
                         recommendations=recommendations,
                     ),
                 }
