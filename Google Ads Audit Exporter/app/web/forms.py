@@ -18,6 +18,8 @@ def _to_optional_float(raw: str) -> float | None:
 
 def parse_dashboard_form(form: Any) -> dict[str, Any]:
     preset = (form.get("preset") or "LAST_90_DAYS").strip()
+    export_mode = (form.get("export_mode") or "single_account").strip()
+    selected_context_key = (form.get("selected_context_key") or "").strip()
     date_from = (form.get("date_from") or "").strip() or None
     date_to = (form.get("date_to") or "").strip() or None
     if preset != "CUSTOM":
@@ -93,6 +95,8 @@ def parse_dashboard_form(form: Any) -> dict[str, Any]:
         },
         "ui_state": {
             "selected_preset": preset,
+            "export_mode": export_mode,
+            "selected_context_key": selected_context_key,
         },
     }
     return payload

@@ -17,6 +17,8 @@
 
         <nav class="nav-block">
           <a href="#credentials">Pristupy</a>
+          <a href="{{ url_for('web.discovery_page') }}">Discovery</a>
+          <a href="{{ url_for('web.mapping_page') }}">Mapping</a>
           <a href="#merchant">Merchant Center</a>
           <a href="#ga4">GA4</a>
           <a href="#gsc">Search Console</a>
@@ -526,6 +528,30 @@
               <h3>Spusteni</h3>
               <p>Konfiguraci muzes ulozit nebo rovnou spustit export z jednoho mista.</p>
             </div>
+            <div class="field-grid compact">
+              <label>
+                <span>Export mode</span>
+                <select name="export_mode">
+                  <option value="single_account" {% if selected_export_mode == 'single_account' %}selected{% endif %}>Single account</option>
+                  <option value="selected_context" {% if selected_export_mode == 'selected_context' %}selected{% endif %}>Selected context</option>
+                  <option value="all_enabled_contexts" {% if selected_export_mode == 'all_enabled_contexts' %}selected{% endif %}>All enabled contexts</option>
+                </select>
+              </label>
+              <label>
+                <span>Vybrany kontext</span>
+                <select name="selected_context_key">
+                  <option value="">Vyber kontext</option>
+                  {% for context in state.account_contexts %}
+                    <option value="{{ context.key }}" {% if selected_context_key == context.key %}selected{% endif %}>{{ context.label }} ({{ context.google_ads_customer_id }})</option>
+                  {% endfor %}
+                </select>
+              </label>
+            </div>
+            {% if not state.has_multi_account_config %}
+              <div class="policy-note">
+                Multi-context rezim se objevi automaticky, jakmile ulozis aspon jeden kontext v sekci <a href="{{ url_for('web.mapping_page') }}">Mapping</a>.
+              </div>
+            {% endif %}
             <div class="action-row">
               <button class="btn btn-secondary" type="submit" formaction="{{ url_for('web.save_configuration') }}">Ulozit konfiguraci</button>
               <button class="btn btn-primary" type="submit" id="run-button">Spustit export</button>
@@ -539,69 +565,120 @@
               <h3>Posledni spusteni</h3>
               <p>Vysledek exportu, ktery jsi prave spustil.</p>
             </div>
+            {% if run_result.exit_code is defined %}
+              <div class="result-grid">
+                <div class="result-card">
+                  <span>Stav</span>
+                  <strong>{{ 'Hotovo' if run_result.exit_code == 0 else 'Chyba' }}</strong>
+                </div>
+                <div class="result-card">
+                  <span>Vystupni slozka</span>
+                  <strong>{{ run_result.export_paths.base_dir }}</strong>
+                </div>
+                <div class="result-card">
+                  <span>Obdobi</span>
+                  <strong>{{ run_result.resolved_range.date_from }} -> {{ run_result.resolved_range.date_to }}</strong>
+                </div>
+                <div class="result-card {% if run_result.fallback_report_count %}result-card-warning{% endif %}">
+                  <span>Dropped fields</span>
+                  <strong>{{ run_result.fallback_report_count }}</strong>
+                </div>
+              </div>
 
-            <div class="result-grid">
-              <div class="result-card">
-                <span>Stav</span>
-                <strong>{{ 'Hotovo' if run_result.exit_code == 0 else 'Chyba' }}</strong>
-              </div>
-              <div class="result-card">
-                <span>Vystupni slozka</span>
-                <strong>{{ run_result.export_paths.base_dir }}</strong>
-              </div>
-              <div class="result-card">
-                <span>Obdobi</span>
-                <strong>{{ run_result.resolved_range.date_from }} -> {{ run_result.resolved_range.date_to }}</strong>
-              </div>
-              <div class="result-card {% if run_result.fallback_report_count %}result-card-warning{% endif %}">
-                <span>Dropped fields</span>
-                <strong>{{ run_result.fallback_report_count }}</strong>
-              </div>
-            </div>
+              {% if run_result.fallback_report_count %}
+                <div class="flash flash-warning">
+                  {{ run_result.fallback_report_count }} report{% if run_result.fallback_report_count != 1 %}u{% endif %} bezel s fallbackem a nektera optional pole byla zahozena.
+                </div>
+              {% endif %}
 
-            {% if run_result.fallback_report_count %}
-              <div class="flash flash-warning">
-                {{ run_result.fallback_report_count }} report{% if run_result.fallback_report_count != 1 %}u{% endif %} bezel s fallbackem a nektera optional pole byla zahozena.
-              </div>
-            {% endif %}
+              {% if run_result.account_info.get("time_zone") %}
+                <div class="flash flash-info">
+                  Casova zona uctu je <strong>{{ run_result.account_info.get("time_zone") }}</strong>. U dennich dat a hranic obdobi pocitej s interpretaci podle teto casove zony.
+                </div>
+              {% endif %}
 
-            {% if run_result.account_info.get("time_zone") %}
-              <div class="flash flash-info">
-                Casova zona uctu je <strong>{{ run_result.account_info.get("time_zone") }}</strong>. U dennich dat a hranic obdobi pocitej s interpretaci podle teto casove zony.
-              </div>
-            {% endif %}
-
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Report</th>
-                    <th>Stav</th>
-                    <th>Radku</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for row in run_result.report_rows %}
-                    <tr class="{% if row.status == 'warning' %}row-warning{% elif row.status == 'error' %}row-error{% endif %}">
-                      <td>{{ state.report_labels.get(row.name, row.name) }}</td>
-                      <td>{{ 'OK' if row.status == 'ok' else ('Varovani' if row.status == 'warning' else 'Chyba') }}</td>
-                      <td>{{ row.rows }}</td>
-                      <td>{{ row.details }}</td>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Report</th>
+                      <th>Stav</th>
+                      <th>Radku</th>
+                      <th>Detail</th>
                     </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-
-            {% if run_result.errors %}
-              <div class="error-list">
-                {% for error in run_result.errors %}
-                  <div class="flash flash-error">
-                    <strong>{{ state.report_labels.get(error.report, error.report) }}</strong>: {{ error.message }}
-                  </div>
-                {% endfor %}
+                  </thead>
+                  <tbody>
+                    {% for row in run_result.report_rows %}
+                      <tr class="{% if row.status == 'warning' %}row-warning{% elif row.status == 'error' %}row-error{% endif %}">
+                        <td>{{ state.report_labels.get(row.name, row.name) }}</td>
+                        <td>{{ 'OK' if row.status == 'ok' else ('Varovani' if row.status == 'warning' else 'Chyba') }}</td>
+                        <td>{{ row.rows }}</td>
+                        <td>{{ row.details }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
               </div>
+
+              {% if run_result.errors %}
+                <div class="error-list">
+                  {% for error in run_result.errors %}
+                    <div class="flash flash-error">
+                      <strong>{{ state.report_labels.get(error.report, error.report) }}</strong>: {{ error.message }}
+                    </div>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            {% else %}
+              <div class="result-grid">
+                <div class="result-card">
+                  <span>Rezim</span>
+                  <strong>{{ run_result.mode }}</strong>
+                </div>
+                <div class="result-card">
+                  <span>Hotove kontexty</span>
+                  <strong>{{ run_result.context_results | length }}</strong>
+                </div>
+                <div class="result-card {% if run_result.context_errors %}result-card-warning{% endif %}">
+                  <span>Chybove kontexty</span>
+                  <strong>{{ run_result.context_errors | length }}</strong>
+                </div>
+                <div class="result-card">
+                  <span>Cross-account slozka</span>
+                  <strong>{{ run_result.cross_account_dir or '-' }}</strong>
+                </div>
+              </div>
+
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Kontext</th>
+                      <th>Vystup</th>
+                      <th>Pocet chyb</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for item in run_result.context_results %}
+                      <tr>
+                        <td>{{ item.context_label }} ({{ item.context_key }})</td>
+                        <td>{{ item.export_path }}</td>
+                        <td>{{ item.error_count }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+
+              {% if run_result.context_errors %}
+                <div class="error-list">
+                  {% for error in run_result.context_errors %}
+                    <div class="flash flash-error">
+                      <strong>{{ error.context_label }} ({{ error.context_key }})</strong>: {{ error.message }}
+                    </div>
+                  {% endfor %}
+                </div>
+              {% endif %}
             {% endif %}
           </section>
         {% endif %}

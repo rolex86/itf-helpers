@@ -173,6 +173,7 @@ def build_pagespeed_export(
     reports_enabled: dict[str, bool],
     landing_pages: pd.DataFrame,
     cache_dir: Path,
+    currency_code: str | None = None,
 ) -> PageSpeedExportResult:
     result = PageSpeedExportResult()
     if not reports_enabled.get("pagespeed_landing_pages", False):
@@ -225,11 +226,15 @@ def build_pagespeed_export(
         pagespeed_config.cache_days,
     )
     for index, url in enumerate(top_urls, start=1):
+        url_cost_micros = cost_lookup.get(url, 0)
+        url_cost = round(url_cost_micros / 1_000_000, 2)
         LOGGER.info(
-            "PageSpeed selected URL %s/%s cost_micros=%s url=%s",
+            "PageSpeed selected URL %s/%s cost_micros=%s cost=%.2f currency=%s source_url=%s",
             index,
             len(top_urls),
-            int(cost_lookup.get(url, 0)),
+            int(url_cost_micros),
+            url_cost,
+            currency_code or "",
             url,
         )
 

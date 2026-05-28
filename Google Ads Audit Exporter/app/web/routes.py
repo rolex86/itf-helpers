@@ -5,11 +5,25 @@ from pathlib import Path
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, send_file, url_for
 
 from app.web.forms import parse_dashboard_form
-from app.web.services.dashboard_service import load_dashboard_state, run_export_from_dashboard, save_dashboard_configuration
+from app.web.services.dashboard_service import (
+    load_dashboard_state,
+    run_export_from_dashboard,
+    run_multi_mode_export_from_dashboard,
+    save_dashboard_configuration,
+)
+from app.web.services.discovery_service import load_discovery_tables, run_discovery
 from app.web.services.folder_picker import pick_directory
 from app.web.services.ga4_dashboard_service import ga4_list_properties, ga4_test_connection
 from app.web.services.gtm_dashboard_service import gtm_list_accounts, gtm_test_connection
 from app.web.services.gsc_dashboard_service import gsc_list_properties, gsc_test_connection
+from app.web.services.mapping_service import (
+    load_mapping_state,
+    parse_contexts_payload,
+    run_all_context_exports,
+    run_selected_context_export,
+    save_mapping,
+    test_context_from_payload,
+)
 from app.web.services.merchant_dashboard_service import merchant_list_accounts, merchant_test_connection
 
 
@@ -37,6 +51,8 @@ def dashboard():
         state=state,
         run_result=None,
         selected_preset=_selected_preset(state.config_payload),
+        selected_export_mode="single_account",
+        selected_context_key="",
     )
 
 
@@ -56,19 +72,29 @@ def run_export():
     payload = parse_dashboard_form(request.form)
     state = load_dashboard_state(_project_root())
     selected_preset = payload["ui_state"]["selected_preset"]
+    export_mode = payload["ui_state"].get("export_mode", "single_account")
+    selected_context_key = payload["ui_state"].get("selected_context_key", "")
 
     try:
-        result = run_export_from_dashboard(_project_root(), payload)
-        if result.exit_code == 0:
-            flash("Export byl dokonceny.", "success")
+        if export_mode == "single_account":
+            result = run_export_from_dashboard(_project_root(), payload)
+            if result.exit_code == 0:
+                flash("Export byl dokonceny.", "success")
+            else:
+                flash("Export skoncil s chybou autentizace.", "error")
+            run_result = result
         else:
-            flash("Export skoncil s chybou autentizace.", "error")
+            multi_result = run_multi_mode_export_from_dashboard(_project_root(), payload)
+            flash("Multi-context export byl dokonceny.", "success")
+            run_result = multi_result
         state = load_dashboard_state(_project_root())
         return render_template(
             "dashboard.html",
             state=state,
-            run_result=result,
+            run_result=run_result,
             selected_preset=selected_preset or _selected_preset(state.config_payload),
+            selected_export_mode=export_mode,
+            selected_context_key=selected_context_key,
         )
     except Exception as exc:
         flash(f"Export selhal: {exc}", "error")
@@ -77,7 +103,93 @@ def run_export():
             state=state,
             run_result=None,
             selected_preset=selected_preset or _selected_preset(state.config_payload),
+            selected_export_mode=export_mode,
+            selected_context_key=selected_context_key,
         )
+
+
+@web_bp.get("/discovery")
+def discovery_page():
+    return render_template(
+        "discovery.html",
+        state=load_dashboard_state(_project_root()),
+        discovery_tables=load_discovery_tables(_project_root()),
+        discovery_result=None,
+    )
+
+
+@web_bp.post("/discovery/run")
+def run_discovery_page():
+    try:
+        result = run_discovery(_project_root())
+        flash("Discovery bylo dokonceno a CSV byla ulozena do exports/_discovery.", "success")
+        return render_template(
+            "discovery.html",
+            state=load_dashboard_state(_project_root()),
+            discovery_tables=result.get("tables", {}),
+            discovery_result=result,
+        )
+    except Exception as exc:
+        flash(f"Discovery selhalo: {exc}", "error")
+        return render_template(
+            "discovery.html",
+            state=load_dashboard_state(_project_root()),
+            discovery_tables=load_discovery_tables(_project_root()),
+            discovery_result=None,
+        )
+
+
+@web_bp.get("/mapping")
+def mapping_page():
+    mapping_state = load_mapping_state(_project_root())
+    return render_template(
+        "mapping.html",
+        state=load_dashboard_state(_project_root()),
+        mapping_state=mapping_state,
+    )
+
+
+@web_bp.post("/mapping/save")
+def save_mapping_page():
+    payload = request.get_json(silent=True) or {}
+    try:
+        contexts = parse_contexts_payload(payload)
+        save_mapping(_project_root(), contexts)
+        return jsonify({"ok": True, "message": "Mapping byl ulozen do config.accounts.yaml."})
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/mapping/test-context")
+def test_mapping_context():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = test_context_from_payload(_project_root(), payload)
+        status_code = 200 if result.get("ok") else 400
+        return jsonify(result), status_code
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 500
+
+
+@web_bp.post("/run-context-export")
+def run_context_export_route():
+    payload = request.get_json(silent=True) or {}
+    context_key = str(payload.get("context_key") or "").strip()
+    try:
+        result = run_selected_context_export(_project_root(), context_key=context_key)
+        status_code = 200 if result.get("ok") else 400
+        return jsonify(result), status_code
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 500
+
+
+@web_bp.post("/run-multi-export")
+def run_multi_export_route():
+    try:
+        result = run_all_context_exports(_project_root())
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 500
 
 
 @web_bp.get("/downloads/<path:relative_path>")

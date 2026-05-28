@@ -20,11 +20,13 @@ def prepare_export_paths(
     customer_id: str,
     run_date: date,
     xlsx_filename: str,
+    base_name_override: str | None = None,
+    parent_dir_override: Path | None = None,
 ) -> ExportPaths:
-    exports_root = project_root / base_dir_name
+    exports_root = parent_dir_override or (project_root / base_dir_name)
     exports_root.mkdir(parents=True, exist_ok=True)
 
-    base_name = f"{run_date.isoformat()}_{customer_id}"
+    base_name = base_name_override or f"{run_date.isoformat()}_{customer_id}"
     base_dir = exports_root / base_name
     suffix = 1
     while base_dir.exists():

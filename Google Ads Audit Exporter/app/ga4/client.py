@@ -6,6 +6,7 @@ from typing import Any
 import requests
 
 from app.config.env_settings import GoogleAdsEnvConfig
+from app.utils.retry import run_http_request_with_retry
 
 GA4_READONLY_SCOPE = "https://www.googleapis.com/auth/analytics.readonly"
 
@@ -213,15 +214,17 @@ class Ga4ApiClient:
         if self._cached_access_token:
             return self._cached_access_token
 
-        token_response = self._session.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": self.config.client_id,
-                "client_secret": self.config.client_secret,
-                "refresh_token": self.config.refresh_token,
-                "grant_type": "refresh_token",
-            },
-            timeout=30,
+        token_response = run_http_request_with_retry(
+            lambda: self._session.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": self.config.client_id,
+                    "client_secret": self.config.client_secret,
+                    "refresh_token": self.config.refresh_token,
+                    "grant_type": "refresh_token",
+                },
+                timeout=30,
+            )
         )
         if token_response.status_code >= 400:
             raise Ga4ApiError(
@@ -241,7 +244,9 @@ class Ga4ApiClient:
         }
 
     def _get_json(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = self._session.get(url, headers=self._headers(), params=params, timeout=60)
+        response = run_http_request_with_retry(
+            lambda: self._session.get(url, headers=self._headers(), params=params, timeout=60)
+        )
         if response.status_code >= 400:
             raise Ga4ApiError(
                 self._error_message(response),
@@ -251,7 +256,9 @@ class Ga4ApiClient:
         return response.json()
 
     def _post_json(self, url: str, json_payload: dict[str, Any]) -> dict[str, Any]:
-        response = self._session.post(url, headers=self._headers(), json=json_payload, timeout=120)
+        response = run_http_request_with_retry(
+            lambda: self._session.post(url, headers=self._headers(), json=json_payload, timeout=120)
+        )
         if response.status_code >= 400:
             raise Ga4ApiError(
                 self._error_message(response),

@@ -12,6 +12,7 @@ import pandas as pd
 from app.google_ads.normalizer import extract_path_value
 from app.google_ads.report_definitions import FieldSpec, ReportDefinition, empty_report_frame
 from app.utils.dates import ResolvedDateRange
+from app.utils.retry import is_retryable_google_ads_exception, run_with_retry
 
 
 @dataclass(slots=True)
@@ -127,11 +128,17 @@ class GoogleAdsFetcher:
         return rendered.strip()
 
     def _run_query(self, customer_id: str, query: str) -> list[Any]:
-        stream = self.google_ads_service.search_stream(customer_id=customer_id, query=query)
-        rows: list[Any] = []
-        for batch in stream:
-            rows.extend(batch.results)
-        return rows
+        def _action() -> list[Any]:
+            stream = self.google_ads_service.search_stream(customer_id=customer_id, query=query)
+            collected: list[Any] = []
+            for batch in stream:
+                collected.extend(batch.results)
+            return collected
+
+        return run_with_retry(
+            _action,
+            should_retry=is_retryable_google_ads_exception,
+        )
 
     def _rows_to_frame(
         self,

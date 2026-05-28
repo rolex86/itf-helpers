@@ -6,6 +6,7 @@ from typing import Any
 import requests
 
 from app.config.env_settings import GoogleAdsEnvConfig
+from app.utils.retry import run_http_request_with_retry
 
 CONTENT_SCOPE = "https://www.googleapis.com/auth/content"
 
@@ -77,6 +78,15 @@ class MerchantApiClient:
     def list_accessible_accounts(self) -> list[dict[str, Any]]:
         items = self._paginate_json(
             "https://merchantapi.googleapis.com/accounts/v1/accounts",
+            list_key="accounts",
+            params={"pageSize": 250},
+        )
+        return [self._account_to_view(account) for account in items]
+
+    def list_subaccounts(self, provider_account_id: str) -> list[dict[str, Any]]:
+        target = _resource_name(provider_account_id)
+        items = self._paginate_json(
+            f"https://merchantapi.googleapis.com/accounts/v1/{target}:listSubaccounts",
             list_key="accounts",
             params={"pageSize": 250},
         )
@@ -164,7 +174,8 @@ class MerchantApiClient:
             "name": account.get("name", ""),
             "account_id": _safe_text(account.get("accountId")) or _safe_text(account.get("name")).replace("accounts/", ""),
             "account_name": account.get("accountName") or account.get("displayName") or "",
-            "homepage": account.get("homepage") or "",
+            "homepage": account.get("homepage") or account.get("websiteUrl") or "",
+            "website_url": account.get("homepage") or account.get("websiteUrl") or "",
             "time_zone": account.get("timeZone") or "",
             "language_code": account.get("languageCode") or "",
             "listing_type": account.get("listingType") or "",
@@ -194,15 +205,17 @@ class MerchantApiClient:
     def _access_token(self) -> str:
         if self._cached_access_token:
             return self._cached_access_token
-        token_response = self._session.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": self.config.client_id,
-                "client_secret": self.config.client_secret,
-                "refresh_token": self.config.refresh_token,
-                "grant_type": "refresh_token",
-            },
-            timeout=30,
+        token_response = run_http_request_with_retry(
+            lambda: self._session.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": self.config.client_id,
+                    "client_secret": self.config.client_secret,
+                    "refresh_token": self.config.refresh_token,
+                    "grant_type": "refresh_token",
+                },
+                timeout=30,
+            ),
         )
         if token_response.status_code >= 400:
             raise MerchantApiError(
@@ -219,7 +232,9 @@ class MerchantApiClient:
             "Authorization": f"Bearer {self._access_token()}",
             "Accept": "application/json",
         }
-        response = self._session.get(url, headers=headers, params=params, timeout=60)
+        response = run_http_request_with_retry(
+            lambda: self._session.get(url, headers=headers, params=params, timeout=60),
+        )
         if response.status_code >= 400:
             raise MerchantApiError(
                 self._error_message(response),

@@ -9,7 +9,7 @@ import pandas as pd
 
 from app.audit.basic_flags import build_basic_flags
 from app.auth.google_ads_client import build_google_ads_client
-from app.config.env_settings import load_env_config
+from app.config.env_settings import GoogleAdsEnvConfig, load_env_config
 from app.config.settings import AppSettings
 from app.export.csv_exporter import export_csv
 from app.export.derived_summaries import build_landing_pages_summary, build_locations_summary
@@ -47,6 +47,8 @@ class ExportExecutionResult:
     report_rows: list[dict[str, Any]]
     account_info: dict[str, Any]
     fallback_report_count: int
+    datasets: dict[str, pd.DataFrame] = field(default_factory=dict)
+    context_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _timestamp() -> str:
@@ -60,6 +62,7 @@ def _build_summary_rows(
     export_paths: ExportPaths,
     report_rows: list[dict[str, Any]],
     errors: list[dict[str, Any]],
+    context_metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = [
         {
@@ -111,6 +114,21 @@ def _build_summary_rows(
             "rows": "",
         },
     ]
+
+    if context_metadata:
+        for key in ("context_key", "context_label", "source_domain", "export_mode"):
+            if not context_metadata.get(key):
+                continue
+            rows.append(
+                {
+                    "section": "context",
+                    "name": key,
+                    "value": context_metadata.get(key, ""),
+                    "details": "",
+                    "status": "ok",
+                    "rows": "",
+                }
+            )
 
     for warning in resolved_range.warnings:
         rows.append(
@@ -263,6 +281,23 @@ def _merge_export_result_datasets(
 
 
 def execute_export(settings: AppSettings, project_root: Path, config_path: Path) -> ExportExecutionResult:
+    return execute_export_with_overrides(
+        settings=settings,
+        project_root=project_root,
+        config_path=config_path,
+    )
+
+
+def execute_export_with_overrides(
+    settings: AppSettings,
+    project_root: Path,
+    config_path: Path,
+    *,
+    env_config_override: GoogleAdsEnvConfig | None = None,
+    export_base_name_override: str | None = None,
+    export_parent_dir_override: Path | None = None,
+    context_metadata: dict[str, Any] | None = None,
+) -> ExportExecutionResult:
     resolved_range = resolve_date_range(settings.date_range)
     export_paths = prepare_export_paths(
         project_root=project_root,
@@ -270,12 +305,14 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         customer_id=settings.customer_id,
         run_date=resolved_range.export_date,
         xlsx_filename=settings.output.xlsx_filename,
+        base_name_override=export_base_name_override,
+        parent_dir_override=export_parent_dir_override,
     )
     logger = configure_logging(export_paths.log_path)
     state = ExportRunState(account_info={"customer_id": settings.customer_id})
 
     logger.info("Starting export for customer_id=%s", settings.customer_id)
-    env_config = load_env_config(project_root / ".env")
+    env_config = env_config_override or load_env_config(project_root / ".env")
     logger.info(
         "Resolved date range %s -> %s (%s)",
         resolved_range.date_from.isoformat(),
@@ -291,7 +328,7 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
     )
 
     try:
-        client = build_google_ads_client()
+        client = build_google_ads_client(env_config=env_config)
     except Exception as exc:  # pragma: no cover - depends on credentials/runtime
         message = f"Authentication failed: {exc}"
         logger.exception(message)
@@ -305,6 +342,8 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
             report_rows=list(state.report_rows),
             account_info=dict(state.account_info),
             fallback_report_count=0,
+            datasets=dict(state.datasets),
+            context_metadata=dict(context_metadata or {}),
         )
 
     fetcher = GoogleAdsFetcher(client=client, project_root=project_root, logger=logger)
@@ -468,6 +507,7 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         reports_enabled=settings.reports,
         landing_pages=state.datasets.get("landing_pages", pd.DataFrame()),
         cache_dir=project_root / "exports" / "_cache" / "pagespeed",
+        currency_code=str(state.account_info.get("currency_code", "") or ""),
     )
     state.errors.extend(pagespeed_result.errors)
     _merge_export_result_datasets(
@@ -503,6 +543,7 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         export_paths=export_paths,
         report_rows=state.report_rows,
         errors=state.errors,
+        context_metadata=context_metadata,
     )
 
     logger.info("Starting workbook export")
@@ -554,7 +595,7 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         1
         for row in state.report_rows
         if row.get("dropped_fields")
-)
+    )
     return ExportExecutionResult(
         exit_code=0,
         export_paths=export_paths,
@@ -563,11 +604,13 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         report_rows=list(state.report_rows),
         account_info=dict(state.account_info),
         fallback_report_count=fallback_report_count,
+        datasets=dict(state.datasets),
+        context_metadata=dict(context_metadata or {}),
     )
 
 
 def run_export(settings: AppSettings, project_root: Path, config_path: Path) -> int:
-    return execute_export(
+    return execute_export_with_overrides(
         settings=settings,
         project_root=project_root,
         config_path=config_path,

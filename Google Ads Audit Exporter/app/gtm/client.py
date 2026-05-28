@@ -6,6 +6,7 @@ from typing import Any
 import requests
 
 from app.config.env_settings import GoogleAdsEnvConfig
+from app.utils.retry import run_http_request_with_retry
 
 GTM_READONLY_SCOPE = "https://www.googleapis.com/auth/tagmanager.readonly"
 
@@ -93,6 +94,7 @@ class GtmApiClient:
                 "account_id": item.get("accountId", ""),
                 "container_id": item.get("containerId", ""),
                 "name": item.get("name", ""),
+                "domain_name": item.get("domainName", ""),
                 "usage_context": " | ".join(item.get("usageContext", []) or []),
                 "public_id": item.get("publicId", ""),
                 "path": item.get("path", ""),
@@ -242,15 +244,17 @@ class GtmApiClient:
     def _access_token(self) -> str:
         if self._cached_access_token:
             return self._cached_access_token
-        response = self._session.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": self.config.client_id,
-                "client_secret": self.config.client_secret,
-                "refresh_token": self.config.refresh_token,
-                "grant_type": "refresh_token",
-            },
-            timeout=30,
+        response = run_http_request_with_retry(
+            lambda: self._session.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": self.config.client_id,
+                    "client_secret": self.config.client_secret,
+                    "refresh_token": self.config.refresh_token,
+                    "grant_type": "refresh_token",
+                },
+                timeout=30,
+            )
         )
         if response.status_code >= 400:
             raise GtmApiError(
@@ -269,7 +273,9 @@ class GtmApiClient:
         }
 
     def _get_json(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = self._session.get(url, headers=self._headers(), params=params, timeout=60)
+        response = run_http_request_with_retry(
+            lambda: self._session.get(url, headers=self._headers(), params=params, timeout=60)
+        )
         if response.status_code >= 400:
             raise GtmApiError(
                 self._error_message(response),

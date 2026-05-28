@@ -60,14 +60,20 @@ def _summary_frame(summary_rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 def _ordered_sheets(
     datasets: dict[str, pd.DataFrame],
-    flags_df: pd.DataFrame,
+    flags_df: pd.DataFrame | None,
     derived_sheets: list[tuple[str, pd.DataFrame]],
 ) -> list[tuple[str, pd.DataFrame]]:
-    ordered: list[tuple[str, pd.DataFrame]] = [("Basic flags", flags_df)]
+    ordered: list[tuple[str, pd.DataFrame]] = []
+    if flags_df is not None:
+        ordered.append(("Basic flags", flags_df))
     ordered.extend(derived_sheets)
     for report_key in REPORT_ORDER:
         if report_key in datasets:
             ordered.append((get_report_definition(report_key).sheet_name, datasets[report_key]))
+    for report_key, dataframe in datasets.items():
+        if report_key in REPORT_ORDER:
+            continue
+        ordered.append((report_key, dataframe))
     return ordered
 
 
@@ -135,7 +141,7 @@ def export_workbook(
     xlsx_path: Path,
     summary_rows: list[dict[str, Any]],
     datasets: dict[str, pd.DataFrame],
-    flags_df: pd.DataFrame,
+    flags_df: pd.DataFrame | None,
     derived_sheets: list[tuple[str, pd.DataFrame]] | None = None,
 ) -> None:
     xlsx_path.parent.mkdir(parents=True, exist_ok=True)

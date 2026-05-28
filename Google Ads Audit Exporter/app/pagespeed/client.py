@@ -5,6 +5,8 @@ from typing import Any
 
 import requests
 
+from app.utils.retry import run_http_request_with_retry
+
 
 @dataclass(slots=True)
 class PageSpeedClientConfig:
@@ -42,10 +44,12 @@ class PageSpeedApiClient:
         if self.config.api_key:
             params["key"] = self.config.api_key
 
-        response = self._session.get(
-            "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
-            params=params,
-            timeout=180,
+        response = run_http_request_with_retry(
+            lambda: self._session.get(
+                "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
+                params=params,
+                timeout=180,
+            )
         )
         if response.status_code >= 400:
             raise PageSpeedApiError(

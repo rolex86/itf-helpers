@@ -7,6 +7,7 @@ from urllib.parse import quote
 import requests
 
 from app.config.env_settings import GoogleAdsEnvConfig
+from app.utils.retry import run_http_request_with_retry
 
 GSC_READONLY_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
 
@@ -189,15 +190,17 @@ class SearchConsoleApiClient:
     def _access_token(self) -> str:
         if self._cached_access_token:
             return self._cached_access_token
-        response = self._session.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": self.config.client_id,
-                "client_secret": self.config.client_secret,
-                "refresh_token": self.config.refresh_token,
-                "grant_type": "refresh_token",
-            },
-            timeout=30,
+        response = run_http_request_with_retry(
+            lambda: self._session.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": self.config.client_id,
+                    "client_secret": self.config.client_secret,
+                    "refresh_token": self.config.refresh_token,
+                    "grant_type": "refresh_token",
+                },
+                timeout=30,
+            )
         )
         if response.status_code >= 400:
             raise SearchConsoleApiError(
@@ -217,7 +220,9 @@ class SearchConsoleApiClient:
         }
 
     def _get_json(self, url: str) -> dict[str, Any]:
-        response = self._session.get(url, headers=self._headers(), timeout=60)
+        response = run_http_request_with_retry(
+            lambda: self._session.get(url, headers=self._headers(), timeout=60)
+        )
         if response.status_code >= 400:
             raise SearchConsoleApiError(
                 self._error_message(response),
@@ -227,7 +232,9 @@ class SearchConsoleApiClient:
         return response.json()
 
     def _post_json(self, url: str, json_payload: dict[str, Any]) -> dict[str, Any]:
-        response = self._session.post(url, headers=self._headers(), json=json_payload, timeout=120)
+        response = run_http_request_with_retry(
+            lambda: self._session.post(url, headers=self._headers(), json=json_payload, timeout=120)
+        )
         if response.status_code >= 400:
             raise SearchConsoleApiError(
                 self._error_message(response),

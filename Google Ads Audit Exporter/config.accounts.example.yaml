@@ -1,0 +1,12 @@
+account_contexts:
+  - key: shopid_cz
+    label: "ShopID CZ"
+    google_ads_customer_id: "4035172792"
+    google_ads_login_customer_id: ""
+    merchant_account_id: ""
+    ga4_property_id: ""
+    gsc_site_url: "https://www.shopid.cz/"
+    gtm_account_id: ""
+    gtm_container_id: ""
+    pagespeed_enabled: true
+    enabled: true

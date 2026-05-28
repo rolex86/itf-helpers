@@ -33,11 +33,8 @@ def list_export_history(exports_root: Path) -> list[ExportHistoryItem]:
         return []
 
     items: list[ExportHistoryItem] = []
-    for directory in sorted(
-        [item for item in exports_root.iterdir() if item.is_dir()],
-        key=lambda item: item.name,
-        reverse=True,
-    ):
+    directories = [item for item in exports_root.rglob("*") if item.is_dir() and (item / "metadata").exists()]
+    for directory in sorted(directories, key=lambda item: str(item).lower(), reverse=True):
         metadata_dir = directory / "metadata"
         config = _read_json(metadata_dir / "export_config.json") or {}
         errors = _read_json(metadata_dir / "errors.json") or []
@@ -54,10 +51,11 @@ def list_export_history(exports_root: Path) -> list[ExportHistoryItem]:
         xlsx_path = str(xlsx_candidates[0]) if xlsx_candidates else ""
         relative_xlsx_path = str(xlsx_candidates[0].relative_to(exports_root.parent)).replace("\\", "/") if xlsx_candidates else ""
         date_range = config.get("date_range", {}) if isinstance(config.get("date_range", {}), dict) else {}
+        relative_dir = str(directory.relative_to(exports_root)).replace("\\", "/")
 
         items.append(
             ExportHistoryItem(
-                directory_name=directory.name,
+                directory_name=relative_dir,
                 export_path=str(directory),
                 xlsx_path=xlsx_path,
                 relative_xlsx_path=relative_xlsx_path,

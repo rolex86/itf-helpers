@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mapping | Google Ads Audit Exporter</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Multi-account vrstva</p>
+          <h1>Mapping</h1>
+          <p class="brand-copy">Rucni propojeni Ads, Merchantu, GA4, GSC, GTM a PageSpeed do samostatnych kontextu.</p>
+        </div>
+        <nav class="nav-block">
+          <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+          <a href="{{ url_for('web.discovery_page') }}">Discovery</a>
+          <a href="{{ url_for('web.mapping_page') }}">Mapping</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <section class="hero">
+          <div>
+            <p class="eyebrow">Faze 2 az 4</p>
+            <h2>Propojeni uctu a kontextove exporty</h2>
+            <p>Mapping se uklada do <code>config.accounts.yaml</code>. Neobsahuje zadne secrety, jen vazby mezi dostupnymi sluzbami.</p>
+          </div>
+        </section>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <section class="flash-stack">
+              {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+              {% endfor %}
+            </section>
+          {% endif %}
+        {% endwith %}
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Account contexts</h3>
+              <p>Jednotlive kontexty muzes pridavat, duplikovat, mazat, testovat i spoustet samostatne.</p>
+            </div>
+            <div class="action-row">
+              <button class="btn btn-secondary" type="button" id="add-context-button">+ Pridat kontext</button>
+              <button class="btn btn-secondary" type="button" id="save-mapping-button">Ulozit mapping</button>
+              <button class="btn btn-primary" type="button" id="run-multi-button">Spustit vsechny aktivni</button>
+            </div>
+          </div>
+
+          <div id="mapping-status"></div>
+          <div id="contexts-container" class="dashboard-grid"></div>
+        </section>
+
+        <datalist id="google-ads-customers-list">
+          {% for row in mapping_state.discovery_tables.google_ads_customers %}
+            <option value="{{ row.customer_id }}">{{ row.descriptive_name }}</option>
+          {% endfor %}
+        </datalist>
+        <datalist id="ga4-properties-list">
+          {% for row in mapping_state.discovery_tables.ga4_properties %}
+            <option value="{{ row.property_id }}">{{ row.property_display_name }}</option>
+          {% endfor %}
+        </datalist>
+        <datalist id="gsc-sites-list">
+          {% for row in mapping_state.discovery_tables.gsc_sites %}
+            <option value="{{ row.site_url }}">{{ row.permission_level }}</option>
+          {% endfor %}
+        </datalist>
+        <datalist id="merchant-accounts-list">
+          {% for row in mapping_state.discovery_tables.merchant_accounts %}
+            <option value="{{ row.merchant_account_id }}">{{ row.account_name }}</option>
+          {% endfor %}
+        </datalist>
+        <datalist id="gtm-accounts-list">
+          {% for row in mapping_state.discovery_tables.gtm_containers %}
+            <option value="{{ row.account_id }}">{{ row.account_name }}</option>
+          {% endfor %}
+        </datalist>
+        <datalist id="gtm-containers-list">
+          {% for row in mapping_state.discovery_tables.gtm_containers %}
+            <option value="{{ row.container_id }}">{{ row.container_name }}</option>
+          {% endfor %}
+        </datalist>
+      </main>
+    </div>
+
+    <script>
+      const initialContexts = {{ mapping_state.contexts_payload | tojson }};
+      const contextsContainer = document.getElementById("contexts-container");
+      const mappingStatus = document.getElementById("mapping-status");
+      const addContextButton = document.getElementById("add-context-button");
+      const saveMappingButton = document.getElementById("save-mapping-button");
+      const runMultiButton = document.getElementById("run-multi-button");
+
+      function contextTemplate(context = {}) {
+        return `
+          <article class="panel panel-wide context-card">
+            <div class="panel-header">
+              <div>
+                <h3>${context.label || "Novy kontext"}</h3>
+                <p>Mapovani jedne datove sady napric Ads, Merchantem, GA4, GSC a GTM.</p>
+              </div>
+              <div class="action-row">
+                <button class="btn btn-secondary btn-small duplicate-context" type="button">Duplikovat</button>
+                <button class="btn btn-secondary btn-small test-context" type="button">Otestovat kontext</button>
+                <button class="btn btn-secondary btn-small run-context-export" type="button">Spustit export</button>
+                <button class="btn btn-secondary btn-small remove-context" type="button">Smazat</button>
+              </div>
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>Key</span>
+                <input data-field="key" value="${context.key || ""}" placeholder="shopid_cz">
+              </label>
+              <label>
+                <span>Label</span>
+                <input data-field="label" value="${context.label || ""}" placeholder="ShopID CZ">
+              </label>
+              <label>
+                <span>Google Ads customer ID</span>
+                <input data-field="google_ads_customer_id" list="google-ads-customers-list" value="${context.google_ads_customer_id || ""}">
+              </label>
+              <label>
+                <span>Google Ads login customer ID</span>
+                <input data-field="google_ads_login_customer_id" value="${context.google_ads_login_customer_id || ""}">
+              </label>
+              <label>
+                <span>Merchant account ID</span>
+                <input data-field="merchant_account_id" list="merchant-accounts-list" value="${context.merchant_account_id || ""}">
+              </label>
+              <label>
+                <span>GA4 property ID</span>
+                <input data-field="ga4_property_id" list="ga4-properties-list" value="${context.ga4_property_id || ""}">
+              </label>
+              <label>
+                <span>Search Console site URL</span>
+                <input data-field="gsc_site_url" list="gsc-sites-list" value="${context.gsc_site_url || ""}">
+              </label>
+              <label>
+                <span>GTM account ID</span>
+                <input data-field="gtm_account_id" list="gtm-accounts-list" value="${context.gtm_account_id || ""}">
+              </label>
+              <label>
+                <span>GTM container ID</span>
+                <input data-field="gtm_container_id" list="gtm-containers-list" value="${context.gtm_container_id || ""}">
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <label class="toggle">
+                <input type="checkbox" data-field="pagespeed_enabled" ${context.pagespeed_enabled === false ? "" : "checked"}>
+                <span>PageSpeed enabled</span>
+              </label>
+              <label class="toggle">
+                <input type="checkbox" data-field="enabled" ${context.enabled === false ? "" : "checked"}>
+                <span>Enabled</span>
+              </label>
+            </div>
+
+            <div class="merchant-panel merchant-panel-muted context-test-output">
+              <div class="merchant-panel-header">
+                <strong>Test kontextu</strong>
+                <span>Neotestovano</span>
+              </div>
+              <div class="merchant-empty">Pouzij tlacitko Otestovat kontext.</div>
+            </div>
+          </article>
+        `;
+      }
+
+      function renderContexts(contexts) {
+        contextsContainer.innerHTML = contexts.map((context) => contextTemplate(context)).join("");
+      }
+
+      function contextCards() {
+        return Array.from(document.querySelectorAll(".context-card"));
+      }
+
+      function readContext(card) {
+        const payload = {};
+        for (const input of card.querySelectorAll("[data-field]")) {
+          const field = input.dataset.field;
+          payload[field] = input.type === "checkbox" ? input.checked : input.value.trim();
+        }
+        return payload;
+      }
+
+      function collectContexts() {
+        return contextCards().map(readContext).filter((context) => context.key);
+      }
+
+      function setStatus(message, kind = "info") {
+        mappingStatus.innerHTML = `<div class="flash flash-${kind}">${message}</div>`;
+      }
+
+      async function postJson(url, payload) {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || "Volani selhalo.");
+        }
+        return data;
+      }
+
+      async function saveMapping() {
+        const data = await postJson("{{ url_for('web.save_mapping_page') }}", {
+          account_contexts: collectContexts()
+        });
+        setStatus(data.message || "Mapping ulozen.", "success");
+      }
+
+      function renderTestResult(card, payload) {
+        const panel = card.querySelector(".context-test-output");
+        if (!panel) {
+          return;
+        }
+        const rows = Object.entries(payload.services || {}).map(([key, value]) => `
+          <div class="merchant-account-card">
+            <strong>${key}</strong>
+            <span>${value.status === "ok" ? "OK" : "Problem"}</span>
+            <span>${value.details || ""}</span>
+          </div>
+        `).join("");
+        panel.classList.remove("merchant-panel-muted", "merchant-panel-success", "merchant-panel-error");
+        panel.classList.add(payload.ok ? "merchant-panel-success" : "merchant-panel-error");
+        panel.innerHTML = `
+          <div class="merchant-panel-header">
+            <strong>${payload.context_label || payload.context_key || "Kontext"}</strong>
+            <span>${payload.ok ? "OK" : "Problem"}</span>
+          </div>
+          ${rows || '<div class="merchant-empty">Bez detailu.</div>'}
+        `;
+      }
+
+      async function testContext(card) {
+        const payload = await postJson("{{ url_for('web.test_mapping_context') }}", readContext(card));
+        renderTestResult(card, payload);
+      }
+
+      async function runContextExport(card) {
+        const context = readContext(card);
+        const payload = await postJson("{{ url_for('web.run_context_export_route') }}", {
+          context_key: context.key
+        });
+        setStatus(`Export kontextu ${payload.context_label || payload.context_key} byl dokonceny: ${payload.export_path}`, "success");
+      }
+
+      async function runMultiExport() {
+        const payload = await postJson("{{ url_for('web.run_multi_export_route') }}", {});
+        setStatus(`Multi-export byl dokonceny. Cross-account slozka: ${payload.cross_account_dir || "-"}`, "success");
+      }
+
+      document.addEventListener("click", async (event) => {
+        const card = event.target.closest(".context-card");
+
+        if (event.target.matches(".remove-context")) {
+          if (card) {
+            card.remove();
+          }
+        }
+
+        if (event.target.matches(".duplicate-context")) {
+          if (card) {
+            const context = readContext(card);
+            context.key = context.key ? `${context.key}_copy` : "";
+            contextsContainer.insertAdjacentHTML("beforeend", contextTemplate(context));
+          }
+        }
+
+        if (event.target.matches(".test-context")) {
+          if (!card) {
+            return;
+          }
+          try {
+            await testContext(card);
+          } catch (error) {
+            setStatus(error.message, "error");
+          }
+        }
+
+        if (event.target.matches(".run-context-export")) {
+          if (!card) {
+            return;
+          }
+          try {
+            await saveMapping();
+            await runContextExport(card);
+          } catch (error) {
+            setStatus(error.message, "error");
+          }
+        }
+      });
+
+      addContextButton.addEventListener("click", () => {
+        contextsContainer.insertAdjacentHTML("beforeend", contextTemplate({}));
+      });
+
+      saveMappingButton.addEventListener("click", async () => {
+        try {
+          await saveMapping();
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      });
+
+      runMultiButton.addEventListener("click", async () => {
+        try {
+          await saveMapping();
+          await runMultiExport();
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      });
+
+      renderContexts(initialContexts.length ? initialContexts : [{}]);
+    </script>
+  </body>
+</html>

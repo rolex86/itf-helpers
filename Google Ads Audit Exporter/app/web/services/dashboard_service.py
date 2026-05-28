@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.accounts.context_config import AccountContext, has_multi_account_config, load_account_contexts
 from app.config.config_store import load_config_payload, save_config_payload
 from app.config.env_settings import GoogleAdsEnvConfig, load_env_config, save_env_config
 from app.config.settings import DEFAULT_REPORTS, load_settings
 from app.export.workflow import ExportExecutionResult, execute_export
+from app.web.services.mapping_service import run_all_context_exports, run_selected_context_export
 from app.web.services.export_history import ExportHistoryItem, list_export_history
 
 
@@ -70,6 +72,8 @@ class DashboardViewModel:
     report_labels: dict[str, str]
     preset_options: tuple[str, ...]
     preset_labels: dict[str, str]
+    account_contexts: list[AccountContext]
+    has_multi_account_config: bool
 
 
 def _config_paths(project_root: Path) -> tuple[Path, Path]:
@@ -78,6 +82,7 @@ def _config_paths(project_root: Path) -> tuple[Path, Path]:
 
 def load_dashboard_state(project_root: Path) -> DashboardViewModel:
     env_path, config_path = _config_paths(project_root)
+    accounts_path = project_root / "config.accounts.yaml"
     return DashboardViewModel(
         env_config=load_env_config(env_path),
         config_payload=load_config_payload(config_path),
@@ -85,6 +90,8 @@ def load_dashboard_state(project_root: Path) -> DashboardViewModel:
         report_labels=REPORT_LABELS,
         preset_options=PRESET_OPTIONS,
         preset_labels=PRESET_LABELS,
+        account_contexts=load_account_contexts(accounts_path),
+        has_multi_account_config=has_multi_account_config(accounts_path),
     )
 
 
@@ -99,6 +106,20 @@ def run_export_from_dashboard(project_root: Path, payload: dict[str, Any]) -> Ex
     _, config_path = _config_paths(project_root)
     settings = load_settings(config_path=config_path)
     return execute_export(settings=settings, project_root=project_root, config_path=config_path)
+
+
+def run_multi_mode_export_from_dashboard(project_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    save_dashboard_configuration(project_root, payload)
+    export_mode = payload.get("ui_state", {}).get("export_mode", "single_account")
+    selected_context_key = payload.get("ui_state", {}).get("selected_context_key", "")
+
+    if export_mode == "selected_context":
+        if not selected_context_key:
+            raise ValueError("Neni vybran zadny kontext pro selected-context export.")
+        return run_selected_context_export(project_root, context_key=selected_context_key)
+    if export_mode == "all_enabled_contexts":
+        return run_all_context_exports(project_root)
+    raise ValueError(f"Neznamy export mode: {export_mode}")
 
 
 def default_reports_payload() -> dict[str, bool]:

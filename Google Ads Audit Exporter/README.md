@@ -19,6 +19,7 @@ Read-only exporter pro interni audit Google Ads uctu. Nastroj stahuje vybrane re
 - Volitelny Search Console modul pro organicke dotazy, stranky a SEO/PPC overlap
 - Volitelny PageSpeed modul pro technickou diagnostiku top landing pages
 - Volitelny Google Tag Manager modul pro audit tagu a diagnostiku mereni
+- Multi-account discovery, mapping a sekvencni export vice kontextu
 
 ## Free-only politika
 
@@ -65,6 +66,7 @@ python -m pip install -r requirements.txt
 
 1. Zkopirujte `.env.example` na `.env` a doplnte pristupy.
 2. Zkopirujte `config.example.yaml` na `config.yaml` a upravte exportni nastaveni.
+3. Pokud chces multi-account rezim, uprav `config.accounts.yaml` nebo si ho napln pres webovou sekci Mapping.
 
 ### `.env`
 
@@ -166,6 +168,23 @@ flags:
   low_ctr_threshold: 0.01
 ```
 
+### `config.accounts.yaml`
+
+```yaml
+account_contexts:
+  - key: shopid_cz
+    label: "ShopID CZ"
+    google_ads_customer_id: "4035172792"
+    google_ads_login_customer_id: ""
+    merchant_account_id: ""
+    ga4_property_id: ""
+    gsc_site_url: "https://www.shopid.cz/"
+    gtm_account_id: ""
+    gtm_container_id: ""
+    pagespeed_enabled: true
+    enabled: true
+```
+
 ## Spusteni
 
 ### Browser UI
@@ -198,6 +217,10 @@ V rozhrani muzes:
 
 - vyplnit OAuth a Google Ads hodnoty
 - ulozit `.env` a `config.yaml`
+- spustit discovery dostupnych Ads/GA4/GSC/GTM/Merchant uctu
+- vytvaret account contexty v Mappingu a ulozit je do `config.accounts.yaml`
+- testovat jednotlive kontexty
+- spustit export v rezimu `single account`, `selected context` nebo `all enabled contexts`
 - zapinat a vypinat reporty
 - spustit export
 - prohlizet historii exportu a stahnout XLSX
@@ -227,6 +250,18 @@ Vlastni datumovy rozsah:
 python -m app.main --customer-id 1234567890 --date-from 2026-01-01 --date-to 2026-05-27
 ```
 
+Vybrany kontext z `config.accounts.yaml`:
+
+```bash
+python -m app.main --context-key shopid_cz
+```
+
+Vsechny aktivni kontexty:
+
+```bash
+python -m app.main --all-contexts
+```
+
 ## Vystupy
 
 Po spusteni vznikne exportni slozka:
@@ -246,6 +281,25 @@ Metadata obsahuje:
 - `query_log.json`
 - `errors.json`
 - `export.log`
+
+Discovery CSV vznikaji v:
+
+```text
+exports/_discovery/
+  google_ads_customers.csv
+  ga4_properties.csv
+  gsc_sites.csv
+  gtm_containers.csv
+  merchant_accounts.csv
+```
+
+Pri multi-context exportu vznikne navic:
+
+```text
+exports/YYYY-MM-DD_multi/
+  <context_key>_<customer_id>/
+  _cross_account/
+```
 
 ## Chovani pri chybach
 
@@ -271,6 +325,9 @@ Metadata obsahuje:
 - GTM modul pouze cte tagy, triggery, promenne a verze. Nepublikuje ani neupravuje zadne zmeny.
 - PageSpeed modul je volitelny. Bezi jen nad top landing pages podle spendu a vysledky cacheuje lokalne podle URL + strategie.
 - API key je volitelny, ale bez nej muze byt modul vice omezeny kvotami.
+- Pokud `config.accounts.yaml` neexistuje nebo neobsahuje zadne kontexty, aplikace se chova jako puvodni single-account exporter.
+- Multi-context exporty bezi sekvencne, aby se snizilo riziko rate limitu.
+- Cross-account souhrny se skladaji do `_cross_account` slozky a zustavaji read-only.
 
 ## Struktura projektu
 

@@ -17,6 +17,8 @@ ENV/
 # Local config overrides
 config.yaml
 config.local.yaml
+config.accounts.yaml
+!config.accounts.example.yaml
 
 # Exported data and logs
 exports/*
