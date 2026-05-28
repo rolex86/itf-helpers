@@ -48,6 +48,7 @@ REPORT_LABELS = {
     "gsc_pages": "GSC pages",
     "gsc_page_query": "GSC page-query",
     "gsc_opportunities": "GSC prilezitosti",
+    "pagespeed_landing_pages": "PageSpeed landing pages",
     "google_ads_recommendations": "Google Ads doporuceni",
     "conversion_actions": "Konverze",
     "pmax_campaigns": "PMax kampane",

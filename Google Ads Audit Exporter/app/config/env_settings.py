@@ -19,6 +19,8 @@ class GoogleAdsEnvConfig:
     ga4_enabled: bool = False
     gsc_site_url: str = ""
     gsc_enabled: bool = False
+    pagespeed_api_key: str = ""
+    pagespeed_enabled: bool = False
 
 
 ENV_KEY_MAP = {
@@ -33,6 +35,8 @@ ENV_KEY_MAP = {
     "ga4_enabled": "GA4_ENABLED",
     "gsc_site_url": "GSC_SITE_URL",
     "gsc_enabled": "GSC_ENABLED",
+    "pagespeed_api_key": "PAGESPEED_API_KEY",
+    "pagespeed_enabled": "PAGESPEED_ENABLED",
 }
 
 
@@ -61,6 +65,8 @@ def load_env_config(env_path: Path) -> GoogleAdsEnvConfig:
         ga4_enabled=_to_bool(values.get(ENV_KEY_MAP["ga4_enabled"], "")),
         gsc_site_url=str(values.get(ENV_KEY_MAP["gsc_site_url"], "") or "").strip(),
         gsc_enabled=_to_bool(values.get(ENV_KEY_MAP["gsc_enabled"], "")),
+        pagespeed_api_key=str(values.get(ENV_KEY_MAP["pagespeed_api_key"], "") or "").strip(),
+        pagespeed_enabled=_to_bool(values.get(ENV_KEY_MAP["pagespeed_enabled"], "")),
     )
 
 
@@ -77,6 +83,8 @@ def env_config_from_mapping(values: dict[str, object]) -> GoogleAdsEnvConfig:
         ga4_enabled=_to_bool(values.get("ga4_enabled", "")),
         gsc_site_url=str(values.get("gsc_site_url", "") or "").strip(),
         gsc_enabled=_to_bool(values.get("gsc_enabled", "")),
+        pagespeed_api_key=str(values.get("pagespeed_api_key", "") or "").strip(),
+        pagespeed_enabled=_to_bool(values.get("pagespeed_enabled", "")),
     )
 
 

@@ -34,6 +34,13 @@ DEFAULT_CONFIG_PAYLOAD = {
         "forbid_paid_cloud_resources": True,
         "allow_local_storage_only": True,
     },
+    "pagespeed": {
+        "enabled": True,
+        "max_urls_per_export": 50,
+        "source": "top_landing_pages_by_cost",
+        "strategies": ["mobile", "desktop"],
+        "cache_days": 30,
+    },
 }
 
 

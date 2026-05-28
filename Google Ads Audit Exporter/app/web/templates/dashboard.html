@@ -20,6 +20,7 @@
           <a href="#merchant">Merchant Center</a>
           <a href="#ga4">GA4</a>
           <a href="#gsc">Search Console</a>
+          <a href="#pagespeed">PageSpeed</a>
           <a href="#scope">Rozsah exportu</a>
           <a href="#flags">Flagy</a>
           <a href="#history">Historie</a>
@@ -260,6 +261,69 @@
                 </div>
                 <div id="gsc-properties-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
               </div>
+            </div>
+          </section>
+
+          <section id="pagespeed" class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>PageSpeed Insights</h3>
+                <p>Technicka kontrola jen nad nejdrazsimi landing pages, ne nad celym webem.</p>
+              </div>
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>PageSpeed API zapnuto</span>
+                <span class="toggle inline-toggle">
+                  <input type="checkbox" name="pagespeed_enabled" {% if state.env_config.pagespeed_enabled %}checked{% endif %}>
+                  <span>Povolit PageSpeed modul</span>
+                </span>
+              </label>
+              <label>
+                <span>PageSpeed API key</span>
+                <input type="password" name="pagespeed_api_key" value="{{ state.env_config.pagespeed_api_key }}" placeholder="Volitelne, bez keye muze byt modul omezeny kvotami">
+              </label>
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>Modul v configu zapnuty</span>
+                <span class="toggle inline-toggle">
+                  <input type="checkbox" name="pagespeed_config_enabled" {% if state.config_payload.pagespeed.enabled %}checked{% endif %}>
+                  <span>Pouzivat PageSpeed pri exportu</span>
+                </span>
+              </label>
+              <label>
+                <span>Zdroj URL</span>
+                <input name="pagespeed_source" value="{{ state.config_payload.pagespeed.source }}">
+              </label>
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>Max URL na export</span>
+                <input name="pagespeed_max_urls_per_export" value="{{ state.config_payload.pagespeed.max_urls_per_export }}">
+              </label>
+              <label>
+                <span>Cache ve dnech</span>
+                <input name="pagespeed_cache_days" value="{{ state.config_payload.pagespeed.cache_days }}">
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <label class="toggle">
+                <input type="checkbox" name="pagespeed_strategy_mobile" {% if 'mobile' in state.config_payload.pagespeed.strategies %}checked{% endif %}>
+                <span>Mobile strategie</span>
+              </label>
+              <label class="toggle">
+                <input type="checkbox" name="pagespeed_strategy_desktop" {% if 'desktop' in state.config_payload.pagespeed.strategies %}checked{% endif %}>
+                <span>Desktop strategie</span>
+              </label>
+            </div>
+
+            <div class="policy-note">
+              Modul bere jen top landing pages podle spendu, vysledky cacheuje lokalne a bez API keye muze fungovat omezeněji. V free-only rezimu nema vyzadovat billing.
             </div>
           </section>
 

@@ -40,6 +40,7 @@ DEFAULT_REPORTS = {
     "gsc_pages": False,
     "gsc_page_query": False,
     "gsc_opportunities": False,
+    "pagespeed_landing_pages": False,
     "conversion_actions": True,
     "pmax_campaigns": True,
     "pmax_asset_groups": True,
@@ -79,6 +80,15 @@ class CostPolicyConfig:
 
 
 @dataclass(slots=True)
+class PageSpeedConfig:
+    enabled: bool = True
+    max_urls_per_export: int = 50
+    source: str = "top_landing_pages_by_cost"
+    strategies: list[str] = field(default_factory=lambda: ["mobile", "desktop"])
+    cache_days: int = 30
+
+
+@dataclass(slots=True)
 class AppSettings:
     customer_id: str
     date_range: DateRangeConfig = field(default_factory=DateRangeConfig)
@@ -86,6 +96,7 @@ class AppSettings:
     reports: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_REPORTS))
     flags: FlagsConfig = field(default_factory=FlagsConfig)
     cost_policy: CostPolicyConfig = field(default_factory=CostPolicyConfig)
+    pagespeed: PageSpeedConfig = field(default_factory=PageSpeedConfig)
 
     def to_metadata(self, resolved_range: ResolvedDateRange, config_path: Path) -> dict[str, Any]:
         return {
@@ -107,6 +118,7 @@ class AppSettings:
             "reports": dict(self.reports),
             "flags": asdict(self.flags),
             "cost_policy": asdict(self.cost_policy),
+            "pagespeed": asdict(self.pagespeed),
             "config_path": str(config_path),
         }
 
@@ -148,6 +160,7 @@ def load_settings(
     raw_reports = raw.get("reports", {}) or {}
     raw_flags = raw.get("flags", {}) or {}
     raw_cost_policy = raw.get("cost_policy", {}) or {}
+    raw_pagespeed = raw.get("pagespeed", {}) or {}
 
     date_range = DateRangeConfig(
         preset=(preset_override or raw_date_range.get("preset") or "LAST_90_DAYS"),
@@ -191,6 +204,19 @@ def load_settings(
         allow_local_storage_only=bool(raw_cost_policy.get("allow_local_storage_only", True)),
     )
 
+    pagespeed = PageSpeedConfig(
+        enabled=bool(raw_pagespeed.get("enabled", True)),
+        max_urls_per_export=int(raw_pagespeed.get("max_urls_per_export", 50)),
+        source=str(raw_pagespeed.get("source", "top_landing_pages_by_cost")),
+        strategies=[
+            str(value).strip().lower()
+            for value in list(raw_pagespeed.get("strategies", ["mobile", "desktop"]))
+            if str(value).strip()
+        ]
+        or ["mobile", "desktop"],
+        cache_days=int(raw_pagespeed.get("cache_days", 30)),
+    )
+
     return AppSettings(
         customer_id=customer_id,
         date_range=date_range,
@@ -198,4 +224,5 @@ def load_settings(
         reports=reports,
         flags=flags,
         cost_policy=cost_policy,
+        pagespeed=pagespeed,
     )

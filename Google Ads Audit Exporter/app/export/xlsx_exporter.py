@@ -38,6 +38,15 @@ DECIMAL_COLUMNS = {
     "roas",
     "average_session_duration",
     "position",
+    "performance_score",
+    "accessibility_score",
+    "seo_score",
+    "best_practices_score",
+    "lcp",
+    "cls",
+    "inp",
+    "fcp",
+    "speed_index",
 }
 
 

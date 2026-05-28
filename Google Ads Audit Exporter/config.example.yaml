@@ -16,6 +16,15 @@ cost_policy:
   forbid_paid_cloud_resources: true
   allow_local_storage_only: true
 
+pagespeed:
+  enabled: true
+  max_urls_per_export: 50
+  source: "top_landing_pages_by_cost"
+  strategies:
+    - mobile
+    - desktop
+  cache_days: 30
+
 reports:
   account: true
   account_diagnostics: true
@@ -46,6 +55,7 @@ reports:
   gsc_pages: false
   gsc_page_query: false
   gsc_opportunities: false
+  pagespeed_landing_pages: false
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true

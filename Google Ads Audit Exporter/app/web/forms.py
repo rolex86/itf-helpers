@@ -41,6 +41,8 @@ def parse_dashboard_form(form: Any) -> dict[str, Any]:
         ga4_enabled=form.get("ga4_enabled") == "on",
         gsc_site_url=(form.get("gsc_site_url") or "").strip(),
         gsc_enabled=form.get("gsc_enabled") == "on",
+        pagespeed_api_key=(form.get("pagespeed_api_key") or "").strip(),
+        pagespeed_enabled=form.get("pagespeed_enabled") == "on",
     )
 
     payload = {
@@ -71,6 +73,19 @@ def parse_dashboard_form(form: Any) -> dict[str, Any]:
                 "free_only": form.get("free_only") == "on",
                 "forbid_paid_cloud_resources": form.get("forbid_paid_cloud_resources") == "on",
                 "allow_local_storage_only": form.get("allow_local_storage_only") == "on",
+            },
+            "pagespeed": {
+                "enabled": form.get("pagespeed_config_enabled") == "on",
+                "max_urls_per_export": int((form.get("pagespeed_max_urls_per_export") or "50").strip()),
+                "source": (form.get("pagespeed_source") or "top_landing_pages_by_cost").strip()
+                or "top_landing_pages_by_cost",
+                "strategies": [
+                    strategy
+                    for strategy in ["mobile", "desktop"]
+                    if form.get(f"pagespeed_strategy_{strategy}") == "on"
+                ]
+                or ["mobile", "desktop"],
+                "cache_days": int((form.get("pagespeed_cache_days") or "30").strip()),
             },
         },
         "ui_state": {
