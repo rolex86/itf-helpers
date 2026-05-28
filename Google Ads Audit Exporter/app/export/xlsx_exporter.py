@@ -18,6 +18,8 @@ PERCENT_COLUMNS = {
     "search_rank_lost_impression_share",
     "target_roas",
     "optimization_score_uplift",
+    "engagement_rate",
+    "purchase_rate_from_view_item",
 }
 
 CURRENCY_COLUMNS = {
@@ -26,6 +28,7 @@ CURRENCY_COLUMNS = {
     "conversions_value",
     "value_per_conversion",
     "all_conversions_value",
+    "total_revenue",
 }
 
 DECIMAL_COLUMNS = {
@@ -33,6 +36,7 @@ DECIMAL_COLUMNS = {
     "all_conversions",
     "optimization_score",
     "roas",
+    "average_session_duration",
 }
 
 

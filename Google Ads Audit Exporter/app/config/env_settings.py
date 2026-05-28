@@ -15,6 +15,8 @@ class GoogleAdsEnvConfig:
     login_customer_id: str = ""
     merchant_account_id: str = ""
     merchant_enabled: bool = False
+    ga4_property_id: str = ""
+    ga4_enabled: bool = False
 
 
 ENV_KEY_MAP = {
@@ -25,6 +27,8 @@ ENV_KEY_MAP = {
     "login_customer_id": "GOOGLE_ADS_LOGIN_CUSTOMER_ID",
     "merchant_account_id": "MERCHANT_CENTER_ACCOUNT_ID",
     "merchant_enabled": "GOOGLE_MERCHANT_ENABLED",
+    "ga4_property_id": "GA4_PROPERTY_ID",
+    "ga4_enabled": "GA4_ENABLED",
 }
 
 
@@ -49,6 +53,8 @@ def load_env_config(env_path: Path) -> GoogleAdsEnvConfig:
         login_customer_id=_normalize_id(values.get(ENV_KEY_MAP["login_customer_id"], "")),
         merchant_account_id=_normalize_id(values.get(ENV_KEY_MAP["merchant_account_id"], "")),
         merchant_enabled=_to_bool(values.get(ENV_KEY_MAP["merchant_enabled"], "")),
+        ga4_property_id=_normalize_id(values.get(ENV_KEY_MAP["ga4_property_id"], "")),
+        ga4_enabled=_to_bool(values.get(ENV_KEY_MAP["ga4_enabled"], "")),
     )
 
 
@@ -61,6 +67,8 @@ def env_config_from_mapping(values: dict[str, object]) -> GoogleAdsEnvConfig:
         login_customer_id=_normalize_id(values.get("login_customer_id", "")),
         merchant_account_id=_normalize_id(values.get("merchant_account_id", "")),
         merchant_enabled=_to_bool(values.get("merchant_enabled", "")),
+        ga4_property_id=_normalize_id(values.get("ga4_property_id", "")),
+        ga4_enabled=_to_bool(values.get("ga4_enabled", "")),
     )
 
 

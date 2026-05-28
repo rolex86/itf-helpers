@@ -7,6 +7,7 @@ from flask import Blueprint, abort, current_app, flash, jsonify, redirect, rende
 from app.web.forms import parse_dashboard_form
 from app.web.services.dashboard_service import load_dashboard_state, run_export_from_dashboard, save_dashboard_configuration
 from app.web.services.folder_picker import pick_directory
+from app.web.services.ga4_dashboard_service import ga4_list_properties, ga4_test_connection
 from app.web.services.merchant_dashboard_service import merchant_list_accounts, merchant_test_connection
 
 
@@ -120,3 +121,25 @@ def merchant_accounts():
         return jsonify(result), status_code
     except Exception as exc:
         return jsonify({"ok": False, "message": str(exc), "accounts": []}), 500
+
+
+@web_bp.post("/api/ga4/test-connection")
+def ga4_test():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = ga4_test_connection(payload)
+        status_code = 200 if result.get("ok") else 400
+        return jsonify(result), status_code
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc), "instructions": []}), 500
+
+
+@web_bp.post("/api/ga4/list-properties")
+def ga4_properties():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = ga4_list_properties(payload)
+        status_code = 200 if result.get("ok") else 400
+        return jsonify(result), status_code
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc), "properties": []}), 500

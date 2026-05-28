@@ -15,6 +15,7 @@ from app.export.csv_exporter import export_csv
 from app.export.derived_summaries import build_landing_pages_summary, build_locations_summary
 from app.export.metadata_exporter import write_json
 from app.export.xlsx_exporter import export_workbook
+from app.ga4.export import build_ga4_exports
 from app.google_ads.diagnostics import build_supplemental_reports
 from app.google_ads.fetcher import GoogleAdsFetcher
 from app.google_ads.postprocess import postprocess_report_dataframe
@@ -419,6 +420,48 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
             rows=int(len(dataset)),
             notes=notes,
             status="warning" if report_key in merchant_result.report_warning_keys else "ok",
+            dropped_fields=[],
+        )
+
+    ga4_result = build_ga4_exports(
+        env_config=env_config,
+        datasets=state.datasets,
+        reports_enabled=settings.reports,
+        resolved_range=resolved_range,
+        flags_config=settings.flags,
+    )
+    state.errors.extend(ga4_result.errors)
+
+    for report_key, dataset in ga4_result.datasets.items():
+        state.datasets[report_key] = dataset
+        _persist_dataset_as_csv(
+            export_paths=export_paths,
+            dataset=dataset,
+            report_key=report_key,
+            enabled=settings.output.include_raw_csv,
+        )
+        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
+        notes = list(ga4_result.report_notes.get(report_key, []))
+        if existing_row is not None:
+            existing_details = existing_row.get("details", "")
+            extra_details = " | ".join(note for note in notes if note)
+            if extra_details:
+                existing_row["details"] = (
+                    f"{existing_details} | {extra_details}" if existing_details else extra_details
+                )
+            existing_row["rows"] = int(len(dataset))
+            if report_key in ga4_result.report_warning_keys and existing_row.get("status") != "error":
+                existing_row["status"] = "warning"
+            continue
+
+        report = get_report_definition(report_key)
+        _record_report_success(
+            state=state,
+            report_key=report_key,
+            sheet_name=report.sheet_name,
+            rows=int(len(dataset)),
+            notes=notes,
+            status="warning" if report_key in ga4_result.report_warning_keys else "ok",
             dropped_fields=[],
         )
 

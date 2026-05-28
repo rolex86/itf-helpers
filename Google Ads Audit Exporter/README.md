@@ -15,6 +15,7 @@ Read-only exporter pro interni audit Google Ads uctu. Nastroj stahuje vybrane re
 - Read-only export Google Ads doporuceni
 - Diagnostika uctu a propojenych sluzeb
 - Volitelny Merchant Center modul pro feed data a produktove issue
+- Volitelny GA4 modul pro landing page engagement a ecommerce funnel
 
 ## Free-only politika
 
@@ -72,6 +73,8 @@ GOOGLE_ADS_REFRESH_TOKEN=
 GOOGLE_ADS_LOGIN_CUSTOMER_ID=
 MERCHANT_CENTER_ACCOUNT_ID=
 GOOGLE_MERCHANT_ENABLED=false
+GA4_PROPERTY_ID=
+GA4_ENABLED=false
 ```
 
 ### `config.yaml`
@@ -118,6 +121,9 @@ reports:
   product_optimization: false
   product_feed_issues_with_spend: false
   product_custom_label_performance: false
+  ga4_landing_pages: false
+  landing_page_diagnostics: false
+  ga4_ecommerce_funnel: false
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true
@@ -167,6 +173,7 @@ V rozhrani muzes:
 - spustit export
 - prohlizet historii exportu a stahnout XLSX
 - otestovat Merchant Center pristup a vypsat dostupne Merchant ucty
+- otestovat GA4 pristup a vypsat dostupne properties
 
 ### CLI
 
@@ -222,6 +229,8 @@ Metadata obsahuje:
 - Lokacni report ve v1 preferuje stabilitu exportu; pokud API nevrati citelne nazvy lokaci, zustanou v reportu identifikatory nebo resource names.
 - Merchant Center modul je volitelny. Pokud chybi Merchant scope nebo pristup k uctu, Google Ads export pokracuje dal a Merchant reporty zustanou prazdne s varovanim.
 - Pro Merchant API je potreba OAuth refresh token se scope `https://www.googleapis.com/auth/content`.
+- GA4 modul je taky volitelny. Bez pristupu do GA4 property Ads export pokracuje dal a GA4 listy zustanou prazdne s varovanim.
+- Pro GA4 je potreba OAuth refresh token se scope `https://www.googleapis.com/auth/analytics.readonly`.
 
 ## Struktura projektu
 
