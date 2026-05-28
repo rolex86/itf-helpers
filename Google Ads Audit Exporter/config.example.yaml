@@ -42,6 +42,10 @@ reports:
   ga4_landing_pages: false
   landing_page_diagnostics: false
   ga4_ecommerce_funnel: false
+  gsc_queries: false
+  gsc_pages: false
+  gsc_page_query: false
+  gsc_opportunities: false
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true

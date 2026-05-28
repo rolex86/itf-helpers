@@ -37,6 +37,7 @@ DECIMAL_COLUMNS = {
     "optimization_score",
     "roas",
     "average_session_duration",
+    "position",
 }
 
 

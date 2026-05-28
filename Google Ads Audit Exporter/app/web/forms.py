@@ -39,6 +39,8 @@ def parse_dashboard_form(form: Any) -> dict[str, Any]:
         merchant_enabled=form.get("merchant_enabled") == "on",
         ga4_property_id=(form.get("ga4_property_id") or "").replace("-", "").strip(),
         ga4_enabled=form.get("ga4_enabled") == "on",
+        gsc_site_url=(form.get("gsc_site_url") or "").strip(),
+        gsc_enabled=form.get("gsc_enabled") == "on",
     )
 
     payload = {

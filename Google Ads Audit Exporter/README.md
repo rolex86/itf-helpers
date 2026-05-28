@@ -16,6 +16,7 @@ Read-only exporter pro interni audit Google Ads uctu. Nastroj stahuje vybrane re
 - Diagnostika uctu a propojenych sluzeb
 - Volitelny Merchant Center modul pro feed data a produktove issue
 - Volitelny GA4 modul pro landing page engagement a ecommerce funnel
+- Volitelny Search Console modul pro organicke dotazy, stranky a SEO/PPC overlap
 
 ## Free-only politika
 
@@ -75,6 +76,8 @@ MERCHANT_CENTER_ACCOUNT_ID=
 GOOGLE_MERCHANT_ENABLED=false
 GA4_PROPERTY_ID=
 GA4_ENABLED=false
+GSC_SITE_URL=https://www.example.cz/
+GSC_ENABLED=false
 ```
 
 ### `config.yaml`
@@ -124,6 +127,10 @@ reports:
   ga4_landing_pages: false
   landing_page_diagnostics: false
   ga4_ecommerce_funnel: false
+  gsc_queries: false
+  gsc_pages: false
+  gsc_page_query: false
+  gsc_opportunities: false
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true
@@ -174,6 +181,7 @@ V rozhrani muzes:
 - prohlizet historii exportu a stahnout XLSX
 - otestovat Merchant Center pristup a vypsat dostupne Merchant ucty
 - otestovat GA4 pristup a vypsat dostupne properties
+- otestovat Search Console pristup a vypsat dostupne properties
 
 ### CLI
 
@@ -231,6 +239,9 @@ Metadata obsahuje:
 - Pro Merchant API je potreba OAuth refresh token se scope `https://www.googleapis.com/auth/content`.
 - GA4 modul je taky volitelny. Bez pristupu do GA4 property Ads export pokracuje dal a GA4 listy zustanou prazdne s varovanim.
 - Pro GA4 je potreba OAuth refresh token se scope `https://www.googleapis.com/auth/analytics.readonly`.
+- Search Console modul je volitelny. Bez pristupu do property Ads export pokracuje dal a GSC listy zustanou prazdne s varovanim.
+- Pro Search Console je potreba OAuth refresh token se scope `https://www.googleapis.com/auth/webmasters.readonly`.
+- Search Console dotazy pouzivaji lokalni cache, aby se zbytecne neopakovaly drazsi kombinace `page + query`.
 
 ## Struktura projektu
 

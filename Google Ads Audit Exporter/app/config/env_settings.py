@@ -17,6 +17,8 @@ class GoogleAdsEnvConfig:
     merchant_enabled: bool = False
     ga4_property_id: str = ""
     ga4_enabled: bool = False
+    gsc_site_url: str = ""
+    gsc_enabled: bool = False
 
 
 ENV_KEY_MAP = {
@@ -29,6 +31,8 @@ ENV_KEY_MAP = {
     "merchant_enabled": "GOOGLE_MERCHANT_ENABLED",
     "ga4_property_id": "GA4_PROPERTY_ID",
     "ga4_enabled": "GA4_ENABLED",
+    "gsc_site_url": "GSC_SITE_URL",
+    "gsc_enabled": "GSC_ENABLED",
 }
 
 
@@ -55,6 +59,8 @@ def load_env_config(env_path: Path) -> GoogleAdsEnvConfig:
         merchant_enabled=_to_bool(values.get(ENV_KEY_MAP["merchant_enabled"], "")),
         ga4_property_id=_normalize_id(values.get(ENV_KEY_MAP["ga4_property_id"], "")),
         ga4_enabled=_to_bool(values.get(ENV_KEY_MAP["ga4_enabled"], "")),
+        gsc_site_url=str(values.get(ENV_KEY_MAP["gsc_site_url"], "") or "").strip(),
+        gsc_enabled=_to_bool(values.get(ENV_KEY_MAP["gsc_enabled"], "")),
     )
 
 
@@ -69,6 +75,8 @@ def env_config_from_mapping(values: dict[str, object]) -> GoogleAdsEnvConfig:
         merchant_enabled=_to_bool(values.get("merchant_enabled", "")),
         ga4_property_id=_normalize_id(values.get("ga4_property_id", "")),
         ga4_enabled=_to_bool(values.get("ga4_enabled", "")),
+        gsc_site_url=str(values.get("gsc_site_url", "") or "").strip(),
+        gsc_enabled=_to_bool(values.get("gsc_enabled", "")),
     )
 
 

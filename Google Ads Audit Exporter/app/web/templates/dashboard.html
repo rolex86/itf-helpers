@@ -19,6 +19,7 @@
           <a href="#credentials">Pristupy</a>
           <a href="#merchant">Merchant Center</a>
           <a href="#ga4">GA4</a>
+          <a href="#gsc">Search Console</a>
           <a href="#scope">Rozsah exportu</a>
           <a href="#flags">Flagy</a>
           <a href="#history">Historie</a>
@@ -203,6 +204,61 @@
                   <strong>Dostupne properties</strong>
                 </div>
                 <div id="ga4-properties-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
+              </div>
+            </div>
+          </section>
+
+          <section id="gsc" class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Search Console</h3>
+                <p>Volitelny modul pro organicke dotazy, stranky a prekryv SEO/PPC.</p>
+              </div>
+              <div class="action-row">
+                <button class="btn btn-secondary btn-small" type="button" id="gsc-properties-button">Dostupne properties</button>
+                <button class="btn btn-secondary btn-small" type="button" id="gsc-test-button">Test pristupu</button>
+              </div>
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>Search Console zapnuto</span>
+                <span class="toggle inline-toggle">
+                  <input type="checkbox" name="gsc_enabled" id="gsc-enabled-input" {% if state.env_config.gsc_enabled %}checked{% endif %}>
+                  <span>Povolit Search Console API modul</span>
+                </span>
+              </label>
+              <label>
+                <span>Site URL</span>
+                <input name="gsc_site_url" id="gsc-site-url-input" value="{{ state.env_config.gsc_site_url }}" placeholder="https://www.example.cz/ nebo sc-domain:example.cz">
+              </label>
+            </div>
+
+            <div class="policy-note">
+              Search Console modul pouziva Search Console API se scope <code>https://www.googleapis.com/auth/webmasters.readonly</code> a lokalni cache, aby zbytecne neopakoval stejne drahe dotazy.
+            </div>
+
+            <div id="gsc-status-panel" class="merchant-panel merchant-panel-muted">
+              <div class="merchant-panel-header">
+                <strong>Stav pristupu</strong>
+                <span id="gsc-status-badge">Neotestovano</span>
+              </div>
+              <p id="gsc-status-message">Zkus test pristupu nebo nacti dostupne Search Console properties.</p>
+              <ul id="gsc-status-instructions" class="merchant-list"></ul>
+            </div>
+
+            <div class="merchant-grid">
+              <div class="merchant-panel">
+                <div class="merchant-panel-header">
+                  <strong>Vybrana property</strong>
+                </div>
+                <div id="gsc-selected-property" class="merchant-empty">Zatim nic.</div>
+              </div>
+              <div class="merchant-panel">
+                <div class="merchant-panel-header">
+                  <strong>Dostupne properties</strong>
+                </div>
+                <div id="gsc-properties-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
               </div>
             </div>
           </section>
@@ -516,6 +572,14 @@
       const ga4StatusInstructions = document.getElementById("ga4-status-instructions");
       const ga4SelectedProperty = document.getElementById("ga4-selected-property");
       const ga4PropertiesList = document.getElementById("ga4-properties-list");
+      const gscTestButton = document.getElementById("gsc-test-button");
+      const gscPropertiesButton = document.getElementById("gsc-properties-button");
+      const gscStatusPanel = document.getElementById("gsc-status-panel");
+      const gscStatusBadge = document.getElementById("gsc-status-badge");
+      const gscStatusMessage = document.getElementById("gsc-status-message");
+      const gscStatusInstructions = document.getElementById("gsc-status-instructions");
+      const gscSelectedProperty = document.getElementById("gsc-selected-property");
+      const gscPropertiesList = document.getElementById("gsc-properties-list");
 
       if (form && runButton) {
         form.addEventListener("submit", (event) => {
@@ -576,6 +640,16 @@
           refresh_token: document.querySelector('textarea[name="refresh_token"]')?.value || "",
           ga4_property_id: document.getElementById("ga4-property-id-input")?.value || "",
           ga4_enabled: document.getElementById("ga4-enabled-input")?.checked || false
+        };
+      }
+
+      function gscPayload() {
+        return {
+          client_id: document.querySelector('input[name="client_id"]')?.value || "",
+          client_secret: document.querySelector('input[name="client_secret"]')?.value || "",
+          refresh_token: document.querySelector('textarea[name="refresh_token"]')?.value || "",
+          gsc_site_url: document.getElementById("gsc-site-url-input")?.value || "",
+          gsc_enabled: document.getElementById("gsc-enabled-input")?.checked || false
         };
       }
 
@@ -690,7 +764,65 @@
         ga4PropertiesList.innerHTML = rows.join("");
       }
 
-      async function callMerchantEndpoint(button, url, onSuccess, payloadFactory = merchantPayload) {
+      function renderGscStatus(payload) {
+        if (!gscStatusPanel || !gscStatusBadge || !gscStatusMessage || !gscStatusInstructions) {
+          return;
+        }
+
+        gscStatusPanel.classList.remove("merchant-panel-success", "merchant-panel-error", "merchant-panel-muted");
+        gscStatusPanel.classList.add(payload.ok ? "merchant-panel-success" : "merchant-panel-error");
+        gscStatusBadge.textContent = payload.ok ? "Pristup potvrzen" : "Problem";
+        gscStatusMessage.textContent = payload.message || "";
+        gscStatusInstructions.innerHTML = "";
+
+        for (const instruction of payload.instructions || []) {
+          const item = document.createElement("li");
+          item.textContent = instruction;
+          gscStatusInstructions.appendChild(item);
+        }
+
+        if (gscSelectedProperty) {
+          if (payload.selected_property) {
+            const property = payload.selected_property;
+            gscSelectedProperty.innerHTML = `
+              <div><strong>${property.site_url || "Search Console property"}</strong></div>
+              <div>Permission: ${property.permission_level || "-"}</div>
+            `;
+          } else {
+            gscSelectedProperty.textContent = "Vybrana property zatim nebyla potvrzena.";
+          }
+        }
+
+        if (gscPropertiesList && payload.available_properties) {
+          renderGscProperties(payload.available_properties);
+        }
+      }
+
+      function renderGscProperties(properties) {
+        if (!gscPropertiesList) {
+          return;
+        }
+        if (!properties || !properties.length) {
+          gscPropertiesList.textContent = "Nebyla nalezena zadna dostupna Search Console property.";
+          return;
+        }
+
+        const rows = properties.map((property) => `
+          <div class="merchant-account-card">
+            <strong>${property.site_url || "Search Console property"}</strong>
+            <span>Permission: ${property.permission_level || "-"}</span>
+          </div>
+        `);
+        gscPropertiesList.innerHTML = rows.join("");
+      }
+
+      async function callMerchantEndpoint(
+        button,
+        url,
+        onSuccess,
+        payloadFactory = merchantPayload,
+        onError = null
+      ) {
         const originalLabel = button.textContent;
         button.disabled = true;
         button.textContent = "Nacitam...";
@@ -705,11 +837,15 @@
           const payload = await response.json();
           onSuccess(payload);
         } catch (error) {
-          renderMerchantStatus({
-            ok: false,
-            message: "Merchant API volani se nepodarilo.",
-            instructions: ["Zkontroluj lokalni server, OAuth token a Merchant API pristup."]
-          });
+          if (onError) {
+            onError(error);
+          } else {
+            renderMerchantStatus({
+              ok: false,
+              message: "Merchant API volani se nepodarilo.",
+              instructions: ["Zkontroluj lokalni server, OAuth token a Merchant API pristup."]
+            });
+          }
         } finally {
           button.disabled = false;
           button.textContent = originalLabel;
@@ -721,7 +857,13 @@
           await callMerchantEndpoint(
             merchantTestButton,
             "{{ url_for('web.merchant_test') }}",
-            renderMerchantStatus
+            renderMerchantStatus,
+            merchantPayload,
+            () => renderMerchantStatus({
+              ok: false,
+              message: "Merchant API volani se nepodarilo.",
+              instructions: ["Zkontroluj lokalni server, OAuth token a Merchant API pristup."]
+            })
           );
         });
       }
@@ -749,7 +891,13 @@
                 service_count: 0
               });
               renderMerchantAccounts(payload.accounts || []);
-            }
+            },
+            merchantPayload,
+            () => renderMerchantStatus({
+              ok: false,
+              message: "Nepodarilo se nacist Merchant ucty.",
+              instructions: ["Zkontroluj pristup do Merchant Center a OAuth scope."]
+            })
           );
         });
       }
@@ -760,7 +908,12 @@
             ga4TestButton,
             "{{ url_for('web.ga4_test') }}",
             renderGa4Status,
-            ga4Payload
+            ga4Payload,
+            () => renderGa4Status({
+              ok: false,
+              message: "GA4 API volani se nepodarilo.",
+              instructions: ["Zkontroluj lokalni server, OAuth token a GA4 pristup."]
+            })
           );
         });
       }
@@ -788,7 +941,61 @@
               });
               renderGa4Properties(payload.properties || []);
             },
-            ga4Payload
+            ga4Payload,
+            () => renderGa4Status({
+              ok: false,
+              message: "Nepodarilo se nacist GA4 properties.",
+              instructions: ["Zkontroluj OAuth scope a pristup k GA4 property."]
+            })
+          );
+        });
+      }
+
+      if (gscTestButton) {
+        gscTestButton.addEventListener("click", async () => {
+          await callMerchantEndpoint(
+            gscTestButton,
+            "{{ url_for('web.gsc_test') }}",
+            renderGscStatus,
+            gscPayload,
+            () => renderGscStatus({
+              ok: false,
+              message: "Search Console API volani se nepodarilo.",
+              instructions: ["Zkontroluj lokalni server, OAuth token a pristup do Search Console."]
+            })
+          );
+        });
+      }
+
+      if (gscPropertiesButton) {
+        gscPropertiesButton.addEventListener("click", async () => {
+          await callMerchantEndpoint(
+            gscPropertiesButton,
+            "{{ url_for('web.gsc_properties') }}",
+            (payload) => {
+              if (!payload.ok) {
+                renderGscStatus({
+                  ok: false,
+                  message: payload.message || "Nepodarilo se nacist Search Console properties.",
+                  instructions: []
+                });
+                return;
+              }
+              renderGscStatus({
+                ok: true,
+                message: payload.message || "",
+                instructions: [],
+                available_properties: payload.properties || [],
+                selected_property: null
+              });
+              renderGscProperties(payload.properties || []);
+            },
+            gscPayload,
+            () => renderGscStatus({
+              ok: false,
+              message: "Nepodarilo se nacist Search Console properties.",
+              instructions: ["Zkontroluj OAuth scope a pristup k Search Console property."]
+            })
           );
         });
       }
