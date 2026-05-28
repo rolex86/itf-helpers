@@ -76,7 +76,7 @@ class MerchantApiClient:
 
     def list_accessible_accounts(self) -> list[dict[str, Any]]:
         items = self._paginate_json(
-            "https://merchantapi.googleapis.com/accounts/v1beta/accounts",
+            "https://merchantapi.googleapis.com/accounts/v1/accounts",
             list_key="accounts",
             params={"pageSize": 250},
         )
@@ -84,13 +84,13 @@ class MerchantApiClient:
 
     def get_account(self, account_id: str | None = None) -> dict[str, Any]:
         target = _resource_name(account_id or self.config.merchant_account_id)
-        response = self._get_json(f"https://merchantapi.googleapis.com/accounts/v1beta/{target}")
+        response = self._get_json(f"https://merchantapi.googleapis.com/accounts/v1/{target}")
         return self._account_to_view(response)
 
     def list_account_services(self, account_id: str | None = None) -> list[dict[str, Any]]:
         target = _resource_name(account_id or self.config.merchant_account_id)
         return self._paginate_json(
-            f"https://merchantapi.googleapis.com/accounts/v1beta/{target}/services",
+            f"https://merchantapi.googleapis.com/accounts/v1/{target}/services",
             list_key="accountServices",
             params={"pageSize": 250},
         )
@@ -106,7 +106,7 @@ class MerchantApiClient:
     def list_aggregate_product_statuses(self, account_id: str | None = None) -> list[dict[str, Any]]:
         target = _resource_name(account_id or self.config.merchant_account_id)
         return self._paginate_json(
-            f"https://merchantapi.googleapis.com/issueresolution/v1beta/{target}/aggregateProductStatuses",
+            f"https://merchantapi.googleapis.com/issueresolution/v1/{target}/aggregateProductStatuses",
             list_key="aggregateProductStatuses",
             params={"pageSize": 250},
         )

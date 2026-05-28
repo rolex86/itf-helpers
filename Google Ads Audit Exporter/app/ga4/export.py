@@ -342,10 +342,8 @@ def build_ga4_exports(
                 "engagedSessions",
                 "engagementRate",
                 "averageSessionDuration",
-                "eventCount",
                 "keyEvents",
                 "totalRevenue",
-                "transactions",
             ],
             date_from=resolved_range.date_from.isoformat(),
             date_to=resolved_range.date_to.isoformat(),
@@ -354,21 +352,21 @@ def build_ga4_exports(
         funnel_event_names = ["view_item", "add_to_cart", "begin_checkout", "purchase"]
         campaign_rows = client.run_report(
             dimensions=["sessionCampaignName", "itemId", "itemName", "itemCategory", "eventName"],
-            metrics=["eventCount", "totalRevenue", "transactions"],
+            metrics=["eventCount"],
             date_from=resolved_range.date_from.isoformat(),
             date_to=resolved_range.date_to.isoformat(),
             dimension_filter=_event_filter(funnel_event_names),
         )
         landing_rows = client.run_report(
             dimensions=["landingPage", "eventName"],
-            metrics=["eventCount", "totalRevenue", "transactions"],
+            metrics=["eventCount"],
             date_from=resolved_range.date_from.isoformat(),
             date_to=resolved_range.date_to.isoformat(),
             dimension_filter=_event_filter(funnel_event_names),
         )
         device_rows = client.run_report(
             dimensions=["deviceCategory", "eventName"],
-            metrics=["eventCount", "totalRevenue", "transactions"],
+            metrics=["eventCount"],
             date_from=resolved_range.date_from.isoformat(),
             date_to=resolved_range.date_to.isoformat(),
             dimension_filter=_event_filter(funnel_event_names),

@@ -10,8 +10,9 @@ from app.config.settings import FlagsConfig
 def _to_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     normalized = frame.copy()
     for column in columns:
-        if column in normalized.columns:
-            normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0)
+        if column not in normalized.columns:
+            normalized[column] = 0
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0)
     return normalized
 
 
