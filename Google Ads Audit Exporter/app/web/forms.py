@@ -61,6 +61,11 @@ def parse_dashboard_form(form: Any) -> dict[str, Any]:
                 "target_roas": _to_optional_float(form.get("target_roas") or ""),
                 "low_ctr_threshold": float((form.get("low_ctr_threshold") or "0.01").strip()),
             },
+            "cost_policy": {
+                "free_only": form.get("free_only") == "on",
+                "forbid_paid_cloud_resources": form.get("forbid_paid_cloud_resources") == "on",
+                "allow_local_storage_only": form.get("allow_local_storage_only") == "on",
+            },
         },
         "ui_state": {
             "selected_preset": preset,

@@ -12,6 +12,8 @@ from app.utils.dates import ResolvedDateRange, parse_iso_date
 
 DEFAULT_REPORTS = {
     "account": True,
+    "account_diagnostics": True,
+    "linked_accounts": True,
     "campaigns": True,
     "campaigns_monthly": True,
     "ad_groups": True,
@@ -22,6 +24,9 @@ DEFAULT_REPORTS = {
     "devices": True,
     "locations": True,
     "landing_pages": True,
+    "shopping_products": True,
+    "shopping_products_summary": True,
+    "google_ads_recommendations": True,
     "conversion_actions": True,
     "pmax_campaigns": True,
     "pmax_asset_groups": True,
@@ -54,12 +59,20 @@ class FlagsConfig:
 
 
 @dataclass(slots=True)
+class CostPolicyConfig:
+    free_only: bool = True
+    forbid_paid_cloud_resources: bool = True
+    allow_local_storage_only: bool = True
+
+
+@dataclass(slots=True)
 class AppSettings:
     customer_id: str
     date_range: DateRangeConfig = field(default_factory=DateRangeConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     reports: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_REPORTS))
     flags: FlagsConfig = field(default_factory=FlagsConfig)
+    cost_policy: CostPolicyConfig = field(default_factory=CostPolicyConfig)
 
     def to_metadata(self, resolved_range: ResolvedDateRange, config_path: Path) -> dict[str, Any]:
         return {
@@ -80,6 +93,7 @@ class AppSettings:
             "output": asdict(self.output),
             "reports": dict(self.reports),
             "flags": asdict(self.flags),
+            "cost_policy": asdict(self.cost_policy),
             "config_path": str(config_path),
         }
 
@@ -120,6 +134,7 @@ def load_settings(
     raw_output = raw.get("output", {}) or {}
     raw_reports = raw.get("reports", {}) or {}
     raw_flags = raw.get("flags", {}) or {}
+    raw_cost_policy = raw.get("cost_policy", {}) or {}
 
     date_range = DateRangeConfig(
         preset=(preset_override or raw_date_range.get("preset") or "LAST_90_DAYS"),
@@ -155,10 +170,19 @@ def load_settings(
         low_ctr_threshold=float(raw_flags.get("low_ctr_threshold", 0.01)),
     )
 
+    cost_policy = CostPolicyConfig(
+        free_only=bool(raw_cost_policy.get("free_only", True)),
+        forbid_paid_cloud_resources=bool(
+            raw_cost_policy.get("forbid_paid_cloud_resources", True)
+        ),
+        allow_local_storage_only=bool(raw_cost_policy.get("allow_local_storage_only", True)),
+    )
+
     return AppSettings(
         customer_id=customer_id,
         date_range=date_range,
         output=output,
         reports=reports,
         flags=flags,
+        cost_policy=cost_policy,
     )

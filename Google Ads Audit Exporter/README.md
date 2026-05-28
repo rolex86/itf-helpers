@@ -11,6 +11,27 @@ Read-only exporter pro interni audit Google Ads uctu. Nastroj stahuje vybrane re
 - Pokracovani exportu i pri selhani jednotliveho reportu
 - Jednoduche auditni flagy pro rychlou orientaci
 - Browser rozhrani pro konfiguraci a spousteni bez terminalu
+- Shopping produktovy vykon a produktovy souhrn
+- Read-only export Google Ads doporuceni
+- Diagnostika uctu a propojenych sluzeb
+
+## Free-only politika
+
+Zakladni konfigurace pocita s tim, ze aplikace ma bezet v lokalnim a neplacenem rezimu:
+
+```yaml
+cost_policy:
+  free_only: true
+  forbid_paid_cloud_resources: true
+  allow_local_storage_only: true
+```
+
+V tehle verzi aplikace:
+
+- nepouziva Cloud Run, Compute Engine, Cloud SQL, BigQuery ani Cloud Storage
+- nepouziva placene AI API ani placene externi SaaS API
+- uklada data jen lokalne do CSV, XLSX, JSON a lokalni cache
+- pracuje read-only nad Google Ads API
 
 ## Bezpecnost
 
@@ -66,8 +87,15 @@ output:
   include_raw_csv: true
   include_metadata: true
 
+cost_policy:
+  free_only: true
+  forbid_paid_cloud_resources: true
+  allow_local_storage_only: true
+
 reports:
   account: true
+  account_diagnostics: true
+  linked_accounts: true
   campaigns: true
   campaigns_monthly: true
   ad_groups: true
@@ -78,6 +106,9 @@ reports:
   devices: true
   locations: true
   landing_pages: true
+  shopping_products: true
+  shopping_products_summary: true
+  google_ads_recommendations: true
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true

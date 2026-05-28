@@ -17,6 +17,7 @@ PERCENT_COLUMNS = {
     "search_budget_lost_impression_share",
     "search_rank_lost_impression_share",
     "target_roas",
+    "optimization_score_uplift",
 }
 
 CURRENCY_COLUMNS = {

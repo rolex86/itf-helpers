@@ -11,8 +11,15 @@ output:
   include_raw_csv: true
   include_metadata: true
 
+cost_policy:
+  free_only: true
+  forbid_paid_cloud_resources: true
+  allow_local_storage_only: true
+
 reports:
   account: true
+  account_diagnostics: true
+  linked_accounts: true
   campaigns: true
   campaigns_monthly: true
   ad_groups: true
@@ -23,6 +30,9 @@ reports:
   devices: true
   locations: true
   landing_pages: true
+  shopping_products: true
+  shopping_products_summary: true
+  google_ads_recommendations: true
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true

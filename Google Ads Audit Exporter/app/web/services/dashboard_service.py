@@ -21,6 +21,8 @@ PRESET_LABELS = {
 
 REPORT_LABELS = {
     "account": "Ucet",
+    "account_diagnostics": "Diagnostika uctu",
+    "linked_accounts": "Propojene sluzby",
     "campaigns": "Kampane",
     "campaigns_monthly": "Kampane po mesicich",
     "ad_groups": "Sestavy",
@@ -31,6 +33,9 @@ REPORT_LABELS = {
     "devices": "Zarizeni",
     "locations": "Lokality",
     "landing_pages": "Cilove stranky",
+    "shopping_products": "Shopping produkty",
+    "shopping_products_summary": "Shopping produkty souhrn",
+    "google_ads_recommendations": "Google Ads doporuceni",
     "conversion_actions": "Konverze",
     "pmax_campaigns": "PMax kampane",
     "pmax_asset_groups": "PMax asset groupy",

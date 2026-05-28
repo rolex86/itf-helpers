@@ -29,6 +29,11 @@ DEFAULT_CONFIG_PAYLOAD = {
         "target_roas": None,
         "low_ctr_threshold": 0.01,
     },
+    "cost_policy": {
+        "free_only": True,
+        "forbid_paid_cloud_resources": True,
+        "allow_local_storage_only": True,
+    },
 }
 
 

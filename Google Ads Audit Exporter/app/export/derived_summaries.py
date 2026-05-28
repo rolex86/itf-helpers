@@ -30,6 +30,8 @@ def _aggregate_summary(
         "cost_micros",
         "conversions",
         "conversions_value",
+        "all_conversions",
+        "all_conversions_value",
     ]
     normalized = _to_numeric(frame, numeric_columns)
     normalized["row_count"] = 1
@@ -43,6 +45,8 @@ def _aggregate_summary(
                 "cost_micros": "sum",
                 "conversions": "sum",
                 "conversions_value": "sum",
+                "all_conversions": "sum",
+                "all_conversions_value": "sum",
                 "row_count": "sum",
             }
         )
@@ -102,3 +106,23 @@ def build_locations_summary(
     if "geo_target_name" in summary.columns:
         summary["geo_target_name"] = summary["geo_target_name"].replace("", "(neznamy nazev lokality)")
     return summary
+
+
+def build_shopping_products_summary(
+    shopping_products: pd.DataFrame,
+    flags_config: FlagsConfig,
+) -> pd.DataFrame:
+    return _aggregate_summary(
+        frame=shopping_products,
+        group_columns=[
+            "product_item_id",
+            "product_title",
+            "product_brand",
+            "custom_label_0",
+            "custom_label_1",
+            "custom_label_2",
+            "custom_label_3",
+            "custom_label_4",
+        ],
+        flags_config=flags_config,
+    )

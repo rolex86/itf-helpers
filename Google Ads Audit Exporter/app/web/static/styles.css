@@ -322,6 +322,16 @@ textarea:focus {
   margin-top: 16px;
 }
 
+.policy-note {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .toggle,
 .check-card {
   display: flex;

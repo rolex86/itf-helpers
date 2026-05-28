@@ -43,7 +43,7 @@
           </div>
           <div class="hero-badge">
             <span>Bezpecny rezim</span>
-            <strong>Pouze read-only export</strong>
+            <strong>{% if state.config_payload.cost_policy.free_only %}Free-only + read-only{% else %}Read-only export{% endif %}</strong>
           </div>
         </section>
 
@@ -149,6 +149,34 @@
                 <input type="checkbox" name="include_metadata" {% if state.config_payload.output.include_metadata %}checked{% endif %}>
                 <span>Ulozit metadata JSON</span>
               </label>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h3>Nakladova politika</h3>
+              <p>Nulte pravidlo: aplikace ma zustat v lokalnim a neplacenem rezimu.</p>
+            </div>
+
+            <div class="toggle-row">
+              <label class="toggle">
+                <input type="checkbox" name="free_only" {% if state.config_payload.cost_policy.free_only %}checked{% endif %}>
+                <span>Free-only rezim</span>
+              </label>
+              <label class="toggle">
+                <input type="checkbox" name="forbid_paid_cloud_resources" {% if state.config_payload.cost_policy.forbid_paid_cloud_resources %}checked{% endif %}>
+                <span>Zakazat placene cloud sluzby</span>
+              </label>
+              <label class="toggle">
+                <input type="checkbox" name="allow_local_storage_only" {% if state.config_payload.cost_policy.allow_local_storage_only %}checked{% endif %}>
+                <span>Povolit jen lokalni uloziste</span>
+              </label>
+            </div>
+
+            <div class="policy-note">
+              <strong>Povoleno:</strong> Google Ads API, Merchant, GA4 Data API, Search Console API, PageSpeed, Tag Manager a lokalni soubory.
+              <br>
+              <strong>Zakazano:</strong> Cloud Run, Compute Engine, Cloud SQL, BigQuery, Cloud Storage, placene AI API a automaticky write-back bez schvaleni.
             </div>
           </section>
 

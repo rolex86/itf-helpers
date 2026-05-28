@@ -14,6 +14,7 @@ from app.export.csv_exporter import export_csv
 from app.export.derived_summaries import build_landing_pages_summary, build_locations_summary
 from app.export.metadata_exporter import write_json
 from app.export.xlsx_exporter import export_workbook
+from app.google_ads.diagnostics import build_supplemental_reports
 from app.google_ads.fetcher import GoogleAdsFetcher
 from app.google_ads.postprocess import postprocess_report_dataframe
 from app.google_ads.report_definitions import REPORT_ORDER, empty_report_frame, get_report_definition
@@ -48,6 +49,7 @@ def _timestamp() -> str:
 
 def _build_summary_rows(
     customer_id: str,
+    settings: AppSettings,
     resolved_range: ResolvedDateRange,
     export_paths: ExportPaths,
     report_rows: list[dict[str, Any]],
@@ -92,6 +94,14 @@ def _build_summary_rows(
             "value": str(export_paths.base_dir),
             "details": "",
             "status": "ok",
+            "rows": "",
+        },
+        {
+            "section": "policy",
+            "name": "free_only",
+            "value": "true" if settings.cost_policy.free_only else "false",
+            "details": "Free-only rezim aktivni, pouze read-only API a lokalni uloziste.",
+            "status": "ok" if settings.cost_policy.free_only else "warning",
             "rows": "",
         },
     ]
@@ -193,6 +203,16 @@ def _record_report_failure(
     )
 
 
+def _persist_dataset_as_csv(
+    export_paths: ExportPaths,
+    dataset: pd.DataFrame,
+    report_key: str,
+    enabled: bool,
+) -> None:
+    if enabled:
+        export_csv(dataset, export_paths.raw_dir / f"{report_key}.csv")
+
+
 def execute_export(settings: AppSettings, project_root: Path, config_path: Path) -> ExportExecutionResult:
     resolved_range = resolve_date_range(settings.date_range)
     export_paths = prepare_export_paths(
@@ -245,6 +265,9 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
             continue
 
         report = get_report_definition(report_key)
+        if not report.supports_fetch:
+            logger.info("Skipping synthetic report during GAQL fetch phase report=%s", report.key)
+            continue
         logger.info("Starting report=%s", report.key)
 
         try:
@@ -260,8 +283,12 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
             state.datasets[report.key] = processed_dataframe
             state.query_log.extend(result.query_attempts)
 
-            if settings.output.include_raw_csv:
-                export_csv(processed_dataframe, export_paths.raw_dir / f"{report.key}.csv")
+            _persist_dataset_as_csv(
+                export_paths=export_paths,
+                dataset=processed_dataframe,
+                report_key=report.key,
+                enabled=settings.output.include_raw_csv,
+            )
 
             if report.key == "account" and not processed_dataframe.empty:
                 state.account_info = processed_dataframe.iloc[0].to_dict()
@@ -307,36 +334,58 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
         flags_config=settings.flags,
     )
 
+    supplemental = build_supplemental_reports(
+        fetcher=fetcher,
+        customer_id=settings.customer_id,
+        resolved_range=resolved_range,
+        datasets=state.datasets,
+        enabled_reports=settings.reports,
+        flags_config=settings.flags,
+    )
+    state.query_log.extend(supplemental.query_attempts)
+    state.errors.extend(supplemental.errors)
+
+    for report_key, dataset in supplemental.datasets.items():
+        state.datasets[report_key] = dataset
+        _persist_dataset_as_csv(
+            export_paths=export_paths,
+            dataset=dataset,
+            report_key=report_key,
+            enabled=settings.output.include_raw_csv,
+        )
+        notes = list(supplemental.report_notes.get(report_key, []))
+        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
+        if existing_row is not None:
+            existing_details = existing_row.get("details", "")
+            extra_details = " | ".join(note for note in notes if note)
+            if extra_details:
+                existing_row["details"] = (
+                    f"{existing_details} | {extra_details}" if existing_details else extra_details
+                )
+            existing_row["rows"] = int(len(dataset))
+            if report_key in supplemental.report_warning_keys and existing_row.get("status") != "error":
+                existing_row["status"] = "warning"
+            continue
+
+        report = get_report_definition(report_key)
+        _record_report_success(
+            state=state,
+            report_key=report_key,
+            sheet_name=report.sheet_name,
+            rows=int(len(dataset)),
+            notes=notes,
+            status="warning" if report_key in supplemental.report_warning_keys else "ok",
+            dropped_fields=[],
+        )
+
     summary_rows = _build_summary_rows(
         customer_id=settings.customer_id,
+        settings=settings,
         resolved_range=resolved_range,
         export_paths=export_paths,
         report_rows=state.report_rows,
         errors=state.errors,
     )
-
-    derived_sheets = [
-        (
-            "Landing pages summary",
-            build_landing_pages_summary(
-                landing_pages=state.datasets.get(
-                    "landing_pages",
-                    empty_report_frame(get_report_definition("landing_pages")),
-                ),
-                flags_config=settings.flags,
-            ),
-        ),
-        (
-            "Locations summary",
-            build_locations_summary(
-                locations=state.datasets.get(
-                    "locations",
-                    empty_report_frame(get_report_definition("locations")),
-                ),
-                flags_config=settings.flags,
-            ),
-        ),
-    ]
 
     try:
         export_workbook(
@@ -344,7 +393,28 @@ def execute_export(settings: AppSettings, project_root: Path, config_path: Path)
             summary_rows=summary_rows,
             datasets=state.datasets,
             flags_df=flags_df,
-            derived_sheets=derived_sheets,
+            derived_sheets=[
+                (
+                    "Landing pages summary",
+                    build_landing_pages_summary(
+                        landing_pages=state.datasets.get(
+                            "landing_pages",
+                            empty_report_frame(get_report_definition("landing_pages")),
+                        ),
+                        flags_config=settings.flags,
+                    ),
+                ),
+                (
+                    "Locations summary",
+                    build_locations_summary(
+                        locations=state.datasets.get(
+                            "locations",
+                            empty_report_frame(get_report_definition("locations")),
+                        ),
+                        flags_config=settings.flags,
+                    ),
+                ),
+            ],
         )
     except Exception as exc:  # pragma: no cover - environment dependent
         logger.exception("Workbook export failed")

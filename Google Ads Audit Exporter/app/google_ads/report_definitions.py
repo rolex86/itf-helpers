@@ -18,7 +18,7 @@ class FieldSpec:
 class ReportDefinition:
     key: str
     sheet_name: str
-    query_file: str
+    query_file: str | None
     fields: tuple[FieldSpec, ...]
     priority: bool = False
 
@@ -35,7 +35,13 @@ class ReportDefinition:
         return [field.alias for field in self.fields if field.optional]
 
     def query_path(self, project_root: Path) -> Path:
+        if self.query_file is None:
+            raise ValueError(f"Report {self.key} is synthetic and has no query file.")
         return project_root / "app" / "google_ads" / "queries" / self.query_file
+
+    @property
+    def supports_fetch(self) -> bool:
+        return self.query_file is not None
 
 
 def _common_perf_fields() -> tuple[FieldSpec, ...]:
@@ -66,6 +72,32 @@ REPORTS: dict[str, ReportDefinition] = {
             FieldSpec("customer.tracking_url_template", "tracking_url_template", optional=True),
             FieldSpec("customer.final_url_suffix", "final_url_suffix", optional=True),
             FieldSpec("customer.auto_tagging_enabled", "auto_tagging_enabled", optional=True),
+        ),
+    ),
+    "account_diagnostics": ReportDefinition(
+        key="account_diagnostics",
+        sheet_name="Account diagnostics",
+        query_file=None,
+        fields=(
+            FieldSpec("diagnostic_key", "diagnostic_key"),
+            FieldSpec("label", "label"),
+            FieldSpec("value", "value"),
+            FieldSpec("status", "status"),
+            FieldSpec("details", "details"),
+        ),
+    ),
+    "linked_accounts": ReportDefinition(
+        key="linked_accounts",
+        sheet_name="Linked accounts",
+        query_file=None,
+        fields=(
+            FieldSpec("service_key", "service_key"),
+            FieldSpec("service_name", "service_name"),
+            FieldSpec("status", "status"),
+            FieldSpec("linked_account_id", "linked_account_id"),
+            FieldSpec("linked_account_name", "linked_account_name"),
+            FieldSpec("evidence_source", "evidence_source"),
+            FieldSpec("details", "details"),
         ),
     ),
     "campaigns": ReportDefinition(
@@ -248,6 +280,77 @@ REPORTS: dict[str, ReportDefinition] = {
             *_common_perf_fields(),
         ),
     ),
+    "shopping_products": ReportDefinition(
+        key="shopping_products",
+        sheet_name="Shopping products",
+        query_file="shopping_products.sql",
+        fields=(
+            FieldSpec("campaign.id", "campaign_id"),
+            FieldSpec("campaign.name", "campaign_name"),
+            FieldSpec("ad_group.id", "ad_group_id", optional=True),
+            FieldSpec("ad_group.name", "ad_group_name", optional=True),
+            FieldSpec("segments.product_item_id", "product_item_id"),
+            FieldSpec("segments.product_title", "product_title", optional=True),
+            FieldSpec("segments.product_brand", "product_brand", optional=True),
+            FieldSpec("segments.product_category_level1", "product_category_level1", optional=True),
+            FieldSpec("segments.product_category_level2", "product_category_level2", optional=True),
+            FieldSpec("segments.product_category_level3", "product_category_level3", optional=True),
+            FieldSpec("segments.product_type_l1", "product_type_l1", optional=True),
+            FieldSpec("segments.product_type_l2", "product_type_l2", optional=True),
+            FieldSpec("segments.product_type_l3", "product_type_l3", optional=True),
+            FieldSpec("segments.product_custom_attribute0", "custom_label_0", optional=True),
+            FieldSpec("segments.product_custom_attribute1", "custom_label_1", optional=True),
+            FieldSpec("segments.product_custom_attribute2", "custom_label_2", optional=True),
+            FieldSpec("segments.product_custom_attribute3", "custom_label_3", optional=True),
+            FieldSpec("segments.product_custom_attribute4", "custom_label_4", optional=True),
+            *_common_perf_fields(),
+            FieldSpec("metrics.all_conversions", "all_conversions"),
+            FieldSpec("metrics.all_conversions_value", "all_conversions_value"),
+        ),
+    ),
+    "shopping_products_summary": ReportDefinition(
+        key="shopping_products_summary",
+        sheet_name="Shopping products summary",
+        query_file=None,
+        fields=(
+            FieldSpec("product_item_id", "product_item_id"),
+            FieldSpec("product_title", "product_title"),
+            FieldSpec("product_brand", "product_brand"),
+            FieldSpec("custom_label_0", "custom_label_0"),
+            FieldSpec("custom_label_1", "custom_label_1"),
+            FieldSpec("custom_label_2", "custom_label_2"),
+            FieldSpec("custom_label_3", "custom_label_3"),
+            FieldSpec("custom_label_4", "custom_label_4"),
+            FieldSpec("impressions", "impressions"),
+            FieldSpec("clicks", "clicks"),
+            FieldSpec("cost_micros", "cost_micros"),
+            FieldSpec("conversions", "conversions"),
+            FieldSpec("conversions_value", "conversions_value"),
+            FieldSpec("all_conversions", "all_conversions"),
+            FieldSpec("all_conversions_value", "all_conversions_value"),
+            FieldSpec("average_cpc", "average_cpc"),
+            FieldSpec("conversion_rate", "conversion_rate"),
+            FieldSpec("cost_per_conversion", "cost_per_conversion"),
+            FieldSpec("value_per_conversion", "value_per_conversion"),
+            FieldSpec("row_count", "row_count"),
+        ),
+    ),
+    "google_ads_recommendations": ReportDefinition(
+        key="google_ads_recommendations",
+        sheet_name="Google Ads recommendations",
+        query_file="google_ads_recommendations.sql",
+        fields=(
+            FieldSpec("recommendation.resource_name", "recommendation_resource_name"),
+            FieldSpec("campaign.id", "campaign_id", optional=True),
+            FieldSpec("campaign.name", "campaign_name", optional=True),
+            FieldSpec("recommendation.campaign", "campaign_resource_name", optional=True),
+            FieldSpec("recommendation.type", "recommendation_type"),
+            FieldSpec("recommendation.impact.base_metrics", "impact_base_metrics", optional=True),
+            FieldSpec("recommendation.impact.potential_metrics", "impact_potential_metrics", optional=True),
+            FieldSpec("recommendation.dismissed", "dismissed", optional=True),
+            FieldSpec("recommendation", "details_json", optional=True),
+        ),
+    ),
     "conversion_actions": ReportDefinition(
         key="conversion_actions",
         sheet_name="Conversions",
@@ -350,6 +453,8 @@ REPORTS["campaigns_monthly"] = ReportDefinition(
 
 REPORT_ORDER = [
     "account",
+    "account_diagnostics",
+    "linked_accounts",
     "campaigns",
     "campaigns_monthly",
     "ad_groups",
@@ -360,6 +465,9 @@ REPORT_ORDER = [
     "devices",
     "locations",
     "landing_pages",
+    "shopping_products",
+    "shopping_products_summary",
+    "google_ads_recommendations",
     "conversion_actions",
     "pmax_campaigns",
     "pmax_asset_groups",
