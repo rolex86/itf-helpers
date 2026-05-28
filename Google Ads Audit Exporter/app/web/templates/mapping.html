@@ -26,7 +26,7 @@
           <div>
             <p class="eyebrow">Faze 2 az 4</p>
             <h2>Propojeni uctu a kontextove exporty</h2>
-            <p>Mapping se uklada do <code>config.accounts.yaml</code>. Neobsahuje zadne secrety, jen vazby mezi dostupnymi sluzbami.</p>
+            <p>Tabulka ukazuje vsechny ulozene account contexts z <code>config.accounts.yaml</code>. Vybrany radek se dole otevre v detailnim editoru.</p>
           </div>
         </section>
 
@@ -40,21 +40,120 @@
           {% endif %}
         {% endwith %}
 
-        <section class="panel">
+        <section class="panel panel-wide">
           <div class="panel-header">
             <div>
-              <h3>Account contexts</h3>
-              <p>Jednotlive kontexty muzes pridavat, duplikovat, mazat, testovat i spoustet samostatne.</p>
-            </div>
-            <div class="action-row">
-              <button class="btn btn-secondary" type="button" id="add-context-button">+ Pridat kontext</button>
-              <button class="btn btn-secondary" type="button" id="save-mapping-button">Ulozit mapping</button>
-              <button class="btn btn-primary" type="button" id="run-multi-button">Spustit vsechny aktivni</button>
+              <h3>Ulozene account contexts</h3>
+              <p>Nahore je prehled vsech kontextu. Dole se edituje vzdy jen jeden vybrany kontext.</p>
             </div>
           </div>
 
           <div id="mapping-status"></div>
-          <div id="contexts-container" class="dashboard-grid"></div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Enabled</th>
+                  <th>Key</th>
+                  <th>Label</th>
+                  <th>Google Ads customer ID</th>
+                  <th>Merchant account ID</th>
+                  <th>GA4 property ID</th>
+                  <th>GSC site URL</th>
+                  <th>GTM container ID</th>
+                  <th>PageSpeed</th>
+                  <th>Posledni test / stav</th>
+                  <th>Akce</th>
+                </tr>
+              </thead>
+              <tbody id="contexts-table-body"></tbody>
+            </table>
+          </div>
+
+          <div class="action-row mapping-actions">
+            <button class="btn btn-secondary" type="button" id="add-context-button">Pridat novy kontext</button>
+            <button class="btn btn-primary" type="button" id="save-mapping-button">Ulozit mapping</button>
+            <a class="btn btn-secondary" href="{{ url_for('web.discovery_page') }}">Spustit discovery</a>
+            <button class="btn btn-secondary" type="button" id="run-multi-button">Spustit all enabled contexts</button>
+          </div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Detail vybraneho kontextu</h3>
+              <p>Po kliknuti na radek nebo Upravit se formularem nacte vybrany kontext.</p>
+            </div>
+            <div class="action-row">
+              <button class="btn btn-secondary btn-small" type="button" id="duplicate-selected-button">Duplikovat</button>
+              <button class="btn btn-secondary btn-small" type="button" id="test-selected-button">Otestovat kontext</button>
+              <button class="btn btn-secondary btn-small" type="button" id="run-selected-export-button">Spustit selected export</button>
+              <button class="btn btn-secondary btn-small" type="button" id="delete-selected-button">Smazat</button>
+            </div>
+          </div>
+
+          <div id="mapping-editor-empty" class="merchant-empty">Zatim neni vybrany zadny kontext.</div>
+
+          <form id="context-editor" class="mapping-editor" hidden>
+            <div class="field-grid compact">
+              <label>
+                <span>Key</span>
+                <input id="editor-key" data-field="key" placeholder="shopid_cz">
+              </label>
+              <label>
+                <span>Label</span>
+                <input id="editor-label" data-field="label" placeholder="ShopID CZ">
+              </label>
+              <label>
+                <span>Google Ads customer ID</span>
+                <input id="editor-google-ads-customer-id" data-field="google_ads_customer_id" list="google-ads-customers-list">
+              </label>
+              <label>
+                <span>Google Ads login customer ID</span>
+                <input id="editor-google-ads-login-customer-id" data-field="google_ads_login_customer_id">
+              </label>
+              <label>
+                <span>Merchant account ID</span>
+                <input id="editor-merchant-account-id" data-field="merchant_account_id" list="merchant-accounts-list">
+              </label>
+              <label>
+                <span>GA4 property ID</span>
+                <input id="editor-ga4-property-id" data-field="ga4_property_id" list="ga4-properties-list">
+              </label>
+              <label>
+                <span>Search Console site URL</span>
+                <input id="editor-gsc-site-url" data-field="gsc_site_url" list="gsc-sites-list">
+              </label>
+              <label>
+                <span>GTM account ID</span>
+                <input id="editor-gtm-account-id" data-field="gtm_account_id" list="gtm-accounts-list">
+              </label>
+              <label>
+                <span>GTM container ID</span>
+                <input id="editor-gtm-container-id" data-field="gtm_container_id" list="gtm-containers-list">
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <label class="toggle">
+                <input id="editor-pagespeed-enabled" type="checkbox" data-field="pagespeed_enabled">
+                <span>PageSpeed enabled</span>
+              </label>
+              <label class="toggle">
+                <input id="editor-enabled" type="checkbox" data-field="enabled">
+                <span>Enabled</span>
+              </label>
+            </div>
+          </form>
+
+          <div id="context-test-output" class="merchant-panel merchant-panel-muted context-test-output">
+            <div class="merchant-panel-header">
+              <strong>Posledni test kontextu</strong>
+              <span>Neotestovano</span>
+            </div>
+            <div class="merchant-empty">Vyber kontext a spust jeho test.</div>
+          </div>
         </section>
 
         <datalist id="google-ads-customers-list">
@@ -92,112 +191,270 @@
 
     <script>
       const initialContexts = {{ mapping_state.contexts_payload | tojson }};
-      const contextsContainer = document.getElementById("contexts-container");
+      const tableBody = document.getElementById("contexts-table-body");
       const mappingStatus = document.getElementById("mapping-status");
       const addContextButton = document.getElementById("add-context-button");
       const saveMappingButton = document.getElementById("save-mapping-button");
       const runMultiButton = document.getElementById("run-multi-button");
+      const duplicateSelectedButton = document.getElementById("duplicate-selected-button");
+      const testSelectedButton = document.getElementById("test-selected-button");
+      const runSelectedExportButton = document.getElementById("run-selected-export-button");
+      const deleteSelectedButton = document.getElementById("delete-selected-button");
+      const editor = document.getElementById("context-editor");
+      const editorEmpty = document.getElementById("mapping-editor-empty");
+      const testOutput = document.getElementById("context-test-output");
 
-      function contextTemplate(context = {}) {
-        return `
-          <article class="panel panel-wide context-card">
-            <div class="panel-header">
-              <div>
-                <h3>${context.label || "Novy kontext"}</h3>
-                <p>Mapovani jedne datove sady napric Ads, Merchantem, GA4, GSC a GTM.</p>
+      const editorFields = [
+        "key",
+        "label",
+        "google_ads_customer_id",
+        "google_ads_login_customer_id",
+        "merchant_account_id",
+        "ga4_property_id",
+        "gsc_site_url",
+        "gtm_account_id",
+        "gtm_container_id",
+        "pagespeed_enabled",
+        "enabled"
+      ];
+
+      let contexts = Array.isArray(initialContexts) ? initialContexts.map(normalizeContext) : [];
+      let selectedIndex = contexts.length ? 0 : -1;
+
+      function defaultTestState(enabled = true) {
+        if (!enabled) {
+          return {
+            status: "disabled",
+            label: "Disabled",
+            class_name: "status-disabled",
+            tested_at: "",
+            summary: "Kontext je vypnuty a neucastni se multi-exportu."
+          };
+        }
+        return {
+          status: "unknown",
+          label: "Not tested",
+          class_name: "status-unknown",
+          tested_at: "",
+          summary: "Kontext zatim nebyl otestovany."
+        };
+      }
+
+      function normalizeContext(context = {}) {
+        const enabled = context.enabled !== false;
+        return {
+          key: context.key || "",
+          label: context.label || "",
+          google_ads_customer_id: context.google_ads_customer_id || "",
+          google_ads_login_customer_id: context.google_ads_login_customer_id || "",
+          merchant_account_id: context.merchant_account_id || "",
+          ga4_property_id: context.ga4_property_id || "",
+          gsc_site_url: context.gsc_site_url || "",
+          gtm_account_id: context.gtm_account_id || "",
+          gtm_container_id: context.gtm_container_id || "",
+          pagespeed_enabled: context.pagespeed_enabled !== false,
+          enabled,
+          test_result: context.test_result || null,
+          test_state: context.test_state || defaultTestState(enabled)
+        };
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll("\"", "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function statusBadge(testState) {
+        const state = testState || defaultTestState(true);
+        return `<span class="status-pill ${state.class_name || "status-unknown"}">${escapeHtml(state.label || "Unknown")}</span>`;
+      }
+
+      function shortValue(value) {
+        const text = String(value || "").trim();
+        return text ? escapeHtml(text) : '<span class="muted">-</span>';
+      }
+
+      function lastTestCell(context) {
+        const state = context.test_state || defaultTestState(context.enabled !== false);
+        const testedAt = state.tested_at ? `<div class="context-test-time">${escapeHtml(state.tested_at)}</div>` : "";
+        const summary = state.summary ? `<div class="context-test-summary">${escapeHtml(state.summary)}</div>` : "";
+        return `${statusBadge(state)}${testedAt}${summary}`;
+      }
+
+      function renderTable() {
+        if (!contexts.length) {
+          tableBody.innerHTML = `
+            <tr>
+              <td colspan="11" class="muted">Zatim neni ulozen zadny account context.</td>
+            </tr>
+          `;
+          return;
+        }
+
+        tableBody.innerHTML = contexts.map((context, index) => `
+          <tr class="context-row ${index === selectedIndex ? "context-row-selected" : ""}" data-index="${index}">
+            <td>${context.enabled ? "Ano" : "Ne"}</td>
+            <td>${shortValue(context.key)}</td>
+            <td>${shortValue(context.label)}</td>
+            <td>${shortValue(context.google_ads_customer_id)}</td>
+            <td>${shortValue(context.merchant_account_id)}</td>
+            <td>${shortValue(context.ga4_property_id)}</td>
+            <td>${shortValue(context.gsc_site_url)}</td>
+            <td>${shortValue(context.gtm_container_id)}</td>
+            <td>${context.pagespeed_enabled ? "Ano" : "Ne"}</td>
+            <td>${lastTestCell(context)}</td>
+            <td>
+              <div class="table-action-group">
+                <button class="btn btn-secondary btn-small row-edit" type="button" data-index="${index}">Upravit</button>
+                <button class="btn btn-secondary btn-small row-duplicate" type="button" data-index="${index}">Duplikovat</button>
+                <button class="btn btn-secondary btn-small row-test" type="button" data-index="${index}">Otestovat</button>
+                <button class="btn btn-secondary btn-small row-export" type="button" data-index="${index}">Selected export</button>
+                <button class="btn btn-secondary btn-small row-toggle" type="button" data-index="${index}">${context.enabled ? "Zakazat" : "Povolit"}</button>
+                <button class="btn btn-secondary btn-small row-delete" type="button" data-index="${index}">Smazat</button>
               </div>
-              <div class="action-row">
-                <button class="btn btn-secondary btn-small duplicate-context" type="button">Duplikovat</button>
-                <button class="btn btn-secondary btn-small test-context" type="button">Otestovat kontext</button>
-                <button class="btn btn-secondary btn-small run-context-export" type="button">Spustit export</button>
-                <button class="btn btn-secondary btn-small remove-context" type="button">Smazat</button>
-              </div>
-            </div>
+            </td>
+          </tr>
+        `).join("");
+      }
 
-            <div class="field-grid compact">
-              <label>
-                <span>Key</span>
-                <input data-field="key" value="${context.key || ""}" placeholder="shopid_cz">
-              </label>
-              <label>
-                <span>Label</span>
-                <input data-field="label" value="${context.label || ""}" placeholder="ShopID CZ">
-              </label>
-              <label>
-                <span>Google Ads customer ID</span>
-                <input data-field="google_ads_customer_id" list="google-ads-customers-list" value="${context.google_ads_customer_id || ""}">
-              </label>
-              <label>
-                <span>Google Ads login customer ID</span>
-                <input data-field="google_ads_login_customer_id" value="${context.google_ads_login_customer_id || ""}">
-              </label>
-              <label>
-                <span>Merchant account ID</span>
-                <input data-field="merchant_account_id" list="merchant-accounts-list" value="${context.merchant_account_id || ""}">
-              </label>
-              <label>
-                <span>GA4 property ID</span>
-                <input data-field="ga4_property_id" list="ga4-properties-list" value="${context.ga4_property_id || ""}">
-              </label>
-              <label>
-                <span>Search Console site URL</span>
-                <input data-field="gsc_site_url" list="gsc-sites-list" value="${context.gsc_site_url || ""}">
-              </label>
-              <label>
-                <span>GTM account ID</span>
-                <input data-field="gtm_account_id" list="gtm-accounts-list" value="${context.gtm_account_id || ""}">
-              </label>
-              <label>
-                <span>GTM container ID</span>
-                <input data-field="gtm_container_id" list="gtm-containers-list" value="${context.gtm_container_id || ""}">
-              </label>
+      function renderEditor() {
+        if (selectedIndex < 0 || !contexts[selectedIndex]) {
+          editor.hidden = true;
+          editorEmpty.hidden = false;
+          testOutput.className = "merchant-panel merchant-panel-muted context-test-output";
+          testOutput.innerHTML = `
+            <div class="merchant-panel-header">
+              <strong>Posledni test kontextu</strong>
+              <span>Neotestovano</span>
             </div>
+            <div class="merchant-empty">Vyber kontext a spust jeho test.</div>
+          `;
+          return;
+        }
 
-            <div class="toggle-row">
-              <label class="toggle">
-                <input type="checkbox" data-field="pagespeed_enabled" ${context.pagespeed_enabled === false ? "" : "checked"}>
-                <span>PageSpeed enabled</span>
-              </label>
-              <label class="toggle">
-                <input type="checkbox" data-field="enabled" ${context.enabled === false ? "" : "checked"}>
-                <span>Enabled</span>
-              </label>
-            </div>
+        const context = contexts[selectedIndex];
+        editor.hidden = false;
+        editorEmpty.hidden = true;
+        for (const field of editorFields) {
+          const input = editor.querySelector(`[data-field="${field}"]`);
+          if (!input) {
+            continue;
+          }
+          if (input.type === "checkbox") {
+            input.checked = Boolean(context[field]);
+          } else {
+            input.value = context[field] || "";
+          }
+        }
+        renderTestPanel(context);
+      }
 
-            <div class="merchant-panel merchant-panel-muted context-test-output">
-              <div class="merchant-panel-header">
-                <strong>Test kontextu</strong>
-                <span>Neotestovano</span>
-              </div>
-              <div class="merchant-empty">Pouzij tlacitko Otestovat kontext.</div>
+      function renderTestPanel(context) {
+        const testResult = context.test_result;
+        const testState = context.test_state || defaultTestState(context.enabled !== false);
+        const panelClass = testState.status === "ok"
+          ? "merchant-panel-success"
+          : testState.status === "problem"
+            ? "merchant-panel-error"
+            : "merchant-panel-muted";
+
+        if (!testResult || !testResult.services) {
+          testOutput.className = `merchant-panel ${panelClass} context-test-output`;
+          testOutput.innerHTML = `
+            <div class="merchant-panel-header">
+              <strong>${escapeHtml(context.label || context.key || "Kontext")}</strong>
+              <span>${escapeHtml(testState.label || "Not tested")}</span>
             </div>
-          </article>
+            <div class="merchant-empty">${escapeHtml(testState.summary || "Kontext zatim nebyl otestovany.")}</div>
+          `;
+          return;
+        }
+
+        const rows = Object.entries(testResult.services).map(([key, value]) => `
+          <div class="merchant-account-card">
+            <strong>${escapeHtml(key)}</strong>
+            <span>${escapeHtml(value.status === "ok" ? "OK" : "Problem")}</span>
+            <span>${escapeHtml(value.details || "")}</span>
+          </div>
+        `).join("");
+
+        testOutput.className = `merchant-panel ${panelClass} context-test-output`;
+        testOutput.innerHTML = `
+          <div class="merchant-panel-header">
+            <strong>${escapeHtml(context.label || context.key || "Kontext")}</strong>
+            <span>${escapeHtml(testState.label || "Unknown")}</span>
+          </div>
+          <div class="context-test-summary">${escapeHtml(testState.summary || "")}</div>
+          ${testState.tested_at ? `<div class="context-test-time">${escapeHtml(testState.tested_at)}</div>` : ""}
+          ${rows || '<div class="merchant-empty">Bez detailu.</div>'}
         `;
       }
 
-      function renderContexts(contexts) {
-        contextsContainer.innerHTML = contexts.map((context) => contextTemplate(context)).join("");
-      }
-
-      function contextCards() {
-        return Array.from(document.querySelectorAll(".context-card"));
-      }
-
-      function readContext(card) {
-        const payload = {};
-        for (const input of card.querySelectorAll("[data-field]")) {
-          const field = input.dataset.field;
-          payload[field] = input.type === "checkbox" ? input.checked : input.value.trim();
-        }
-        return payload;
-      }
-
-      function collectContexts() {
-        return contextCards().map(readContext).filter((context) => context.key);
+      function renderAll() {
+        renderTable();
+        renderEditor();
       }
 
       function setStatus(message, kind = "info") {
-        mappingStatus.innerHTML = `<div class="flash flash-${kind}">${message}</div>`;
+        mappingStatus.innerHTML = `<div class="flash flash-${kind}">${escapeHtml(message)}</div>`;
+      }
+
+      function selectContext(index) {
+        if (index < 0 || index >= contexts.length) {
+          return;
+        }
+        saveEditorIntoState();
+        selectedIndex = index;
+        renderAll();
+      }
+
+      function saveEditorIntoState() {
+        if (selectedIndex < 0 || !contexts[selectedIndex] || editor.hidden) {
+          return;
+        }
+        const current = contexts[selectedIndex];
+        for (const field of editorFields) {
+          const input = editor.querySelector(`[data-field="${field}"]`);
+          if (!input) {
+            continue;
+          }
+          current[field] = input.type === "checkbox" ? input.checked : input.value.trim();
+        }
+        if (!current.enabled) {
+          current.test_state = defaultTestState(false);
+        } else if (current.test_result) {
+          const ok = Boolean(current.test_result.ok);
+          current.test_state = {
+            status: ok ? "ok" : "problem",
+            label: ok ? "OK" : "Problem",
+            class_name: ok ? "status-ok" : "status-problem",
+            tested_at: current.test_result.tested_at || "",
+            summary: current.test_result.summary || ""
+          };
+        } else if (!current.test_result) {
+          current.test_state = defaultTestState(true);
+        }
+      }
+
+      function contextsPayload() {
+        saveEditorIntoState();
+        return contexts.map((context) => ({
+          key: context.key,
+          label: context.label,
+          google_ads_customer_id: context.google_ads_customer_id,
+          google_ads_login_customer_id: context.google_ads_login_customer_id,
+          merchant_account_id: context.merchant_account_id,
+          ga4_property_id: context.ga4_property_id,
+          gsc_site_url: context.gsc_site_url,
+          gtm_account_id: context.gtm_account_id,
+          gtm_container_id: context.gtm_container_id,
+          pagespeed_enabled: Boolean(context.pagespeed_enabled),
+          enabled: Boolean(context.enabled)
+        }));
       }
 
       async function postJson(url, payload) {
@@ -213,43 +470,138 @@
         return data;
       }
 
-      async function saveMapping() {
-        const data = await postJson("{{ url_for('web.save_mapping_page') }}", {
-          account_contexts: collectContexts()
-        });
-        setStatus(data.message || "Mapping ulozen.", "success");
+      function uniqueCopyKey(baseKey) {
+        const cleanedBase = (baseKey || "novy_kontext").trim() || "novy_kontext";
+        let nextKey = `${cleanedBase}_copy`;
+        let index = 2;
+        const existing = new Set(contexts.map((item) => item.key));
+        while (existing.has(nextKey)) {
+          nextKey = `${cleanedBase}_copy_${index}`;
+          index += 1;
+        }
+        return nextKey;
       }
 
-      function renderTestResult(card, payload) {
-        const panel = card.querySelector(".context-test-output");
-        if (!panel) {
+      function addContext() {
+        saveEditorIntoState();
+        const context = normalizeContext({
+          key: "",
+          label: "",
+          pagespeed_enabled: true,
+          enabled: true
+        });
+        contexts.push(context);
+        selectedIndex = contexts.length - 1;
+        renderAll();
+      }
+
+      function duplicateContext(index) {
+        if (!contexts[index]) {
           return;
         }
-        const rows = Object.entries(payload.services || {}).map(([key, value]) => `
-          <div class="merchant-account-card">
-            <strong>${key}</strong>
-            <span>${value.status === "ok" ? "OK" : "Problem"}</span>
-            <span>${value.details || ""}</span>
-          </div>
-        `).join("");
-        panel.classList.remove("merchant-panel-muted", "merchant-panel-success", "merchant-panel-error");
-        panel.classList.add(payload.ok ? "merchant-panel-success" : "merchant-panel-error");
-        panel.innerHTML = `
-          <div class="merchant-panel-header">
-            <strong>${payload.context_label || payload.context_key || "Kontext"}</strong>
-            <span>${payload.ok ? "OK" : "Problem"}</span>
-          </div>
-          ${rows || '<div class="merchant-empty">Bez detailu.</div>'}
-        `;
+        saveEditorIntoState();
+        const source = contexts[index];
+        const clone = normalizeContext({
+          ...source,
+          key: uniqueCopyKey(source.key),
+          label: source.label ? `${source.label} kopie` : "",
+          test_result: null,
+          test_state: defaultTestState(source.enabled !== false)
+        });
+        contexts.splice(index + 1, 0, clone);
+        selectedIndex = index + 1;
+        renderAll();
       }
 
-      async function testContext(card) {
-        const payload = await postJson("{{ url_for('web.test_mapping_context') }}", readContext(card));
-        renderTestResult(card, payload);
+      function deleteContext(index) {
+        if (!contexts[index]) {
+          return;
+        }
+        const name = contexts[index].label || contexts[index].key || "tento kontext";
+        if (!window.confirm(`Opravdu smazat ${name}?`)) {
+          return;
+        }
+        contexts.splice(index, 1);
+        if (!contexts.length) {
+          selectedIndex = -1;
+        } else if (selectedIndex >= contexts.length) {
+          selectedIndex = contexts.length - 1;
+        }
+        renderAll();
       }
 
-      async function runContextExport(card) {
-        const context = readContext(card);
+      function toggleContext(index) {
+        if (!contexts[index]) {
+          return;
+        }
+        saveEditorIntoState();
+        contexts[index].enabled = !contexts[index].enabled;
+        if (!contexts[index].enabled) {
+          contexts[index].test_state = defaultTestState(false);
+        } else if (contexts[index].test_result) {
+          const ok = Boolean(contexts[index].test_result.ok);
+          contexts[index].test_state = {
+            status: ok ? "ok" : "problem",
+            label: ok ? "OK" : "Problem",
+            class_name: ok ? "status-ok" : "status-problem",
+            tested_at: contexts[index].test_result.tested_at || "",
+            summary: contexts[index].test_result.summary || ""
+          };
+        } else {
+          contexts[index].test_state = defaultTestState(true);
+        }
+        if (selectedIndex === index) {
+          renderEditor();
+        }
+        renderTable();
+      }
+
+      async function saveMapping() {
+        const selectedKey = selectedIndex >= 0 && contexts[selectedIndex] ? contexts[selectedIndex].key : "";
+        const data = await postJson("{{ url_for('web.save_mapping_page') }}", {
+          account_contexts: contextsPayload().filter((context) => context.key)
+        });
+        contexts = Array.isArray(data.contexts) ? data.contexts.map(normalizeContext) : contexts;
+        if (!contexts.length) {
+          selectedIndex = -1;
+        } else {
+          const newIndex = contexts.findIndex((context) => context.key === selectedKey);
+          selectedIndex = newIndex >= 0 ? newIndex : 0;
+        }
+        renderAll();
+        setStatus(data.message || "Mapping ulozen.", "success");
+        return data;
+      }
+
+      async function testContext(index) {
+        if (!contexts[index]) {
+          return;
+        }
+        if (selectedIndex !== index) {
+          selectContext(index);
+        }
+        saveEditorIntoState();
+        const context = contexts[index];
+        const payload = await postJson("{{ url_for('web.test_mapping_context') }}", context);
+        context.test_result = payload;
+        context.test_state = payload.test_state || defaultTestState(context.enabled !== false);
+        renderAll();
+        setStatus(`Test kontextu ${context.label || context.key} byl dokonceny.`, payload.ok ? "success" : "warning");
+      }
+
+      async function runSelectedExport(index) {
+        if (!contexts[index]) {
+          return;
+        }
+        if (selectedIndex !== index) {
+          selectContext(index);
+        }
+        await saveMapping();
+        const contextKey = selectedIndex >= 0 && contexts[selectedIndex] ? contexts[selectedIndex].key : "";
+        const context = contexts.find((item) => item.key === contextKey);
+        if (!context || !context.key) {
+          throw new Error("Vybrany kontext nema ulozeny key.");
+        }
         const payload = await postJson("{{ url_for('web.run_context_export_route') }}", {
           context_key: context.key
         });
@@ -257,53 +609,45 @@
       }
 
       async function runMultiExport() {
+        await saveMapping();
         const payload = await postJson("{{ url_for('web.run_multi_export_route') }}", {});
         setStatus(`Multi-export byl dokonceny. Cross-account slozka: ${payload.cross_account_dir || "-"}`, "success");
       }
 
-      document.addEventListener("click", async (event) => {
-        const card = event.target.closest(".context-card");
+      tableBody.addEventListener("click", async (event) => {
+        const button = event.target.closest("button");
+        const row = event.target.closest(".context-row");
+        const rowIndex = row ? Number(row.dataset.index) : -1;
 
-        if (event.target.matches(".remove-context")) {
-          if (card) {
-            card.remove();
-          }
-        }
-
-        if (event.target.matches(".duplicate-context")) {
-          if (card) {
-            const context = readContext(card);
-            context.key = context.key ? `${context.key}_copy` : "";
-            contextsContainer.insertAdjacentHTML("beforeend", contextTemplate(context));
-          }
-        }
-
-        if (event.target.matches(".test-context")) {
-          if (!card) {
-            return;
-          }
+        if (button) {
+          const index = Number(button.dataset.index);
           try {
-            await testContext(card);
+            if (button.classList.contains("row-edit")) {
+              selectContext(index);
+            } else if (button.classList.contains("row-duplicate")) {
+              duplicateContext(index);
+            } else if (button.classList.contains("row-test")) {
+              await testContext(index);
+            } else if (button.classList.contains("row-export")) {
+              await runSelectedExport(index);
+            } else if (button.classList.contains("row-toggle")) {
+              toggleContext(index);
+            } else if (button.classList.contains("row-delete")) {
+              deleteContext(index);
+            }
           } catch (error) {
             setStatus(error.message, "error");
           }
+          return;
         }
 
-        if (event.target.matches(".run-context-export")) {
-          if (!card) {
-            return;
-          }
-          try {
-            await saveMapping();
-            await runContextExport(card);
-          } catch (error) {
-            setStatus(error.message, "error");
-          }
+        if (rowIndex >= 0) {
+          selectContext(rowIndex);
         }
       });
 
       addContextButton.addEventListener("click", () => {
-        contextsContainer.insertAdjacentHTML("beforeend", contextTemplate({}));
+        addContext();
       });
 
       saveMappingButton.addEventListener("click", async () => {
@@ -316,14 +660,68 @@
 
       runMultiButton.addEventListener("click", async () => {
         try {
-          await saveMapping();
           await runMultiExport();
         } catch (error) {
           setStatus(error.message, "error");
         }
       });
 
-      renderContexts(initialContexts.length ? initialContexts : [{}]);
+      duplicateSelectedButton.addEventListener("click", () => {
+        if (selectedIndex >= 0) {
+          duplicateContext(selectedIndex);
+        }
+      });
+
+      deleteSelectedButton.addEventListener("click", () => {
+        if (selectedIndex >= 0) {
+          deleteContext(selectedIndex);
+        }
+      });
+
+      testSelectedButton.addEventListener("click", async () => {
+        if (selectedIndex < 0) {
+          setStatus("Nejdriv vyber kontext.", "warning");
+          return;
+        }
+        try {
+          await testContext(selectedIndex);
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      });
+
+      runSelectedExportButton.addEventListener("click", async () => {
+        if (selectedIndex < 0) {
+          setStatus("Nejdriv vyber kontext.", "warning");
+          return;
+        }
+        try {
+          await runSelectedExport(selectedIndex);
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      });
+
+      for (const field of editorFields) {
+        const input = editor.querySelector(`[data-field="${field}"]`);
+        if (!input) {
+          continue;
+        }
+        input.addEventListener("input", () => {
+          saveEditorIntoState();
+          renderTable();
+        });
+        input.addEventListener("change", () => {
+          saveEditorIntoState();
+          renderTable();
+          renderEditor();
+        });
+      }
+
+      if (!contexts.length) {
+        contexts = [];
+      }
+      renderAll();
     </script>
   </body>
 </html>

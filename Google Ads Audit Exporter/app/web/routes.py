@@ -155,7 +155,14 @@ def save_mapping_page():
     try:
         contexts = parse_contexts_payload(payload)
         save_mapping(_project_root(), contexts)
-        return jsonify({"ok": True, "message": "Mapping byl ulozen do config.accounts.yaml."})
+        mapping_state = load_mapping_state(_project_root())
+        return jsonify(
+            {
+                "ok": True,
+                "message": "Mapping byl ulozen do config.accounts.yaml.",
+                "contexts": mapping_state["contexts_payload"],
+            }
+        )
     except Exception as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
 
@@ -165,8 +172,7 @@ def test_mapping_context():
     payload = request.get_json(silent=True) or {}
     try:
         result = test_context_from_payload(_project_root(), payload)
-        status_code = 200 if result.get("ok") else 400
-        return jsonify(result), status_code
+        return jsonify(result), 200
     except Exception as exc:
         return jsonify({"ok": False, "message": str(exc)}), 500
 

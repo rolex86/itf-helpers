@@ -529,6 +529,74 @@ th {
   letter-spacing: 0.12em;
 }
 
+.context-row {
+  cursor: pointer;
+}
+
+.context-row-selected td {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.table-action-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 300px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+}
+
+.status-ok {
+  color: #86efac;
+  border-color: rgba(34, 197, 94, 0.34);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.status-problem {
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.34);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.status-unknown {
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.status-disabled {
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.mapping-actions {
+  margin-top: 18px;
+}
+
+.mapping-editor {
+  display: grid;
+  gap: 18px;
+}
+
+.context-test-time,
+.context-test-summary {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
 .row-warning td {
   background: rgba(245, 158, 11, 0.08);
 }
