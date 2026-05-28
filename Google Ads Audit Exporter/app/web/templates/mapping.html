@@ -43,45 +43,6 @@
         <section class="panel panel-wide">
           <div class="panel-header">
             <div>
-              <h3>Ulozene account contexts</h3>
-              <p>Nahore je prehled vsech kontextu. Dole se edituje vzdy jen jeden vybrany kontext.</p>
-            </div>
-          </div>
-
-          <div id="mapping-status"></div>
-
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Enabled</th>
-                  <th>Key</th>
-                  <th>Label</th>
-                  <th>Google Ads customer ID</th>
-                  <th>Merchant account ID</th>
-                  <th>GA4 property ID</th>
-                  <th>GSC site URL</th>
-                  <th>GTM container ID</th>
-                  <th>PageSpeed</th>
-                  <th>Posledni test / stav</th>
-                  <th>Akce</th>
-                </tr>
-              </thead>
-              <tbody id="contexts-table-body"></tbody>
-            </table>
-          </div>
-
-          <div class="action-row mapping-actions">
-            <button class="btn btn-secondary" type="button" id="add-context-button">Pridat novy kontext</button>
-            <button class="btn btn-primary" type="button" id="save-mapping-button">Ulozit mapping</button>
-            <a class="btn btn-secondary" href="{{ url_for('web.discovery_page') }}">Spustit discovery</a>
-            <button class="btn btn-secondary" type="button" id="run-multi-button">Spustit all enabled contexts</button>
-          </div>
-        </section>
-
-        <section class="panel panel-wide">
-          <div class="panel-header">
-            <div>
               <h3>Detail vybraneho kontextu</h3>
               <p>Po kliknuti na radek nebo Upravit se formularem nacte vybrany kontext.</p>
             </div>
@@ -156,6 +117,45 @@
           </div>
         </section>
 
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Ulozene account contexts</h3>
+              <p>Nahore upravis vybrany kontext, tady niz mas prehled vsech ulozenych vazeb a rychle akce po radcich.</p>
+            </div>
+          </div>
+
+          <div id="mapping-status"></div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Enabled</th>
+                  <th>Key</th>
+                  <th>Label</th>
+                  <th>Google Ads customer ID</th>
+                  <th>Merchant account ID</th>
+                  <th>GA4 property ID</th>
+                  <th>GSC site URL</th>
+                  <th>GTM container ID</th>
+                  <th>PageSpeed</th>
+                  <th>Posledni test / stav</th>
+                  <th>Akce</th>
+                </tr>
+              </thead>
+              <tbody id="contexts-table-body"></tbody>
+            </table>
+          </div>
+
+          <div class="action-row mapping-actions">
+            <button class="btn btn-secondary" type="button" id="add-context-button">Pridat novy kontext</button>
+            <button class="btn btn-primary" type="button" id="save-mapping-button">Ulozit mapping</button>
+            <a class="btn btn-secondary" href="{{ url_for('web.discovery_page') }}">Spustit discovery</a>
+            <button class="btn btn-secondary" type="button" id="run-multi-button">Spustit all enabled contexts</button>
+          </div>
+        </section>
+
         <datalist id="google-ads-customers-list">
           {% for row in mapping_state.discovery_tables.google_ads_customers %}
             <option value="{{ row.customer_id }}">{{ row.descriptive_name }}</option>
@@ -220,6 +220,7 @@
 
       let contexts = Array.isArray(initialContexts) ? initialContexts.map(normalizeContext) : [];
       let selectedIndex = contexts.length ? 0 : -1;
+      let testInProgress = false;
 
       function defaultTestState(enabled = true) {
         if (!enabled) {
@@ -399,8 +400,42 @@
         renderEditor();
       }
 
+      function renderPendingTestPanel(context) {
+        const label = context.label || context.key || "Kontext";
+        testOutput.className = "merchant-panel merchant-panel-muted context-test-output";
+        testOutput.innerHTML = `
+          <div class="merchant-panel-header">
+            <strong>${escapeHtml(label)}</strong>
+            <span>Probiha test</span>
+          </div>
+          <div class="context-test-summary">Kontroluji Google Ads, GA4, GSC, Merchant, GTM a PageSpeed. Podle dostupnych API to muze chvili trvat.</div>
+        `;
+      }
+
       function setStatus(message, kind = "info") {
         mappingStatus.innerHTML = `<div class="flash flash-${kind}">${escapeHtml(message)}</div>`;
+      }
+
+      function setButtonsBusy(buttons, busy, busyLabel = "") {
+        for (const button of buttons) {
+          if (!button) {
+            continue;
+          }
+          if (busy) {
+            if (!button.dataset.originalLabel) {
+              button.dataset.originalLabel = button.textContent;
+            }
+            button.disabled = true;
+            if (busyLabel) {
+              button.textContent = busyLabel;
+            }
+          } else {
+            button.disabled = false;
+            if (button.dataset.originalLabel) {
+              button.textContent = button.dataset.originalLabel;
+            }
+          }
+        }
       }
 
       function selectContext(index) {
@@ -582,11 +617,28 @@
         }
         saveEditorIntoState();
         const context = contexts[index];
-        const payload = await postJson("{{ url_for('web.test_mapping_context') }}", context);
-        context.test_result = payload;
-        context.test_state = payload.test_state || defaultTestState(context.enabled !== false);
-        renderAll();
-        setStatus(`Test kontextu ${context.label || context.key} byl dokonceny.`, payload.ok ? "success" : "warning");
+        const rowButton = document.querySelector(`.row-test[data-index="${index}"]`);
+        testInProgress = true;
+        setButtonsBusy(
+          [testSelectedButton, rowButton, runSelectedExportButton, saveMappingButton, runMultiButton],
+          true,
+          "Testuji..."
+        );
+        renderPendingTestPanel(context);
+        setStatus(`Test kontextu ${context.label || context.key} probiha...`, "info");
+        try {
+          const payload = await postJson("{{ url_for('web.test_mapping_context') }}", context);
+          context.test_result = payload;
+          context.test_state = payload.test_state || defaultTestState(context.enabled !== false);
+          renderAll();
+          setStatus(`Test kontextu ${context.label || context.key} byl dokonceny.`, payload.ok ? "success" : "warning");
+        } finally {
+          testInProgress = false;
+          setButtonsBusy(
+            [testSelectedButton, rowButton, runSelectedExportButton, saveMappingButton, runMultiButton],
+            false
+          );
+        }
       }
 
       async function runSelectedExport(index) {

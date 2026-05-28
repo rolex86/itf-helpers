@@ -170,10 +170,27 @@ def save_mapping_page():
 @web_bp.post("/mapping/test-context")
 def test_mapping_context():
     payload = request.get_json(silent=True) or {}
+    context_key = str(payload.get("key") or "").strip()
+    context_label = str(payload.get("label") or "").strip()
     try:
+        current_app.logger.info(
+            "Starting mapping context test context_key=%s context_label=%s",
+            context_key,
+            context_label,
+        )
         result = test_context_from_payload(_project_root(), payload)
+        current_app.logger.info(
+            "Finished mapping context test context_key=%s ok=%s",
+            result.get("context_key", context_key),
+            result.get("ok"),
+        )
         return jsonify(result), 200
     except Exception as exc:
+        current_app.logger.exception(
+            "Mapping context test failed context_key=%s context_label=%s",
+            context_key,
+            context_label,
+        )
         return jsonify({"ok": False, "message": str(exc)}), 500
 
 
