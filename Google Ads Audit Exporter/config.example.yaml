@@ -33,6 +33,12 @@ reports:
   shopping_products: true
   shopping_products_summary: true
   google_ads_recommendations: true
+  merchant_products: false
+  merchant_product_issues: false
+  merchant_product_status_summary: false
+  product_optimization: false
+  product_feed_issues_with_spend: false
+  product_custom_label_performance: false
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true

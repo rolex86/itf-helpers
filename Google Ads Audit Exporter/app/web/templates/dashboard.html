@@ -17,6 +17,7 @@
 
         <nav class="nav-block">
           <a href="#credentials">Pristupy</a>
+          <a href="#merchant">Merchant Center</a>
           <a href="#scope">Rozsah exportu</a>
           <a href="#flags">Flagy</a>
           <a href="#history">Historie</a>
@@ -92,6 +93,61 @@
                 <span>Refresh token</span>
                 <textarea name="refresh_token" rows="3">{{ state.env_config.refresh_token }}</textarea>
               </label>
+            </div>
+          </section>
+
+          <section id="merchant" class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Merchant Center</h3>
+                <p>Volitelny modul pro Shopping a PMax feed diagnostiku. Google Ads export bez nej funguje dal.</p>
+              </div>
+              <div class="action-row">
+                <button class="btn btn-secondary btn-small" type="button" id="merchant-accounts-button">Dostupne ucty</button>
+                <button class="btn btn-secondary btn-small" type="button" id="merchant-test-button">Test spojeni</button>
+              </div>
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>Merchant Center zapnuto</span>
+                <span class="toggle inline-toggle">
+                  <input type="checkbox" name="merchant_enabled" id="merchant-enabled-input" {% if state.env_config.merchant_enabled %}checked{% endif %}>
+                  <span>Povolit Merchant API modul</span>
+                </span>
+              </label>
+              <label>
+                <span>Merchant account ID</span>
+                <input name="merchant_account_id" id="merchant-account-id-input" value="{{ state.env_config.merchant_account_id }}" placeholder="123456789">
+              </label>
+            </div>
+
+            <div class="policy-note">
+              Merchant API pouziva stejny OAuth client a refresh token, ale token musi mit scope <code>https://www.googleapis.com/auth/content</code>.
+            </div>
+
+            <div id="merchant-status-panel" class="merchant-panel merchant-panel-muted">
+              <div class="merchant-panel-header">
+                <strong>Stav pristupu</strong>
+                <span id="merchant-status-badge">Neotestovano</span>
+              </div>
+              <p id="merchant-status-message">Zkus test spojeni nebo nacti dostupne Merchant ucty.</p>
+              <ul id="merchant-status-instructions" class="merchant-list"></ul>
+            </div>
+
+            <div class="merchant-grid">
+              <div class="merchant-panel">
+                <div class="merchant-panel-header">
+                  <strong>Vybrany ucet</strong>
+                </div>
+                <div id="merchant-selected-account" class="merchant-empty">Zatim nic.</div>
+              </div>
+              <div class="merchant-panel">
+                <div class="merchant-panel-header">
+                  <strong>Dostupne ucty</strong>
+                </div>
+                <div id="merchant-accounts-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
+              </div>
             </div>
           </section>
 
@@ -388,6 +444,14 @@
       const runButton = document.getElementById("run-button");
       const pickFolderButton = document.getElementById("pick-folder-button");
       const baseDirInput = document.getElementById("base-dir-input");
+      const merchantTestButton = document.getElementById("merchant-test-button");
+      const merchantAccountsButton = document.getElementById("merchant-accounts-button");
+      const merchantStatusPanel = document.getElementById("merchant-status-panel");
+      const merchantStatusBadge = document.getElementById("merchant-status-badge");
+      const merchantStatusMessage = document.getElementById("merchant-status-message");
+      const merchantStatusInstructions = document.getElementById("merchant-status-instructions");
+      const merchantSelectedAccount = document.getElementById("merchant-selected-account");
+      const merchantAccountsList = document.getElementById("merchant-accounts-list");
 
       if (form && runButton) {
         form.addEventListener("submit", (event) => {
@@ -427,6 +491,137 @@
             pickFolderButton.disabled = false;
             pickFolderButton.textContent = originalLabel;
           }
+        });
+      }
+
+      function merchantPayload() {
+        return {
+          client_id: document.querySelector('input[name="client_id"]')?.value || "",
+          client_secret: document.querySelector('input[name="client_secret"]')?.value || "",
+          refresh_token: document.querySelector('textarea[name="refresh_token"]')?.value || "",
+          login_customer_id: document.querySelector('input[name="login_customer_id"]')?.value || "",
+          merchant_account_id: document.getElementById("merchant-account-id-input")?.value || "",
+          merchant_enabled: document.getElementById("merchant-enabled-input")?.checked || false
+        };
+      }
+
+      function renderMerchantStatus(payload) {
+        if (!merchantStatusPanel || !merchantStatusBadge || !merchantStatusMessage || !merchantStatusInstructions) {
+          return;
+        }
+
+        merchantStatusPanel.classList.remove("merchant-panel-success", "merchant-panel-error", "merchant-panel-muted");
+        merchantStatusPanel.classList.add(payload.ok ? "merchant-panel-success" : "merchant-panel-error");
+        merchantStatusBadge.textContent = payload.ok ? "Pristup potvrzen" : "Problem";
+        merchantStatusMessage.textContent = payload.message || "";
+        merchantStatusInstructions.innerHTML = "";
+
+        for (const instruction of payload.instructions || []) {
+          const item = document.createElement("li");
+          item.textContent = instruction;
+          merchantStatusInstructions.appendChild(item);
+        }
+
+        if (merchantSelectedAccount) {
+          if (payload.selected_account) {
+            const account = payload.selected_account;
+            merchantSelectedAccount.innerHTML = `
+              <div><strong>${account.account_name || account.account_id || "Merchant ucet"}</strong></div>
+              <div>ID: ${account.account_id || "-"}</div>
+              <div>Timezone: ${account.time_zone || "-"}</div>
+              <div>Jazyk: ${account.language_code || "-"}</div>
+              <div>Sluzby: ${payload.service_count ?? 0}</div>
+            `;
+          } else {
+            merchantSelectedAccount.textContent = "Vybrany Merchant ucet zatim nebyl potvrzen.";
+          }
+        }
+
+        if (merchantAccountsList && payload.available_accounts) {
+          renderMerchantAccounts(payload.available_accounts);
+        }
+      }
+
+      function renderMerchantAccounts(accounts) {
+        if (!merchantAccountsList) {
+          return;
+        }
+        if (!accounts || !accounts.length) {
+          merchantAccountsList.textContent = "Nebyl nalezen zadny dostupny Merchant ucet.";
+          return;
+        }
+
+        const rows = accounts.map((account) => `
+          <div class="merchant-account-card">
+            <strong>${account.account_name || account.account_id || "Merchant ucet"}</strong>
+            <span>ID: ${account.account_id || "-"}</span>
+            <span>${account.homepage || account.time_zone || ""}</span>
+          </div>
+        `);
+        merchantAccountsList.innerHTML = rows.join("");
+      }
+
+      async function callMerchantEndpoint(button, url, onSuccess) {
+        const originalLabel = button.textContent;
+        button.disabled = true;
+        button.textContent = "Nacitam...";
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(merchantPayload())
+          });
+          const payload = await response.json();
+          onSuccess(payload);
+        } catch (error) {
+          renderMerchantStatus({
+            ok: false,
+            message: "Merchant API volani se nepodarilo.",
+            instructions: ["Zkontroluj lokalni server, OAuth token a Merchant API pristup."]
+          });
+        } finally {
+          button.disabled = false;
+          button.textContent = originalLabel;
+        }
+      }
+
+      if (merchantTestButton) {
+        merchantTestButton.addEventListener("click", async () => {
+          await callMerchantEndpoint(
+            merchantTestButton,
+            "{{ url_for('web.merchant_test') }}",
+            renderMerchantStatus
+          );
+        });
+      }
+
+      if (merchantAccountsButton) {
+        merchantAccountsButton.addEventListener("click", async () => {
+          await callMerchantEndpoint(
+            merchantAccountsButton,
+            "{{ url_for('web.merchant_accounts') }}",
+            (payload) => {
+              if (!payload.ok) {
+                renderMerchantStatus({
+                  ok: false,
+                  message: payload.message || "Nepodarilo se nacist Merchant ucty.",
+                  instructions: []
+                });
+                return;
+              }
+              renderMerchantStatus({
+                ok: true,
+                message: payload.message || "",
+                instructions: [],
+                available_accounts: payload.accounts || [],
+                selected_account: null,
+                service_count: 0
+              });
+              renderMerchantAccounts(payload.accounts || []);
+            }
+          );
         });
       }
     </script>

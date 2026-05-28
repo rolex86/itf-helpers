@@ -14,6 +14,7 @@ Read-only exporter pro interni audit Google Ads uctu. Nastroj stahuje vybrane re
 - Shopping produktovy vykon a produktovy souhrn
 - Read-only export Google Ads doporuceni
 - Diagnostika uctu a propojenych sluzeb
+- Volitelny Merchant Center modul pro feed data a produktove issue
 
 ## Free-only politika
 
@@ -69,6 +70,8 @@ GOOGLE_ADS_CLIENT_ID=
 GOOGLE_ADS_CLIENT_SECRET=
 GOOGLE_ADS_REFRESH_TOKEN=
 GOOGLE_ADS_LOGIN_CUSTOMER_ID=
+MERCHANT_CENTER_ACCOUNT_ID=
+GOOGLE_MERCHANT_ENABLED=false
 ```
 
 ### `config.yaml`
@@ -109,6 +112,12 @@ reports:
   shopping_products: true
   shopping_products_summary: true
   google_ads_recommendations: true
+  merchant_products: false
+  merchant_product_issues: false
+  merchant_product_status_summary: false
+  product_optimization: false
+  product_feed_issues_with_spend: false
+  product_custom_label_performance: false
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true
@@ -157,6 +166,7 @@ V rozhrani muzes:
 - zapinat a vypinat reporty
 - spustit export
 - prohlizet historii exportu a stahnout XLSX
+- otestovat Merchant Center pristup a vypsat dostupne Merchant ucty
 
 ### CLI
 
@@ -210,6 +220,8 @@ Metadata obsahuje:
 - `change_history` v Google Ads API vyzaduje datumove okno uvnitr poslednich 30 dni a `LIMIT <= 10000`, proto je tenhle report ve v1 automaticky omezen na poslednich 30 dni bez ohledu na sirsi hlavni exportni rozsah.
 - Nektera pole mohou byt v konkretnim uctu nebo typu kampani nedostupna. Exporter se u nepovinnych poli pokusi o fallback a doplni prazdne hodnoty misto padu celeho exportu.
 - Lokacni report ve v1 preferuje stabilitu exportu; pokud API nevrati citelne nazvy lokaci, zustanou v reportu identifikatory nebo resource names.
+- Merchant Center modul je volitelny. Pokud chybi Merchant scope nebo pristup k uctu, Google Ads export pokracuje dal a Merchant reporty zustanou prazdne s varovanim.
+- Pro Merchant API je potreba OAuth refresh token se scope `https://www.googleapis.com/auth/content`.
 
 ## Struktura projektu
 

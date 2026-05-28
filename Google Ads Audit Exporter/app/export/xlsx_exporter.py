@@ -32,6 +32,7 @@ DECIMAL_COLUMNS = {
     "conversions",
     "all_conversions",
     "optimization_score",
+    "roas",
 }
 
 
