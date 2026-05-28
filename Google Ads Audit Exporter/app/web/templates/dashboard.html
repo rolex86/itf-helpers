@@ -20,6 +20,7 @@
           <a href="#merchant">Merchant Center</a>
           <a href="#ga4">GA4</a>
           <a href="#gsc">Search Console</a>
+          <a href="#gtm">Tag Manager</a>
           <a href="#pagespeed">PageSpeed</a>
           <a href="#scope">Rozsah exportu</a>
           <a href="#flags">Flagy</a>
@@ -260,6 +261,68 @@
                   <strong>Dostupne properties</strong>
                 </div>
                 <div id="gsc-properties-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
+              </div>
+            </div>
+          </section>
+
+          <section id="gtm" class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Google Tag Manager</h3>
+                <p>Read-only kontrola tagu, triggeru, promennych a zakladni diagnostika mereni.</p>
+              </div>
+              <div class="action-row">
+                <button class="btn btn-secondary btn-small" type="button" id="gtm-accounts-button">Ucty a kontejnery</button>
+                <button class="btn btn-secondary btn-small" type="button" id="gtm-test-button">Test pristupu</button>
+              </div>
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>GTM zapnuto</span>
+                <span class="toggle inline-toggle">
+                  <input type="checkbox" name="gtm_enabled" id="gtm-enabled-input" {% if state.env_config.gtm_enabled %}checked{% endif %}>
+                  <span>Povolit Tag Manager API modul</span>
+                </span>
+              </label>
+              <label>
+                <span>GTM account ID</span>
+                <input name="gtm_account_id" id="gtm-account-id-input" value="{{ state.env_config.gtm_account_id }}" placeholder="123456789">
+              </label>
+            </div>
+
+            <div class="field-grid compact">
+              <label>
+                <span>GTM container ID</span>
+                <input name="gtm_container_id" id="gtm-container-id-input" value="{{ state.env_config.gtm_container_id }}" placeholder="987654321">
+              </label>
+            </div>
+
+            <div class="policy-note">
+              GTM modul pouziva pouze read-only scope <code>https://www.googleapis.com/auth/tagmanager.readonly</code>. Nic nepublikuje ani neupravuje.
+            </div>
+
+            <div id="gtm-status-panel" class="merchant-panel merchant-panel-muted">
+              <div class="merchant-panel-header">
+                <strong>Stav pristupu</strong>
+                <span id="gtm-status-badge">Neotestovano</span>
+              </div>
+              <p id="gtm-status-message">Zkus test pristupu nebo nacti dostupne GTM ucty a kontejnery.</p>
+              <ul id="gtm-status-instructions" class="merchant-list"></ul>
+            </div>
+
+            <div class="merchant-grid">
+              <div class="merchant-panel">
+                <div class="merchant-panel-header">
+                  <strong>Vybrany ucet a kontejner</strong>
+                </div>
+                <div id="gtm-selected-container" class="merchant-empty">Zatim nic.</div>
+              </div>
+              <div class="merchant-panel">
+                <div class="merchant-panel-header">
+                  <strong>Dostupne ucty a kontejnery</strong>
+                </div>
+                <div id="gtm-accounts-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
               </div>
             </div>
           </section>
@@ -644,6 +707,14 @@
       const gscStatusInstructions = document.getElementById("gsc-status-instructions");
       const gscSelectedProperty = document.getElementById("gsc-selected-property");
       const gscPropertiesList = document.getElementById("gsc-properties-list");
+      const gtmTestButton = document.getElementById("gtm-test-button");
+      const gtmAccountsButton = document.getElementById("gtm-accounts-button");
+      const gtmStatusPanel = document.getElementById("gtm-status-panel");
+      const gtmStatusBadge = document.getElementById("gtm-status-badge");
+      const gtmStatusMessage = document.getElementById("gtm-status-message");
+      const gtmStatusInstructions = document.getElementById("gtm-status-instructions");
+      const gtmSelectedContainer = document.getElementById("gtm-selected-container");
+      const gtmAccountsList = document.getElementById("gtm-accounts-list");
 
       if (form && runButton) {
         form.addEventListener("submit", (event) => {
@@ -714,6 +785,17 @@
           refresh_token: document.querySelector('textarea[name="refresh_token"]')?.value || "",
           gsc_site_url: document.getElementById("gsc-site-url-input")?.value || "",
           gsc_enabled: document.getElementById("gsc-enabled-input")?.checked || false
+        };
+      }
+
+      function gtmPayload() {
+        return {
+          client_id: document.querySelector('input[name="client_id"]')?.value || "",
+          client_secret: document.querySelector('input[name="client_secret"]')?.value || "",
+          refresh_token: document.querySelector('textarea[name="refresh_token"]')?.value || "",
+          gtm_account_id: document.getElementById("gtm-account-id-input")?.value || "",
+          gtm_container_id: document.getElementById("gtm-container-id-input")?.value || "",
+          gtm_enabled: document.getElementById("gtm-enabled-input")?.checked || false
         };
       }
 
@@ -878,6 +960,77 @@
           </div>
         `);
         gscPropertiesList.innerHTML = rows.join("");
+      }
+
+      function renderGtmStatus(payload) {
+        if (!gtmStatusPanel || !gtmStatusBadge || !gtmStatusMessage || !gtmStatusInstructions) {
+          return;
+        }
+
+        gtmStatusPanel.classList.remove("merchant-panel-success", "merchant-panel-error", "merchant-panel-muted");
+        gtmStatusPanel.classList.add(payload.ok ? "merchant-panel-success" : "merchant-panel-error");
+        gtmStatusBadge.textContent = payload.ok ? "Pristup potvrzen" : "Problem";
+        gtmStatusMessage.textContent = payload.message || "";
+        gtmStatusInstructions.innerHTML = "";
+
+        for (const instruction of payload.instructions || []) {
+          const item = document.createElement("li");
+          item.textContent = instruction;
+          gtmStatusInstructions.appendChild(item);
+        }
+
+        if (gtmSelectedContainer) {
+          if (payload.selected_account || payload.selected_container) {
+            const account = payload.selected_account || {};
+            const container = payload.selected_container || {};
+            gtmSelectedContainer.innerHTML = `
+              <div><strong>${container.name || account.name || "GTM kontejner"}</strong></div>
+              <div>Account ID: ${account.account_id || "-"}</div>
+              <div>Container ID: ${container.container_id || "-"}</div>
+              <div>Public ID: ${container.public_id || "-"}</div>
+              <div>Usage context: ${container.usage_context || "-"}</div>
+            `;
+          } else {
+            gtmSelectedContainer.textContent = "Vybrany GTM ucet a kontejner zatim nebyly potvrzeny.";
+          }
+        }
+
+        if (gtmAccountsList && payload.available_accounts) {
+          renderGtmAccounts(payload.available_accounts);
+        }
+      }
+
+      function renderGtmAccounts(accounts) {
+        if (!gtmAccountsList) {
+          return;
+        }
+        if (!accounts || !accounts.length) {
+          gtmAccountsList.textContent = "Nebyl nalezen zadny dostupny GTM ucet.";
+          return;
+        }
+
+        const rows = accounts.map((account) => {
+          const hasContainers = Array.isArray(account.containers);
+          const containers = (account.containers || []).map((container) => `
+            <div class="merchant-account-card">
+              <strong>${container.name || container.container_id || "Kontejner"}</strong>
+              <span>Container ID: ${container.container_id || "-"}</span>
+              <span>Public ID: ${container.public_id || "-"}</span>
+              <span>${container.usage_context || ""}</span>
+            </div>
+          `).join("");
+
+          return `
+            <div class="merchant-account-card">
+              <strong>${account.name || account.account_id || "GTM ucet"}</strong>
+              <span>Account ID: ${account.account_id || "-"}</span>
+              <span>Share data: ${account.share_data ? "ano" : "ne"}</span>
+            </div>
+            ${hasContainers ? (containers || '<div class="merchant-empty">U tohoto uctu nebyly vraceny zadne kontejnery.</div>') : ""}
+          `;
+        });
+
+        gtmAccountsList.innerHTML = rows.join("");
       }
 
       async function callMerchantEndpoint(
@@ -1059,6 +1212,56 @@
               ok: false,
               message: "Nepodarilo se nacist Search Console properties.",
               instructions: ["Zkontroluj OAuth scope a pristup k Search Console property."]
+            })
+          );
+        });
+      }
+
+      if (gtmTestButton) {
+        gtmTestButton.addEventListener("click", async () => {
+          await callMerchantEndpoint(
+            gtmTestButton,
+            "{{ url_for('web.gtm_test') }}",
+            renderGtmStatus,
+            gtmPayload,
+            () => renderGtmStatus({
+              ok: false,
+              message: "GTM API volani se nepodarilo.",
+              instructions: ["Zkontroluj lokalni server, OAuth token a pristup do Google Tag Manageru."]
+            })
+          );
+        });
+      }
+
+      if (gtmAccountsButton) {
+        gtmAccountsButton.addEventListener("click", async () => {
+          await callMerchantEndpoint(
+            gtmAccountsButton,
+            "{{ url_for('web.gtm_accounts') }}",
+            (payload) => {
+              if (!payload.ok) {
+                renderGtmStatus({
+                  ok: false,
+                  message: payload.message || "Nepodarilo se nacist GTM ucty a kontejnery.",
+                  instructions: []
+                });
+                return;
+              }
+              renderGtmStatus({
+                ok: true,
+                message: payload.message || "",
+                instructions: [],
+                available_accounts: payload.accounts || [],
+                selected_account: null,
+                selected_container: null
+              });
+              renderGtmAccounts(payload.accounts || []);
+            },
+            gtmPayload,
+            () => renderGtmStatus({
+              ok: false,
+              message: "Nepodarilo se nacist GTM ucty a kontejnery.",
+              instructions: ["Zkontroluj OAuth scope a pristup k GTM accountu."]
             })
           );
         });

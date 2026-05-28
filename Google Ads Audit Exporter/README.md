@@ -18,6 +18,7 @@ Read-only exporter pro interni audit Google Ads uctu. Nastroj stahuje vybrane re
 - Volitelny GA4 modul pro landing page engagement a ecommerce funnel
 - Volitelny Search Console modul pro organicke dotazy, stranky a SEO/PPC overlap
 - Volitelny PageSpeed modul pro technickou diagnostiku top landing pages
+- Volitelny Google Tag Manager modul pro audit tagu a diagnostiku mereni
 
 ## Free-only politika
 
@@ -79,6 +80,9 @@ GA4_PROPERTY_ID=
 GA4_ENABLED=false
 GSC_SITE_URL=https://www.example.cz/
 GSC_ENABLED=false
+GTM_ACCOUNT_ID=
+GTM_CONTAINER_ID=
+GTM_ENABLED=false
 PAGESPEED_API_KEY=
 PAGESPEED_ENABLED=false
 ```
@@ -144,6 +148,11 @@ reports:
   gsc_page_query: false
   gsc_opportunities: false
   pagespeed_landing_pages: false
+  gtm_tags: false
+  gtm_triggers: false
+  gtm_variables: false
+  gtm_versions: false
+  measurement_diagnostics: false
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true
@@ -195,6 +204,7 @@ V rozhrani muzes:
 - otestovat Merchant Center pristup a vypsat dostupne Merchant ucty
 - otestovat GA4 pristup a vypsat dostupne properties
 - otestovat Search Console pristup a vypsat dostupne properties
+- otestovat Google Tag Manager pristup a vypsat dostupne ucty a kontejnery
 - nastavit PageSpeed limit URL, strategie a lokalni cache
 
 ### CLI
@@ -256,6 +266,9 @@ Metadata obsahuje:
 - Search Console modul je volitelny. Bez pristupu do property Ads export pokracuje dal a GSC listy zustanou prazdne s varovanim.
 - Pro Search Console je potreba OAuth refresh token se scope `https://www.googleapis.com/auth/webmasters.readonly`.
 - Search Console dotazy pouzivaji lokalni cache, aby se zbytecne neopakovaly drazsi kombinace `page + query`.
+- GTM modul je volitelny. Bez pristupu do GTM accountu nebo containeru Ads export pokracuje dal a GTM listy zustanou prazdne s varovanim.
+- Pro GTM je potreba OAuth refresh token se scope `https://www.googleapis.com/auth/tagmanager.readonly`.
+- GTM modul pouze cte tagy, triggery, promenne a verze. Nepublikuje ani neupravuje zadne zmeny.
 - PageSpeed modul je volitelny. Bezi jen nad top landing pages podle spendu a vysledky cacheuje lokalne podle URL + strategie.
 - API key je volitelny, ale bez nej muze byt modul vice omezeny kvotami.
 

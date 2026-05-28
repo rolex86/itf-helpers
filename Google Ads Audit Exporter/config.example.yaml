@@ -56,6 +56,11 @@ reports:
   gsc_page_query: false
   gsc_opportunities: false
   pagespeed_landing_pages: false
+  gtm_tags: false
+  gtm_triggers: false
+  gtm_variables: false
+  gtm_versions: false
+  measurement_diagnostics: false
   conversion_actions: true
   pmax_campaigns: true
   pmax_asset_groups: true

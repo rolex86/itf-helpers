@@ -43,6 +43,9 @@ def parse_dashboard_form(form: Any) -> dict[str, Any]:
         gsc_enabled=form.get("gsc_enabled") == "on",
         pagespeed_api_key=(form.get("pagespeed_api_key") or "").strip(),
         pagespeed_enabled=form.get("pagespeed_enabled") == "on",
+        gtm_account_id=(form.get("gtm_account_id") or "").replace("-", "").strip(),
+        gtm_container_id=(form.get("gtm_container_id") or "").replace("-", "").strip(),
+        gtm_enabled=form.get("gtm_enabled") == "on",
     )
 
     payload = {

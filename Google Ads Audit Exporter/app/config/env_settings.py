@@ -21,6 +21,9 @@ class GoogleAdsEnvConfig:
     gsc_enabled: bool = False
     pagespeed_api_key: str = ""
     pagespeed_enabled: bool = False
+    gtm_account_id: str = ""
+    gtm_container_id: str = ""
+    gtm_enabled: bool = False
 
 
 ENV_KEY_MAP = {
@@ -37,6 +40,9 @@ ENV_KEY_MAP = {
     "gsc_enabled": "GSC_ENABLED",
     "pagespeed_api_key": "PAGESPEED_API_KEY",
     "pagespeed_enabled": "PAGESPEED_ENABLED",
+    "gtm_account_id": "GTM_ACCOUNT_ID",
+    "gtm_container_id": "GTM_CONTAINER_ID",
+    "gtm_enabled": "GTM_ENABLED",
 }
 
 
@@ -67,6 +73,9 @@ def load_env_config(env_path: Path) -> GoogleAdsEnvConfig:
         gsc_enabled=_to_bool(values.get(ENV_KEY_MAP["gsc_enabled"], "")),
         pagespeed_api_key=str(values.get(ENV_KEY_MAP["pagespeed_api_key"], "") or "").strip(),
         pagespeed_enabled=_to_bool(values.get(ENV_KEY_MAP["pagespeed_enabled"], "")),
+        gtm_account_id=_normalize_id(values.get(ENV_KEY_MAP["gtm_account_id"], "")),
+        gtm_container_id=_normalize_id(values.get(ENV_KEY_MAP["gtm_container_id"], "")),
+        gtm_enabled=_to_bool(values.get(ENV_KEY_MAP["gtm_enabled"], "")),
     )
 
 
@@ -85,6 +94,9 @@ def env_config_from_mapping(values: dict[str, object]) -> GoogleAdsEnvConfig:
         gsc_enabled=_to_bool(values.get("gsc_enabled", "")),
         pagespeed_api_key=str(values.get("pagespeed_api_key", "") or "").strip(),
         pagespeed_enabled=_to_bool(values.get("pagespeed_enabled", "")),
+        gtm_account_id=_normalize_id(values.get("gtm_account_id", "")),
+        gtm_container_id=_normalize_id(values.get("gtm_container_id", "")),
+        gtm_enabled=_to_bool(values.get("gtm_enabled", "")),
     )
 
 
