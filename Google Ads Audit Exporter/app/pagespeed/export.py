@@ -85,24 +85,32 @@ def _normalize_pagespeed_url(url: str) -> str:
     )
 
 
-def _top_landing_pages(landing_pages: pd.DataFrame, max_urls: int) -> list[str]:
+def _select_pagespeed_targets(landing_pages: pd.DataFrame, max_urls: int) -> pd.DataFrame:
     if landing_pages.empty or "expanded_final_url" not in landing_pages.columns:
-        return []
+        return pd.DataFrame(columns=["tested_url", "source_url", "cost_micros", "clicks", "conversions"])
     normalized = landing_pages.copy()
     for column in ["cost_micros", "clicks", "conversions"]:
         if column in normalized.columns:
             normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0)
-    grouped = (
-        normalized.groupby("expanded_final_url", dropna=False, as_index=False)[["cost_micros", "clicks", "conversions"]]
+    normalized["source_url"] = normalized["expanded_final_url"].astype(str).map(str.strip)
+    normalized = normalized[normalized["source_url"] != ""].copy()
+    if normalized.empty:
+        return pd.DataFrame(columns=["tested_url", "source_url", "cost_micros", "clicks", "conversions"])
+    normalized["tested_url"] = normalized["source_url"].map(_normalize_pagespeed_url)
+    normalized = normalized[normalized["tested_url"].astype(str).map(str.strip) != ""].copy()
+    if normalized.empty:
+        return pd.DataFrame(columns=["tested_url", "source_url", "cost_micros", "clicks", "conversions"])
+
+    grouped_metrics = (
+        normalized.groupby("tested_url", dropna=False, as_index=False)[["cost_micros", "clicks", "conversions"]]
         .sum()
-        .sort_values(by="cost_micros", ascending=False)
     )
-    urls = [
-        str(value).strip()
-        for value in grouped["expanded_final_url"].tolist()
-        if str(value).strip()
-    ]
-    return urls[:max_urls]
+    representative_sources = normalized.groupby("tested_url", dropna=False, as_index=False).agg(
+        source_url=("source_url", "first")
+    )
+    grouped = grouped_metrics.merge(representative_sources, on="tested_url", how="left")
+    grouped = grouped.sort_values(by="cost_micros", ascending=False).reset_index(drop=True)
+    return grouped.head(max_urls)
 
 
 def _score(categories: dict[str, Any], category_name: str) -> float | None:
@@ -187,8 +195,8 @@ def build_pagespeed_export(
         result.report_warning_keys.add("pagespeed_landing_pages")
         return result
 
-    top_urls = _top_landing_pages(landing_pages, pagespeed_config.max_urls_per_export)
-    if not top_urls:
+    selected_targets = _select_pagespeed_targets(landing_pages, pagespeed_config.max_urls_per_export)
+    if selected_targets.empty:
         result.datasets["pagespeed_landing_pages"] = _empty_report()
         result.report_notes["pagespeed_landing_pages"] = [
             "Nebyly nalezeny zadne landing pages pro technickou analyzu."
@@ -204,50 +212,56 @@ def build_pagespeed_export(
     )
     cache = PageSpeedCache(base_dir=cache_dir, ttl_days=pagespeed_config.cache_days)
 
-    cost_lookup: dict[str, float] = {}
-    if not landing_pages.empty and "expanded_final_url" in landing_pages.columns:
-        grouped = (
-            landing_pages.groupby("expanded_final_url", dropna=False, as_index=False)[["cost_micros"]]
-            .sum()
-        )
-        cost_lookup = {
-            str(row["expanded_final_url"]).strip(): _safe_float(row["cost_micros"])
-            for _, row in grouped.iterrows()
-            if str(row["expanded_final_url"]).strip()
-        }
+    selected_targets = selected_targets.copy()
+    selected_targets["tested_url"] = selected_targets["tested_url"].astype(str).map(str.strip)
+    selected_targets["source_url"] = selected_targets["source_url"].astype(str).map(str.strip)
+    cost_lookup = {
+        str(row["tested_url"]).strip(): _safe_float(row["cost_micros"])
+        for _, row in selected_targets.iterrows()
+        if str(row["tested_url"]).strip()
+    }
+    source_lookup = {
+        str(row["tested_url"]).strip(): str(row["source_url"]).strip()
+        for _, row in selected_targets.iterrows()
+        if str(row["tested_url"]).strip()
+    }
 
-    total_requests = len(top_urls) * len(pagespeed_config.strategies)
+    total_requests = len(selected_targets) * len(pagespeed_config.strategies)
     LOGGER.info(
         "PageSpeed selected %s URL(s), strategies=%s, total_requests=%s, source=%s, cache_days=%s",
-        len(top_urls),
+        len(selected_targets),
         ",".join(pagespeed_config.strategies),
         total_requests,
         pagespeed_config.source,
         pagespeed_config.cache_days,
     )
-    for index, url in enumerate(top_urls, start=1):
-        url_cost_micros = cost_lookup.get(url, 0)
+    for index, row in enumerate(selected_targets.to_dict(orient="records"), start=1):
+        tested_url = str(row.get("tested_url") or "").strip()
+        source_url = str(row.get("source_url") or "").strip()
+        url_cost_micros = _safe_float(row.get("cost_micros"))
         url_cost = round(url_cost_micros / 1_000_000, 2)
         LOGGER.info(
-            "PageSpeed selected URL %s/%s cost_micros=%s cost=%.2f currency=%s source_url=%s",
+            "PageSpeed selected URL %s/%s cost_micros=%s cost=%.2f currency=%s source_url=%s tested_url=%s",
             index,
-            len(top_urls),
+            len(selected_targets),
             int(url_cost_micros),
             url_cost,
             currency_code or "",
-            url,
+            source_url,
+            tested_url,
         )
 
     rows: list[dict[str, Any]] = []
     had_error = False
     request_index = 0
-    for url in top_urls:
-        tested_url = _normalize_pagespeed_url(url)
-        url_cost_micros = cost_lookup.get(url, 0)
-        if tested_url != url:
+    for tested_url in selected_targets["tested_url"].tolist():
+        tested_url = str(tested_url).strip()
+        source_url = source_lookup.get(tested_url, tested_url)
+        url_cost_micros = cost_lookup.get(tested_url, 0)
+        if tested_url != source_url:
             LOGGER.info(
                 "PageSpeed normalized URL source_url=%s tested_url=%s",
-                url,
+                source_url,
                 tested_url,
             )
 
@@ -296,7 +310,7 @@ def build_pagespeed_export(
                         strategy,
                         perf_counter() - started_at,
                         tested_url,
-                        url,
+                        source_url,
                         exc.message,
                     )
                     result.errors.append(
@@ -366,7 +380,7 @@ def build_pagespeed_export(
     result.datasets["pagespeed_landing_pages"] = frame
 
     notes = [
-        f"Analyza je omezena na top {pagespeed_config.max_urls_per_export} landing pages podle nakladu.",
+        f"Analyza je omezena na top {pagespeed_config.max_urls_per_export} unikátních normalizovaných landing pages podle součtu nákladů.",
         f"Cache PageSpeed vysledku je nastavena na {pagespeed_config.cache_days} dni.",
     ]
     if not env_config.pagespeed_api_key:
