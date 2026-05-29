@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.accounts.context_config import AccountContext, resolve_context_env_config, resolve_context_settings
 from app.accounts.cross_account_exports import ContextExportBundle, write_cross_account_exports
@@ -18,6 +19,9 @@ from app.pagespeed.client import PageSpeedApiClient, PageSpeedApiError, PageSpee
 from app.search_console.client import SearchConsoleApiClient
 from app.utils.dates import resolve_date_range
 from app.utils.retry import is_retryable_google_ads_exception, run_with_retry
+
+
+LOGGER = logging.getLogger("google_ads_audit_exporter")
 
 
 @dataclass(slots=True)
@@ -83,72 +87,136 @@ def _google_ads_context_test(customer_id: str, env_config: GoogleAdsEnvConfig) -
         return ServiceTestResult(status="problem", details=str(exc))
 
 
+def _report_progress(
+    progress_callback: Callable[[str, str, str], None] | None,
+    service_key: str,
+    phase: str,
+    details: str,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(service_key, phase, details)
+
+
+def _run_service_test(
+    *,
+    service_key: str,
+    start_message: str,
+    test_fn: Callable[[], ServiceTestResult],
+    progress_callback: Callable[[str, str, str], None] | None,
+) -> ServiceTestResult:
+    LOGGER.info("Context test service start service=%s", service_key)
+    _report_progress(progress_callback, service_key, "running", start_message)
+    result = test_fn()
+    LOGGER.info(
+        "Context test service finished service=%s status=%s",
+        service_key,
+        result.status,
+    )
+    _report_progress(progress_callback, service_key, "finished", result.details)
+    return result
+
+
 def test_account_context(
     *,
     context: AccountContext,
     base_env_config: GoogleAdsEnvConfig,
+    progress_callback: Callable[[str, str, str], None] | None = None,
 ) -> ContextTestResult:
     env_config = resolve_context_env_config(base_env_config, context)
     result = ContextTestResult(context_key=context.key, context_label=context.label)
-    result.services["google_ads"] = _google_ads_context_test(context.google_ads_customer_id, env_config)
+    result.services["google_ads"] = _run_service_test(
+        service_key="google_ads",
+        start_message="Overuji dostupnost Google Ads customer.",
+        test_fn=lambda: _google_ads_context_test(context.google_ads_customer_id, env_config),
+        progress_callback=progress_callback,
+    )
 
     if context.ga4_property_id:
-        ga4_result = Ga4ApiClient.from_env_config(env_config).test_connection()
-        result.services["ga4"] = ServiceTestResult(
-            status="ok" if ga4_result.ok else "problem",
-            details=ga4_result.message,
+        result.services["ga4"] = _run_service_test(
+            service_key="ga4",
+            start_message="Overuji pristup ke GA4 property.",
+            test_fn=lambda: ServiceTestResult(
+                status="ok" if (ga4_result := Ga4ApiClient.from_env_config(env_config).test_connection()).ok else "problem",
+                details=ga4_result.message,
+            ),
+            progress_callback=progress_callback,
         )
     else:
         result.services["ga4"] = ServiceTestResult(status="problem", details="GA4 property neni nastavena.")
+        _report_progress(progress_callback, "ga4", "finished", result.services["ga4"].details)
 
     if context.gsc_site_url:
-        gsc_result = SearchConsoleApiClient.from_env_config(env_config).test_connection()
-        result.services["gsc"] = ServiceTestResult(
-            status="ok" if gsc_result.ok else "problem",
-            details=gsc_result.message,
+        result.services["gsc"] = _run_service_test(
+            service_key="gsc",
+            start_message="Overuji pristup k Search Console property.",
+            test_fn=lambda: ServiceTestResult(
+                status="ok" if (gsc_result := SearchConsoleApiClient.from_env_config(env_config).test_connection()).ok else "problem",
+                details=gsc_result.message,
+            ),
+            progress_callback=progress_callback,
         )
     else:
         result.services["gsc"] = ServiceTestResult(status="problem", details="GSC property neni nastavena.")
+        _report_progress(progress_callback, "gsc", "finished", result.services["gsc"].details)
 
     if context.merchant_account_id:
-        merchant_result = MerchantApiClient.from_env_config(env_config).test_connection(context.merchant_account_id)
-        result.services["merchant"] = ServiceTestResult(
-            status="ok" if merchant_result.ok else "problem",
-            details=merchant_result.message,
+        result.services["merchant"] = _run_service_test(
+            service_key="merchant",
+            start_message="Overuji pristup k Merchant Center uctu.",
+            test_fn=lambda: ServiceTestResult(
+                status="ok" if (merchant_result := MerchantApiClient.from_env_config(env_config).test_connection(context.merchant_account_id)).ok else "problem",
+                details=merchant_result.message,
+            ),
+            progress_callback=progress_callback,
         )
     else:
-        result.services["merchant"] = ServiceTestResult(status="problem", details="Merchant ucet neni nastaven.")
+        result.services["merchant"] = ServiceTestResult(status="problem", details="Merchant účet není nastaven.")
+        _report_progress(progress_callback, "merchant", "finished", result.services["merchant"].details)
 
     if context.gtm_account_id and context.gtm_container_id:
-        gtm_result = GtmApiClient.from_env_config(env_config).test_connection()
-        result.services["gtm"] = ServiceTestResult(
-            status="ok" if gtm_result.ok else "problem",
-            details=gtm_result.message,
+        result.services["gtm"] = _run_service_test(
+            service_key="gtm",
+            start_message="Overuji pristup ke GTM containeru.",
+            test_fn=lambda: ServiceTestResult(
+                status="ok" if (gtm_result := GtmApiClient.from_env_config(env_config).test_connection()).ok else "problem",
+                details=gtm_result.message,
+            ),
+            progress_callback=progress_callback,
         )
     else:
-        result.services["gtm"] = ServiceTestResult(status="problem", details="GTM account nebo container neni nastaven.")
+        result.services["gtm"] = ServiceTestResult(status="problem", details="GTM account nebo container není nastaven.")
+        _report_progress(progress_callback, "gtm", "finished", result.services["gtm"].details)
 
     pagespeed_url = _pagespeed_test_url(context)
     if env_config.pagespeed_enabled and pagespeed_url:
-        try:
-            client = PageSpeedApiClient(
-                PageSpeedClientConfig(
-                    api_key=env_config.pagespeed_api_key,
-                    enabled=env_config.pagespeed_enabled,
+        def _pagespeed_test() -> ServiceTestResult:
+            try:
+                client = PageSpeedApiClient(
+                    PageSpeedClientConfig(
+                        api_key=env_config.pagespeed_api_key,
+                        enabled=env_config.pagespeed_enabled,
+                    )
                 )
-            )
-            client.run_pagespeed(url=pagespeed_url, strategy="mobile")
-            result.services["pagespeed"] = ServiceTestResult(
-                status="ok",
-                details=f"PageSpeed otestoval URL {pagespeed_url}.",
-            )
-        except PageSpeedApiError as exc:
-            result.services["pagespeed"] = ServiceTestResult(status="problem", details=exc.message)
+                client.run_pagespeed(url=pagespeed_url, strategy="mobile")
+                return ServiceTestResult(
+                    status="ok",
+                    details=f"PageSpeed otestoval URL {pagespeed_url}.",
+                )
+            except PageSpeedApiError as exc:
+                return ServiceTestResult(status="problem", details=exc.message)
+
+        result.services["pagespeed"] = _run_service_test(
+            service_key="pagespeed",
+            start_message=f"Overuji PageSpeed na URL {pagespeed_url}.",
+            test_fn=_pagespeed_test,
+            progress_callback=progress_callback,
+        )
     else:
         result.services["pagespeed"] = ServiceTestResult(
             status="problem",
-            details="PageSpeed neni zapnuty nebo neni z ceho odvodit testovaci URL.",
+            details="PageSpeed není zapnutý nebo není z čeho odvodit testovací URL.",
         )
+        _report_progress(progress_callback, "pagespeed", "finished", result.services["pagespeed"].details)
 
     return result
 

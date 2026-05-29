@@ -182,7 +182,7 @@ def build_pagespeed_export(
     if not env_config.pagespeed_enabled or not pagespeed_config.enabled:
         result.datasets["pagespeed_landing_pages"] = _empty_report()
         result.report_notes["pagespeed_landing_pages"] = [
-            "PageSpeed modul je vypnuty v .env nebo configu."
+            "PageSpeed modul je vypnutý v .env nebo configu."
         ]
         result.report_warning_keys.add("pagespeed_landing_pages")
         return result

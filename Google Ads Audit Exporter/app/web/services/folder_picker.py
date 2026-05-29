@@ -26,7 +26,7 @@ def pick_directory(initial_dir: str | None = None) -> str | None:
     try:
         selected = filedialog.askdirectory(
             initialdir=dialog_initial_dir,
-            title="Vyber slozku pro exporty Google Ads",
+            title="Vyber složku pro exporty Google Ads",
             mustexist=False,
         )
     finally:

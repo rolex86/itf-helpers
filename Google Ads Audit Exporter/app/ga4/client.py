@@ -133,7 +133,7 @@ class Ga4ApiClient:
         if not self.config.enabled:
             return Ga4ConnectionResult(
                 ok=False,
-                message="GA4 modul je vypnuty.",
+                message="GA4 modul je vypnutý.",
                 instructions=[
                     "V .env nastav GA4_ENABLED=true.",
                     "Vypln GA4_PROPERTY_ID a pouzij OAuth refresh token se scope https://www.googleapis.com/auth/analytics.readonly.",
@@ -162,7 +162,7 @@ class Ga4ApiClient:
             )
             if selected is None:
                 raise Ga4ApiError(
-                    "GA4 property nebyla mezi dostupnymi properties nalezena.",
+                    "GA4 property nebyla mezi dostupnými properties nalezena.",
                     status_code=404,
                 )
 
@@ -175,7 +175,7 @@ class Ga4ApiClient:
             )
             return Ga4ConnectionResult(
                 ok=True,
-                message="Pristup do GA4 property byl potvrzen.",
+                message="Přístup do GA4 property byl potvrzen.",
                 instructions=[],
                 selected_property=selected,
                 available_properties=properties,
@@ -192,21 +192,21 @@ class Ga4ApiClient:
     def _build_instructions(self, exc: Ga4ApiError) -> list[str]:
         if exc.status_code == 401:
             return [
-                "OAuth refresh token neni platny nebo nema GA4 scope.",
+                "OAuth refresh token nen\u00ed platn\u00fd nebo nem\u00e1 GA4 scope.",
                 "Vygeneruj refresh token se scope https://www.googleapis.com/auth/analytics.readonly.",
             ]
         if exc.status_code == 403:
             return [
-                "Google ucet nema pristup k dane GA4 property nebo chybi scope.",
-                "Zkontroluj opravneni v GA4 a scope https://www.googleapis.com/auth/analytics.readonly.",
+                "Google \u00fa\u010det nem\u00e1 p\u0159\u00edstup k dan\u00e9 GA4 property nebo chyb\u00ed scope.",
+                "Zkontroluj opr\u00e1vn\u011bn\u00ed v GA4 a scope https://www.googleapis.com/auth/analytics.readonly.",
             ]
         if exc.status_code == 404:
             return [
-                "GA4 property ID nebylo nalezeno mezi dostupnymi properties.",
-                "Zkus nejdriv vypsat dostupne properties a over GA4_PROPERTY_ID.",
+                "GA4 property ID nebylo nalezeno mezi dostupn\u00fdmi properties.",
+                "Zkus nejd\u0159\u00edv vypsat dostupn\u00e9 properties a ov\u011b\u0159 GA4_PROPERTY_ID.",
             ]
         return [
-            "Over Analytics Admin API a Analytics Data API pristup v Google Cloud projektu.",
+            "Ov\u011b\u0159 Analytics Admin API a Analytics Data API p\u0159\u00edstup v Google Cloud projektu.",
             "Zkontroluj scope https://www.googleapis.com/auth/analytics.readonly.",
         ]
 

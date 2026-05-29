@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Mapping | Google Ads Audit Exporter</title>
+    <title>Propojení účtů | Google Ads Audit Exporter</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   </head>
   <body>
@@ -11,22 +11,22 @@
       <aside class="sidebar">
         <div class="brand">
           <p class="eyebrow">Multi-account vrstva</p>
-          <h1>Mapping</h1>
-          <p class="brand-copy">Rucni propojeni Ads, Merchantu, GA4, GSC, GTM a PageSpeed do samostatnych kontextu.</p>
+          <h1>Propojení účtů</h1>
+          <p class="brand-copy">Ruční propojení Ads, Merchantu, GA4, GSC, GTM a PageSpeed do samostatných kontextů.</p>
         </div>
         <nav class="nav-block">
           <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
-          <a href="{{ url_for('web.discovery_page') }}">Discovery</a>
-          <a href="{{ url_for('web.mapping_page') }}">Mapping</a>
+          <a href="{{ url_for('web.discovery_page') }}">Průzkum</a>
+          <a href="{{ url_for('web.mapping_page') }}">Propojení účtů</a>
         </nav>
       </aside>
 
       <main class="content">
         <section class="hero">
           <div>
-            <p class="eyebrow">Faze 2 az 4</p>
-            <h2>Propojeni uctu a kontextove exporty</h2>
-            <p>Tabulka ukazuje vsechny ulozene account contexts z <code>config.accounts.yaml</code>. Vybrany radek se dole otevre v detailnim editoru.</p>
+            <p class="eyebrow">Fáze 2 až 4</p>
+            <h2>Propojení účtů a kontextové exporty</h2>
+            <p>Tabulka ukazuje všechny uložené account contexts z <code>config.accounts.yaml</code>. Vybraný řádek se dole otevře v detailním editoru.</p>
           </div>
         </section>
 
@@ -43,27 +43,27 @@
         <section class="panel panel-wide">
           <div class="panel-header">
             <div>
-              <h3>Detail vybraneho kontextu</h3>
-              <p>Po kliknuti na radek nebo Upravit se formularem nacte vybrany kontext.</p>
+              <h3>Detail vybraného kontextu</h3>
+              <p>Po kliknutí na řádek nebo Upravit se do formuláře načte vybraný kontext.</p>
             </div>
             <div class="action-row">
               <button class="btn btn-secondary btn-small" type="button" id="duplicate-selected-button">Duplikovat</button>
               <button class="btn btn-secondary btn-small" type="button" id="test-selected-button">Otestovat kontext</button>
-              <button class="btn btn-secondary btn-small" type="button" id="run-selected-export-button">Spustit selected export</button>
+              <button class="btn btn-secondary btn-small" type="button" id="run-selected-export-button">Spustit vybraný export</button>
               <button class="btn btn-secondary btn-small" type="button" id="delete-selected-button">Smazat</button>
             </div>
           </div>
 
-          <div id="mapping-editor-empty" class="merchant-empty">Zatim neni vybrany zadny kontext.</div>
+          <div id="mapping-editor-empty" class="merchant-empty">Zatím není vybraný žádný kontext.</div>
 
           <form id="context-editor" class="mapping-editor" hidden>
             <div class="field-grid compact">
               <label>
-                <span>Key</span>
+                <span>Klíč</span>
                 <input id="editor-key" data-field="key" placeholder="shopid_cz">
               </label>
               <label>
-                <span>Label</span>
+                <span>Název</span>
                 <input id="editor-label" data-field="label" placeholder="ShopID CZ">
               </label>
               <label>
@@ -99,29 +99,29 @@
             <div class="toggle-row">
               <label class="toggle">
                 <input id="editor-pagespeed-enabled" type="checkbox" data-field="pagespeed_enabled">
-                <span>PageSpeed enabled</span>
+                <span>PageSpeed zapnutý</span>
               </label>
               <label class="toggle">
                 <input id="editor-enabled" type="checkbox" data-field="enabled">
-                <span>Enabled</span>
+                <span>Aktivní</span>
               </label>
             </div>
           </form>
 
           <div id="context-test-output" class="merchant-panel merchant-panel-muted context-test-output">
             <div class="merchant-panel-header">
-              <strong>Posledni test kontextu</strong>
-              <span>Neotestovano</span>
+              <strong>Poslední test kontextu</strong>
+              <span>Neotestováno</span>
             </div>
-            <div class="merchant-empty">Vyber kontext a spust jeho test.</div>
+            <div class="merchant-empty">Vyber kontext a spusť jeho test.</div>
           </div>
         </section>
 
         <section class="panel panel-wide">
           <div class="panel-header">
             <div>
-              <h3>Ulozene account contexts</h3>
-              <p>Nahore upravis vybrany kontext, tady niz mas prehled vsech ulozenych vazeb a rychle akce po radcich.</p>
+              <h3>Uložené account contexts</h3>
+              <p>Nahoře upravíš vybraný kontext, tady níž máš přehled všech uložených vazeb a rychlé akce po řádcích.</p>
             </div>
           </div>
 
@@ -131,16 +131,16 @@
             <table>
               <thead>
                 <tr>
-                  <th>Enabled</th>
-                  <th>Key</th>
-                  <th>Label</th>
+                  <th>Aktivní</th>
+                  <th>Klíč</th>
+                  <th>Název</th>
                   <th>Google Ads customer ID</th>
                   <th>Merchant account ID</th>
                   <th>GA4 property ID</th>
                   <th>GSC site URL</th>
                   <th>GTM container ID</th>
                   <th>PageSpeed</th>
-                  <th>Posledni test / stav</th>
+                  <th>Poslední test / stav</th>
                   <th>Akce</th>
                 </tr>
               </thead>
@@ -149,10 +149,10 @@
           </div>
 
           <div class="action-row mapping-actions">
-            <button class="btn btn-secondary" type="button" id="add-context-button">Pridat novy kontext</button>
-            <button class="btn btn-primary" type="button" id="save-mapping-button">Ulozit mapping</button>
-            <a class="btn btn-secondary" href="{{ url_for('web.discovery_page') }}">Spustit discovery</a>
-            <button class="btn btn-secondary" type="button" id="run-multi-button">Spustit all enabled contexts</button>
+            <button class="btn btn-secondary" type="button" id="add-context-button">Přidat nový kontext</button>
+            <button class="btn btn-primary" type="button" id="save-mapping-button">Uložit propojení</button>
+            <a class="btn btn-secondary" href="{{ url_for('web.discovery_page') }}">Spustit průzkum</a>
+            <button class="btn btn-secondary" type="button" id="run-multi-button">Spustit všechny aktivní kontexty</button>
           </div>
         </section>
 
@@ -226,18 +226,18 @@
         if (!enabled) {
           return {
             status: "disabled",
-            label: "Disabled",
+            label: "Vypnuto",
             class_name: "status-disabled",
             tested_at: "",
-            summary: "Kontext je vypnuty a neucastni se multi-exportu."
+            summary: "Kontext je vypnutý a neúčastní se multi-exportu."
           };
         }
         return {
           status: "unknown",
-          label: "Not tested",
+          label: "Neotestováno",
           class_name: "status-unknown",
           tested_at: "",
-          summary: "Kontext zatim nebyl otestovany."
+          summary: "Kontext zatím nebyl otestovaný."
         };
       }
 
@@ -271,7 +271,7 @@
 
       function statusBadge(testState) {
         const state = testState || defaultTestState(true);
-        return `<span class="status-pill ${state.class_name || "status-unknown"}">${escapeHtml(state.label || "Unknown")}</span>`;
+        return `<span class="status-pill ${state.class_name || "status-unknown"}">${escapeHtml(state.label || "Neznámý stav")}</span>`;
       }
 
       function shortValue(value) {
@@ -290,7 +290,7 @@
         if (!contexts.length) {
           tableBody.innerHTML = `
             <tr>
-              <td colspan="11" class="muted">Zatim neni ulozen zadny account context.</td>
+              <td colspan="11" class="muted">Zatím není uložen žádný account context.</td>
             </tr>
           `;
           return;
@@ -313,8 +313,8 @@
                 <button class="btn btn-secondary btn-small row-edit" type="button" data-index="${index}">Upravit</button>
                 <button class="btn btn-secondary btn-small row-duplicate" type="button" data-index="${index}">Duplikovat</button>
                 <button class="btn btn-secondary btn-small row-test" type="button" data-index="${index}">Otestovat</button>
-                <button class="btn btn-secondary btn-small row-export" type="button" data-index="${index}">Selected export</button>
-                <button class="btn btn-secondary btn-small row-toggle" type="button" data-index="${index}">${context.enabled ? "Zakazat" : "Povolit"}</button>
+                <button class="btn btn-secondary btn-small row-export" type="button" data-index="${index}">Vybraný export</button>
+                <button class="btn btn-secondary btn-small row-toggle" type="button" data-index="${index}">${context.enabled ? "Zakázat" : "Povolit"}</button>
                 <button class="btn btn-secondary btn-small row-delete" type="button" data-index="${index}">Smazat</button>
               </div>
             </td>
@@ -329,10 +329,10 @@
           testOutput.className = "merchant-panel merchant-panel-muted context-test-output";
           testOutput.innerHTML = `
             <div class="merchant-panel-header">
-              <strong>Posledni test kontextu</strong>
-              <span>Neotestovano</span>
+              <strong>Poslední test kontextu</strong>
+              <span>Neotestováno</span>
             </div>
-            <div class="merchant-empty">Vyber kontext a spust jeho test.</div>
+            <div class="merchant-empty">Vyber kontext a spusť jeho test.</div>
           `;
           return;
         }
@@ -368,9 +368,9 @@
           testOutput.innerHTML = `
             <div class="merchant-panel-header">
               <strong>${escapeHtml(context.label || context.key || "Kontext")}</strong>
-              <span>${escapeHtml(testState.label || "Not tested")}</span>
+              <span>${escapeHtml(testState.label || "Neotestováno")}</span>
             </div>
-            <div class="merchant-empty">${escapeHtml(testState.summary || "Kontext zatim nebyl otestovany.")}</div>
+            <div class="merchant-empty">${escapeHtml(testState.summary || "Kontext zatím nebyl otestovaný.")}</div>
           `;
           return;
         }
@@ -378,7 +378,7 @@
         const rows = Object.entries(testResult.services).map(([key, value]) => `
           <div class="merchant-account-card">
             <strong>${escapeHtml(key)}</strong>
-            <span>${escapeHtml(value.status === "ok" ? "OK" : "Problem")}</span>
+              <span>${escapeHtml(value.status === "ok" ? "OK" : "Problém")}</span>
             <span>${escapeHtml(value.details || "")}</span>
           </div>
         `).join("");
@@ -387,7 +387,7 @@
         testOutput.innerHTML = `
           <div class="merchant-panel-header">
             <strong>${escapeHtml(context.label || context.key || "Kontext")}</strong>
-            <span>${escapeHtml(testState.label || "Unknown")}</span>
+            <span>${escapeHtml(testState.label || "Neznámý stav")}</span>
           </div>
           <div class="context-test-summary">${escapeHtml(testState.summary || "")}</div>
           ${testState.tested_at ? `<div class="context-test-time">${escapeHtml(testState.tested_at)}</div>` : ""}
@@ -400,15 +400,28 @@
         renderEditor();
       }
 
-      function renderPendingTestPanel(context) {
+      function renderPendingTestPanel(context, job = null) {
         const label = context.label || context.key || "Kontext";
+        const currentMessage = job && job.current_message
+          ? escapeHtml(job.current_message)
+          : "Kontroluji Google Ads, GA4, GSC, Merchant, GTM a PageSpeed. Podle dostupných API to může chvíli trvat.";
+        const services = job && job.services ? Object.entries(job.services) : [];
+        const rows = services.map(([key, value]) => `
+          <div class="merchant-account-card">
+            <strong>${escapeHtml(key)}</strong>
+            <span>${escapeHtml(value.status || "running")}</span>
+            <span>${escapeHtml(value.details || "")}</span>
+          </div>
+        `).join("");
         testOutput.className = "merchant-panel merchant-panel-muted context-test-output";
         testOutput.innerHTML = `
           <div class="merchant-panel-header">
             <strong>${escapeHtml(label)}</strong>
-            <span>Probiha test</span>
+            <span>Probíhá test</span>
           </div>
-          <div class="context-test-summary">Kontroluji Google Ads, GA4, GSC, Merchant, GTM a PageSpeed. Podle dostupnych API to muze chvili trvat.</div>
+          <div class="context-test-summary">${currentMessage}</div>
+          ${job && job.current_service ? `<div class="context-test-time">Aktuálně: ${escapeHtml(job.current_service)}</div>` : ""}
+          ${rows || '<div class="merchant-empty">Backend test se připravuje.</div>'}
         `;
       }
 
@@ -500,7 +513,16 @@
         });
         const data = await response.json();
         if (!response.ok) {
-          throw new Error(data.message || "Volani selhalo.");
+          throw new Error(data.message || "Volání selhalo.");
+        }
+        return data;
+      }
+
+      async function getJson(url) {
+        const response = await fetch(url, { method: "GET" });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || "Načtení stavu selhalo.");
         }
         return data;
       }
@@ -604,7 +626,7 @@
           selectedIndex = newIndex >= 0 ? newIndex : 0;
         }
         renderAll();
-        setStatus(data.message || "Mapping ulozen.", "success");
+        setStatus(data.message || "Mapování bylo uloženo.", "success");
         return data;
       }
 
@@ -624,14 +646,41 @@
           true,
           "Testuji..."
         );
-        renderPendingTestPanel(context);
-        setStatus(`Test kontextu ${context.label || context.key} probiha...`, "info");
+        renderPendingTestPanel(context, {
+          current_message: "Čekám na potvrzení backendu, že test opravdu odstartoval.",
+          services: {}
+        });
+        setStatus(`Spouštím backend test kontextu ${context.label || context.key}...`, "info");
         try {
-          const payload = await postJson("{{ url_for('web.test_mapping_context') }}", context);
+          const startPayload = await postJson("{{ url_for('web.start_mapping_context_test') }}", context);
+          renderPendingTestPanel(context, {
+            current_message: "Backend test byl přijat a běží.",
+            services: {},
+            current_service: ""
+          });
+          setStatus(`Backend test kontextu ${context.label || context.key} byl spuštěn.`, "info");
+
+          let payload = null;
+          while (true) {
+            const job = await getJson(`{{ url_for('web.mapping_context_test_status', job_id='JOB_ID') }}`.replace("JOB_ID", startPayload.job_id));
+            renderPendingTestPanel(context, job);
+            if (job.state === "finished") {
+              payload = job.result;
+              break;
+            }
+            if (job.state === "error") {
+            throw new Error(job.error || job.current_message || "Test kontextu selhal.");
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 800));
+          }
+
+          if (!payload) {
+            throw new Error("Backend test nevrátil výsledek.");
+          }
           context.test_result = payload;
           context.test_state = payload.test_state || defaultTestState(context.enabled !== false);
           renderAll();
-          setStatus(`Test kontextu ${context.label || context.key} byl dokonceny.`, payload.ok ? "success" : "warning");
+          setStatus(`Test kontextu ${context.label || context.key} byl dokončen.`, payload.ok ? "success" : "warning");
         } finally {
           testInProgress = false;
           setButtonsBusy(
@@ -652,18 +701,18 @@
         const contextKey = selectedIndex >= 0 && contexts[selectedIndex] ? contexts[selectedIndex].key : "";
         const context = contexts.find((item) => item.key === contextKey);
         if (!context || !context.key) {
-          throw new Error("Vybrany kontext nema ulozeny key.");
+          throw new Error("Vybraný kontext nemá uložený key.");
         }
         const payload = await postJson("{{ url_for('web.run_context_export_route') }}", {
           context_key: context.key
         });
-        setStatus(`Export kontextu ${payload.context_label || payload.context_key} byl dokonceny: ${payload.export_path}`, "success");
+        setStatus(`Export kontextu ${payload.context_label || payload.context_key} byl dokončen: ${payload.export_path}`, "success");
       }
 
       async function runMultiExport() {
         await saveMapping();
         const payload = await postJson("{{ url_for('web.run_multi_export_route') }}", {});
-        setStatus(`Multi-export byl dokonceny. Cross-account slozka: ${payload.cross_account_dir || "-"}`, "success");
+        setStatus(`Multi-export byl dokončen. Cross-account složka: ${payload.cross_account_dir || "-"}`, "success");
       }
 
       tableBody.addEventListener("click", async (event) => {
@@ -732,7 +781,7 @@
 
       testSelectedButton.addEventListener("click", async () => {
         if (selectedIndex < 0) {
-          setStatus("Nejdriv vyber kontext.", "warning");
+          setStatus("Nejdřív vyber kontext.", "warning");
           return;
         }
         try {
@@ -744,7 +793,7 @@
 
       runSelectedExportButton.addEventListener("click", async () => {
         if (selectedIndex < 0) {
-          setStatus("Nejdriv vyber kontext.", "warning");
+          setStatus("Nejdřív vyber kontext.", "warning");
           return;
         }
         try {

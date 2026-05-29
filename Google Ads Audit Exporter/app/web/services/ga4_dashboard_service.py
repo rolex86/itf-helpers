@@ -35,13 +35,13 @@ def ga4_list_properties(payload: dict[str, Any]) -> dict[str, Any]:
     env_config = _env_config_from_payload(payload)
     client = Ga4ApiClient.from_env_config(env_config)
     if not client.is_enabled():
-        return {"ok": False, "message": "GA4 modul je vypnuty.", "properties": []}
+        return {"ok": False, "message": "GA4 modul je vypnutý.", "properties": []}
 
     try:
         properties = client.list_accessible_properties()
         return {
             "ok": True,
-            "message": f"Nalezeno {len(properties)} dostupnych GA4 properties.",
+            "message": f"Nalezeno {len(properties)} dostupných GA4 properties.",
             "properties": properties,
         }
     except Ga4ApiError as exc:

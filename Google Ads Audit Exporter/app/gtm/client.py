@@ -144,7 +144,7 @@ class GtmApiClient:
         if not self.config.enabled:
             return GtmConnectionResult(
                 ok=False,
-                message="GTM modul je vypnuty.",
+                message="GTM modul je vypnutý.",
                 instructions=[
                     "V .env nastav GTM_ENABLED=true.",
                     "Vypln GTM_ACCOUNT_ID, GTM_CONTAINER_ID a pouzij OAuth refresh token se scope https://www.googleapis.com/auth/tagmanager.readonly.",
@@ -172,18 +172,18 @@ class GtmApiClient:
                 None,
             )
             if selected_account is None:
-                raise GtmApiError("GTM account nebyl mezi dostupnymi ucty nalezen.", status_code=404)
+                raise GtmApiError("GTM account nebyl mezi dostupnými účty nalezen.", status_code=404)
             containers = self.list_containers(self.config.account_id)
             selected_container = next(
                 (item for item in containers if item.get("container_id") == self.config.container_id),
                 None,
             )
             if selected_container is None:
-                raise GtmApiError("GTM container nebyl mezi dostupnymi kontejnery nalezen.", status_code=404)
+                raise GtmApiError("GTM container nebyl mezi dostupnými kontejnery nalezen.", status_code=404)
             self.list_workspaces(self.config.account_id, self.config.container_id)
             return GtmConnectionResult(
                 ok=True,
-                message="Pristup do GTM accountu a containeru byl potvrzen.",
+                message="Přístup do GTM accountu a containeru byl potvrzen.",
                 instructions=[],
                 selected_account=selected_account,
                 selected_container=selected_container,
@@ -202,21 +202,21 @@ class GtmApiClient:
     def _build_instructions(self, exc: GtmApiError) -> list[str]:
         if exc.status_code == 401:
             return [
-                "OAuth refresh token neni platny nebo nema GTM readonly scope.",
+                "OAuth refresh token nen\u00ed platn\u00fd nebo nem\u00e1 GTM readonly scope.",
                 "Vygeneruj refresh token se scope https://www.googleapis.com/auth/tagmanager.readonly.",
             ]
         if exc.status_code == 403:
             return [
-                "Google ucet nema pristup do GTM nebo chybi readonly scope.",
-                "Zkontroluj opravneni v GTM a scope https://www.googleapis.com/auth/tagmanager.readonly.",
+                "Google \u00fa\u010det nem\u00e1 p\u0159\u00edstup do GTM nebo chyb\u00ed readonly scope.",
+                "Zkontroluj opr\u00e1vn\u011bn\u00ed v GTM a scope https://www.googleapis.com/auth/tagmanager.readonly.",
             ]
         if exc.status_code == 404:
             return [
-                "Over GTM_ACCOUNT_ID a GTM_CONTAINER_ID.",
-                "Zkus v UI nejdriv vypsat dostupne GTM ucty a kontejnery.",
+                "Ov\u011b\u0159 GTM_ACCOUNT_ID a GTM_CONTAINER_ID.",
+                "Zkus v UI nejd\u0159\u00edv vypsat dostupn\u00e9 GTM \u00fa\u010dty a kontejnery.",
             ]
         return [
-            "Over Tag Manager API pristup v Google Cloud projektu.",
+            "Ov\u011b\u0159 Tag Manager API p\u0159\u00edstup v Google Cloud projektu.",
             "Zkontroluj scope https://www.googleapis.com/auth/tagmanager.readonly.",
         ]
 

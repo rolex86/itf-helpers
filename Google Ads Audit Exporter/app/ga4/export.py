@@ -403,7 +403,7 @@ def build_ga4_exports(
     if not env_config.ga4_enabled:
         for key in enabled_report_keys:
             result.datasets[key] = _empty_report(key)
-            result.report_notes[key] = ["GA4 modul je vypnuty v .env."]
+            result.report_notes[key] = ["GA4 modul je vypnutý v .env."]
             result.report_warning_keys.add(key)
         return result
 
@@ -509,7 +509,7 @@ def build_ga4_exports(
         ]
         if not ga4_landing_rows and any(error["report"] == "ga4_landing_pages" for error in result.errors):
             result.report_notes["landing_page_diagnostics"] = [
-                "Diagnostika cilovych stranek nema GA4 landing page data, proto pracuje jen s dostupnymi Ads signaly."
+                "Diagnostika cílových stránek nemá GA4 landing page data, proto pracuje jen s dostupnými Ads signály."
             ]
             result.report_warning_keys.add("landing_page_diagnostics")
 

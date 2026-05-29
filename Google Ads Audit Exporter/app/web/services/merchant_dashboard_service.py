@@ -40,7 +40,7 @@ def merchant_list_accounts(payload: dict[str, Any]) -> dict[str, Any]:
     if not client.is_enabled():
         return {
             "ok": False,
-            "message": "Merchant Center modul je vypnuty.",
+            "message": "Merchant Center modul je vypnutý.",
             "accounts": [],
         }
 
@@ -48,7 +48,7 @@ def merchant_list_accounts(payload: dict[str, Any]) -> dict[str, Any]:
         accounts = client.list_accessible_accounts()
         return {
             "ok": True,
-            "message": f"Nalezeno {len(accounts)} dostupnych Merchant uctu.",
+            "message": f"Nalezeno {len(accounts)} dostupných Merchant účtů.",
             "accounts": accounts,
         }
     except MerchantApiError as exc:

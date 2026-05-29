@@ -607,7 +607,7 @@ def build_merchant_exports(
     if not env_config.merchant_enabled:
         for key in enabled_report_keys:
             result.datasets[key] = _empty_report(key)
-            result.report_notes[key] = ["Merchant API modul je vypnuty v .env."]
+            result.report_notes[key] = ["Merchant API modul je vypnutý v .env."]
             result.report_warning_keys.add(key)
         return result
 

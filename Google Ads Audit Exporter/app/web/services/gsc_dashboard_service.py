@@ -35,13 +35,13 @@ def gsc_list_properties(payload: dict[str, Any]) -> dict[str, Any]:
     env_config = _env_config_from_payload(payload)
     client = SearchConsoleApiClient.from_env_config(env_config)
     if not client.is_enabled():
-        return {"ok": False, "message": "Search Console modul je vypnuty.", "properties": []}
+        return {"ok": False, "message": "Search Console modul je vypnutý.", "properties": []}
 
     try:
         properties = client.list_sites()
         return {
             "ok": True,
-            "message": f"Nalezeno {len(properties)} dostupnych Search Console properties.",
+            "message": f"Nalezeno {len(properties)} dostupných Search Console properties.",
             "properties": properties,
         }
     except SearchConsoleApiError as exc:

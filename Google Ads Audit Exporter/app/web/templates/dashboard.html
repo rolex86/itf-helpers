@@ -10,15 +10,15 @@
     <div class="page-shell">
       <aside class="sidebar">
         <div class="brand">
-          <p class="eyebrow">Interni nastroj</p>
+          <p class="eyebrow">Interní nástroj</p>
           <h1>Google Ads Audit Exporter</h1>
-          <p class="brand-copy">Read-only workspace pro exporty, audity a dalsi rozsireni bez nutnosti ovladani pres terminal.</p>
+          <p class="brand-copy">Read-only workspace pro exporty, audity a další rozšíření bez nutnosti ovládání přes terminál.</p>
         </div>
 
         <nav class="nav-block">
-          <a href="#credentials">Pristupy</a>
-          <a href="{{ url_for('web.discovery_page') }}">Discovery</a>
-          <a href="{{ url_for('web.mapping_page') }}">Mapping</a>
+          <a href="#credentials">Přístupy</a>
+          <a href="{{ url_for('web.discovery_page') }}">Průzkum</a>
+          <a href="{{ url_for('web.mapping_page') }}">Propojení účtů</a>
           <a href="#merchant">Merchant Center</a>
           <a href="#ga4">GA4</a>
           <a href="#gsc">Search Console</a>
@@ -27,16 +27,16 @@
           <a href="#scope">Rozsah exportu</a>
           <a href="#flags">Flagy</a>
           <a href="#history">Historie</a>
-          <a href="#roadmap">Dalsi moduly</a>
+          <a href="#roadmap">Další moduly</a>
         </nav>
 
         <div class="roadmap-mini">
-          <p class="eyebrow">Pripraveno do budoucna</p>
+          <p class="eyebrow">Připraveno do budoucna</p>
           <ul>
-            <li>Srovnani obdobi</li>
+            <li>Srovnání období</li>
             <li>Export do Google Sheets</li>
-            <li>Pokrocilejsi auditni score</li>
-            <li>Workflow pro navrhy zmen</li>
+            <li>Pokročilejší auditní score</li>
+            <li>Workflow pro návrhy změn</li>
           </ul>
         </div>
       </aside>
@@ -44,12 +44,12 @@
       <main class="content">
         <section class="hero">
           <div>
-            <p class="eyebrow">Ovladani v prohlizeci</p>
-            <h2>Vypln konfiguraci, spust export a pracuj s tim bez terminalu</h2>
-            <p>CLI i web pouzivaji stejny exportni zaklad, takze mame jednu logiku, jeden workflow a lepsi prostor pro dalsi funkce.</p>
+            <p class="eyebrow">Ovládání v prohlížeči</p>
+            <h2>Vyplň konfiguraci, spusť export a pracuj s tím bez terminálu</h2>
+            <p>CLI i web používají stejný exportní základ, takže máme jednu logiku, jeden workflow a lepší prostor pro další funkce.</p>
           </div>
           <div class="hero-badge">
-            <span>Bezpecny rezim</span>
+            <span>Bezpečný režim</span>
             <strong>{% if state.config_payload.cost_policy.free_only %}Free-only + read-only{% else %}Read-only export{% endif %}</strong>
           </div>
         </section>
@@ -68,20 +68,20 @@
           <section id="credentials" class="panel panel-wide">
             <div class="panel-header">
               <div>
-                <h3>Pristupy a ucet</h3>
-                <p>Vsechno se uklada lokalne do `.env` a `config.yaml`.</p>
+                <h3>Přístupy a účet</h3>
+                <p>Všechno se ukládá lokálně do `.env` a `config.yaml`.</p>
               </div>
-              <button class="btn btn-secondary btn-small" type="submit" formaction="{{ url_for('web.save_configuration') }}">Ulozit udaje</button>
+              <button class="btn btn-secondary btn-small" type="submit" formaction="{{ url_for('web.save_configuration') }}">Uložit údaje</button>
             </div>
 
             <div class="field-grid">
               <label>
-                <span>Customer ID uctu</span>
+                <span>Customer ID účtu</span>
                 <input name="customer_id" value="{{ state.config_payload.customer_id }}" placeholder="1234567890">
               </label>
               <label>
                 <span>Login customer ID</span>
-                <input name="login_customer_id" value="{{ state.env_config.login_customer_id }}" placeholder="Volitelne MCC login ID">
+                <input name="login_customer_id" value="{{ state.env_config.login_customer_id }}" placeholder="Volitelné MCC login ID">
               </label>
               <label>
                 <span>Developer token</span>
@@ -106,11 +106,11 @@
             <div class="panel-header">
               <div>
                 <h3>Merchant Center</h3>
-                <p>Volitelny modul pro Shopping a PMax feed diagnostiku. Google Ads export bez nej funguje dal.</p>
+                <p>Volitelný modul pro Shopping a PMax feed diagnostiku. Google Ads export bez něj funguje dál.</p>
               </div>
               <div class="action-row">
-                <button class="btn btn-secondary btn-small" type="button" id="merchant-accounts-button">Dostupne ucty</button>
-                <button class="btn btn-secondary btn-small" type="button" id="merchant-test-button">Test spojeni</button>
+                <button class="btn btn-secondary btn-small" type="button" id="merchant-accounts-button">Dostupné účty</button>
+                <button class="btn btn-secondary btn-small" type="button" id="merchant-test-button">Test spojení</button>
               </div>
             </div>
 
@@ -129,30 +129,30 @@
             </div>
 
             <div class="policy-note">
-              Merchant API pouziva stejny OAuth client a refresh token, ale token musi mit scope <code>https://www.googleapis.com/auth/content</code>.
+              Merchant API používá stejný OAuth client a refresh token, ale token musí mít scope <code>https://www.googleapis.com/auth/content</code>.
             </div>
 
             <div id="merchant-status-panel" class="merchant-panel merchant-panel-muted">
               <div class="merchant-panel-header">
-                <strong>Stav pristupu</strong>
-                <span id="merchant-status-badge">Neotestovano</span>
+                <strong>Stav přístupu</strong>
+                <span id="merchant-status-badge">Neotestováno</span>
               </div>
-              <p id="merchant-status-message">Zkus test spojeni nebo nacti dostupne Merchant ucty.</p>
+              <p id="merchant-status-message">Zkus test spojení nebo načti dostupné Merchant účty.</p>
               <ul id="merchant-status-instructions" class="merchant-list"></ul>
             </div>
 
             <div class="merchant-grid">
               <div class="merchant-panel">
                 <div class="merchant-panel-header">
-                  <strong>Vybrany ucet</strong>
+                  <strong>Vybraný účet</strong>
                 </div>
-                <div id="merchant-selected-account" class="merchant-empty">Zatim nic.</div>
+                <div id="merchant-selected-account" class="merchant-empty">Zatím nic.</div>
               </div>
               <div class="merchant-panel">
                 <div class="merchant-panel-header">
-                  <strong>Dostupne ucty</strong>
+                  <strong>Dostupné účty</strong>
                 </div>
-                <div id="merchant-accounts-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
+                <div id="merchant-accounts-list" class="merchant-empty">Seznam se načte po kliknutí na tlačítko.</div>
               </div>
             </div>
           </section>
@@ -161,11 +161,11 @@
             <div class="panel-header">
               <div>
                 <h3>GA4</h3>
-                <p>Volitelny modul pro engagement, funnel a revenue bez BigQuery exportu.</p>
+                <p>Volitelný modul pro engagement, funnel a revenue bez BigQuery exportu.</p>
               </div>
               <div class="action-row">
-                <button class="btn btn-secondary btn-small" type="button" id="ga4-properties-button">Dostupne properties</button>
-                <button class="btn btn-secondary btn-small" type="button" id="ga4-test-button">Test pristupu</button>
+                <button class="btn btn-secondary btn-small" type="button" id="ga4-properties-button">Dostupné properties</button>
+                <button class="btn btn-secondary btn-small" type="button" id="ga4-test-button">Test přístupu</button>
               </div>
             </div>
 
@@ -184,30 +184,30 @@
             </div>
 
             <div class="policy-note">
-              GA4 modul pouziva standardni Analytics Data API a Analytics Admin API. Potrebny scope je <code>https://www.googleapis.com/auth/analytics.readonly</code>.
+              GA4 modul používá standardní Analytics Data API a Analytics Admin API. Potřebný scope je <code>https://www.googleapis.com/auth/analytics.readonly</code>.
             </div>
 
             <div id="ga4-status-panel" class="merchant-panel merchant-panel-muted">
               <div class="merchant-panel-header">
-                <strong>Stav pristupu</strong>
-                <span id="ga4-status-badge">Neotestovano</span>
+                <strong>Stav přístupu</strong>
+                <span id="ga4-status-badge">Neotestováno</span>
               </div>
-              <p id="ga4-status-message">Zkus test pristupu nebo nacti dostupne properties.</p>
+              <p id="ga4-status-message">Zkus test přístupu nebo načti dostupné properties.</p>
               <ul id="ga4-status-instructions" class="merchant-list"></ul>
             </div>
 
             <div class="merchant-grid">
               <div class="merchant-panel">
                 <div class="merchant-panel-header">
-                  <strong>Vybrana property</strong>
+                  <strong>Vybraná property</strong>
                 </div>
-                <div id="ga4-selected-property" class="merchant-empty">Zatim nic.</div>
+                <div id="ga4-selected-property" class="merchant-empty">Zatím nic.</div>
               </div>
               <div class="merchant-panel">
                 <div class="merchant-panel-header">
-                  <strong>Dostupne properties</strong>
+                  <strong>Dostupné properties</strong>
                 </div>
-                <div id="ga4-properties-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
+                <div id="ga4-properties-list" class="merchant-empty">Seznam se načte po kliknutí na tlačítko.</div>
               </div>
             </div>
           </section>
@@ -216,11 +216,11 @@
             <div class="panel-header">
               <div>
                 <h3>Search Console</h3>
-                <p>Volitelny modul pro organicke dotazy, stranky a prekryv SEO/PPC.</p>
+                <p>Volitelný modul pro organické dotazy, stránky a překryv SEO/PPC.</p>
               </div>
               <div class="action-row">
-                <button class="btn btn-secondary btn-small" type="button" id="gsc-properties-button">Dostupne properties</button>
-                <button class="btn btn-secondary btn-small" type="button" id="gsc-test-button">Test pristupu</button>
+                <button class="btn btn-secondary btn-small" type="button" id="gsc-properties-button">Dostupné properties</button>
+                <button class="btn btn-secondary btn-small" type="button" id="gsc-test-button">Test přístupu</button>
               </div>
             </div>
 
@@ -239,30 +239,30 @@
             </div>
 
             <div class="policy-note">
-              Search Console modul pouziva Search Console API se scope <code>https://www.googleapis.com/auth/webmasters.readonly</code> a lokalni cache, aby zbytecne neopakoval stejne drahe dotazy.
+              Search Console modul používá Search Console API se scope <code>https://www.googleapis.com/auth/webmasters.readonly</code> a lokální cache, aby zbytečně neopakoval stejné drahé dotazy.
             </div>
 
             <div id="gsc-status-panel" class="merchant-panel merchant-panel-muted">
               <div class="merchant-panel-header">
-                <strong>Stav pristupu</strong>
-                <span id="gsc-status-badge">Neotestovano</span>
+                <strong>Stav přístupu</strong>
+                <span id="gsc-status-badge">Neotestováno</span>
               </div>
-              <p id="gsc-status-message">Zkus test pristupu nebo nacti dostupne Search Console properties.</p>
+              <p id="gsc-status-message">Zkus test přístupu nebo načti dostupné Search Console properties.</p>
               <ul id="gsc-status-instructions" class="merchant-list"></ul>
             </div>
 
             <div class="merchant-grid">
               <div class="merchant-panel">
                 <div class="merchant-panel-header">
-                  <strong>Vybrana property</strong>
+                  <strong>Vybraná property</strong>
                 </div>
-                <div id="gsc-selected-property" class="merchant-empty">Zatim nic.</div>
+                <div id="gsc-selected-property" class="merchant-empty">Zatím nic.</div>
               </div>
               <div class="merchant-panel">
                 <div class="merchant-panel-header">
-                  <strong>Dostupne properties</strong>
+                  <strong>Dostupné properties</strong>
                 </div>
-                <div id="gsc-properties-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
+                <div id="gsc-properties-list" class="merchant-empty">Seznam se načte po kliknutí na tlačítko.</div>
               </div>
             </div>
           </section>
@@ -271,11 +271,11 @@
             <div class="panel-header">
               <div>
                 <h3>Google Tag Manager</h3>
-                <p>Read-only kontrola tagu, triggeru, promennych a zakladni diagnostika mereni.</p>
+                <p>Read-only kontrola tagů, triggerů, proměnných a základní diagnostika měření.</p>
               </div>
               <div class="action-row">
-                <button class="btn btn-secondary btn-small" type="button" id="gtm-accounts-button">Ucty a kontejnery</button>
-                <button class="btn btn-secondary btn-small" type="button" id="gtm-test-button">Test pristupu</button>
+                <button class="btn btn-secondary btn-small" type="button" id="gtm-accounts-button">Účty a kontejnery</button>
+                <button class="btn btn-secondary btn-small" type="button" id="gtm-test-button">Test přístupu</button>
               </div>
             </div>
 
@@ -301,30 +301,30 @@
             </div>
 
             <div class="policy-note">
-              GTM modul pouziva pouze read-only scope <code>https://www.googleapis.com/auth/tagmanager.readonly</code>. Nic nepublikuje ani neupravuje.
+              GTM modul používá pouze read-only scope <code>https://www.googleapis.com/auth/tagmanager.readonly</code>. Nic nepublikuje ani neupravuje.
             </div>
 
             <div id="gtm-status-panel" class="merchant-panel merchant-panel-muted">
               <div class="merchant-panel-header">
-                <strong>Stav pristupu</strong>
-                <span id="gtm-status-badge">Neotestovano</span>
+                <strong>Stav přístupu</strong>
+                <span id="gtm-status-badge">Neotestováno</span>
               </div>
-              <p id="gtm-status-message">Zkus test pristupu nebo nacti dostupne GTM ucty a kontejnery.</p>
+              <p id="gtm-status-message">Zkus test přístupu nebo načti dostupné GTM účty a kontejnery.</p>
               <ul id="gtm-status-instructions" class="merchant-list"></ul>
             </div>
 
             <div class="merchant-grid">
               <div class="merchant-panel">
                 <div class="merchant-panel-header">
-                  <strong>Vybrany ucet a kontejner</strong>
+                  <strong>Vybraný účet a kontejner</strong>
                 </div>
-                <div id="gtm-selected-container" class="merchant-empty">Zatim nic.</div>
+                <div id="gtm-selected-container" class="merchant-empty">Zatím nic.</div>
               </div>
               <div class="merchant-panel">
                 <div class="merchant-panel-header">
-                  <strong>Dostupne ucty a kontejnery</strong>
+                  <strong>Dostupné účty a kontejnery</strong>
                 </div>
-                <div id="gtm-accounts-list" class="merchant-empty">Seznam se nacte po kliknuti na tlacitko.</div>
+                <div id="gtm-accounts-list" class="merchant-empty">Seznam se načte po kliknutí na tlačítko.</div>
               </div>
             </div>
           </section>
@@ -333,7 +333,7 @@
             <div class="panel-header">
               <div>
                 <h3>PageSpeed Insights</h3>
-                <p>Technicka kontrola jen nad nejdrazsimi landing pages, ne nad celym webem.</p>
+                <p>Technická kontrola jen nad nejdražšími landing pages, ne nad celým webem.</p>
               </div>
             </div>
 
@@ -347,16 +347,16 @@
               </label>
               <label>
                 <span>PageSpeed API key</span>
-                <input type="password" name="pagespeed_api_key" value="{{ state.env_config.pagespeed_api_key }}" placeholder="Volitelne, bez keye muze byt modul omezeny kvotami">
+                <input type="password" name="pagespeed_api_key" value="{{ state.env_config.pagespeed_api_key }}" placeholder="Volitelné, bez keye může být modul omezený kvótami">
               </label>
             </div>
 
             <div class="field-grid compact">
               <label>
-                <span>Modul v configu zapnuty</span>
+                <span>Modul v configu zapnutý</span>
                 <span class="toggle inline-toggle">
                   <input type="checkbox" name="pagespeed_config_enabled" {% if state.config_payload.pagespeed.enabled %}checked{% endif %}>
-                  <span>Pouzivat PageSpeed pri exportu</span>
+                  <span>Používat PageSpeed při exportu</span>
                 </span>
               </label>
               <label>
@@ -379,11 +379,11 @@
             <div class="toggle-row">
               <label class="toggle">
                 <input type="checkbox" name="pagespeed_strategy_mobile" {% if 'mobile' in state.config_payload.pagespeed.strategies %}checked{% endif %}>
-                <span>Mobile strategie</span>
+                <span>Mobilní strategie</span>
               </label>
               <label class="toggle">
                 <input type="checkbox" name="pagespeed_strategy_desktop" {% if 'desktop' in state.config_payload.pagespeed.strategies %}checked{% endif %}>
-                <span>Desktop strategie</span>
+                <span>Desktopová strategie</span>
               </label>
             </div>
 
@@ -394,8 +394,8 @@
 
           <section id="scope" class="panel">
             <div class="panel-header">
-              <h3>Obdobi a vystup</h3>
-              <p>Vyber preset nebo si nastav vlastni datumy.</p>
+              <h3>Období a výstup</h3>
+              <p>Vyber preset nebo si nastav vlastní datumy.</p>
             </div>
 
             <div class="preset-row">
@@ -425,14 +425,14 @@
 
             <div class="field-grid compact">
               <label class="field-with-action">
-                <span>Slozka exportu</span>
+                <span>Složka exportu</span>
                 <div class="inline-field-row">
                   <input id="base-dir-input" name="base_dir" value="{{ state.config_payload.output.base_dir }}">
                   <button class="btn btn-secondary btn-small btn-inline" type="button" id="pick-folder-button">Vybrat</button>
                 </div>
               </label>
               <label>
-                <span>Nazev XLSX souboru</span>
+                <span>Název XLSX souboru</span>
                 <input name="xlsx_filename" value="{{ state.config_payload.output.xlsx_filename }}">
               </label>
             </div>
@@ -440,47 +440,47 @@
             <div class="toggle-row">
               <label class="toggle">
                 <input type="checkbox" name="include_raw_csv" {% if state.config_payload.output.include_raw_csv %}checked{% endif %}>
-                <span>Ulozit raw CSV</span>
+                <span>Uložit raw CSV</span>
               </label>
               <label class="toggle">
                 <input type="checkbox" name="include_metadata" {% if state.config_payload.output.include_metadata %}checked{% endif %}>
-                <span>Ulozit metadata JSON</span>
+                <span>Uložit metadata JSON</span>
               </label>
             </div>
           </section>
 
           <section class="panel">
             <div class="panel-header">
-              <h3>Nakladova politika</h3>
-              <p>Nulte pravidlo: aplikace ma zustat v lokalnim a neplacenem rezimu.</p>
+              <h3>Nákladová politika</h3>
+              <p>Nulté pravidlo: aplikace má zůstat v lokálním a neplaceném režimu.</p>
             </div>
 
             <div class="toggle-row">
               <label class="toggle">
                 <input type="checkbox" name="free_only" {% if state.config_payload.cost_policy.free_only %}checked{% endif %}>
-                <span>Free-only rezim</span>
+                <span>Free-only režim</span>
               </label>
               <label class="toggle">
                 <input type="checkbox" name="forbid_paid_cloud_resources" {% if state.config_payload.cost_policy.forbid_paid_cloud_resources %}checked{% endif %}>
-                <span>Zakazat placene cloud sluzby</span>
+                <span>Zakázat placené cloud služby</span>
               </label>
               <label class="toggle">
                 <input type="checkbox" name="allow_local_storage_only" {% if state.config_payload.cost_policy.allow_local_storage_only %}checked{% endif %}>
-                <span>Povolit jen lokalni uloziste</span>
+                <span>Povolit jen lokální úložiště</span>
               </label>
             </div>
 
             <div class="policy-note">
-              <strong>Povoleno:</strong> Google Ads API, Merchant, GA4 Data API, Search Console API, PageSpeed, Tag Manager a lokalni soubory.
+              <strong>Povoleno:</strong> Google Ads API, Merchant, GA4 Data API, Search Console API, PageSpeed, Tag Manager a lokální soubory.
               <br>
-              <strong>Zakazano:</strong> Cloud Run, Compute Engine, Cloud SQL, BigQuery, Cloud Storage, placene AI API a automaticky write-back bez schvaleni.
+              <strong>Zakázáno:</strong> Cloud Run, Compute Engine, Cloud SQL, BigQuery, Cloud Storage, placené AI API a automatický write-back bez schválení.
             </div>
           </section>
 
           <section class="panel">
             <div class="panel-header">
               <h3>Reporty</h3>
-              <p>Zapni nebo vypni jednotlive casti exportu pro aktualni beh.</p>
+              <p>Zapni nebo vypni jednotlivé části exportu pro aktuální běh.</p>
             </div>
 
             <div class="checkbox-grid">
@@ -495,29 +495,29 @@
 
           <section id="flags" class="panel">
             <div class="panel-header">
-              <h3>Prahy pro zakladni flagy</h3>
-              <p>Tyhle hodnoty ridi prvni auditni vrstvu v listu Basic flags.</p>
+              <h3>Prahy pro základní flagy</h3>
+              <p>Tyhle hodnoty řídí první auditní vrstvu v listu Basic flags.</p>
             </div>
 
             <div class="field-grid compact">
               <label>
-                <span>Minimalni spend v micros</span>
+                <span>Minimální spend v micros</span>
                 <input name="min_spend_micros" value="{{ state.config_payload.flags.min_spend_micros }}">
               </label>
               <label>
-                <span>Minimalni pocet kliku</span>
+                <span>Minimální počet kliků</span>
                 <input name="min_clicks" value="{{ state.config_payload.flags.min_clicks }}">
               </label>
               <label>
-                <span>Cilove CPA v micros</span>
+                <span>Cílové CPA v micros</span>
                 <input name="target_cpa_micros" value="{{ state.config_payload.flags.target_cpa_micros or '' }}">
               </label>
               <label>
-                <span>Cilovy ROAS</span>
+                <span>Cílový ROAS</span>
                 <input name="target_roas" value="{{ state.config_payload.flags.target_roas or '' }}">
               </label>
               <label>
-                <span>Prahovy nizky CTR</span>
+                <span>Prahový nízký CTR</span>
                 <input name="low_ctr_threshold" value="{{ state.config_payload.flags.low_ctr_threshold }}">
               </label>
             </div>
@@ -525,20 +525,20 @@
 
           <section class="panel action-panel">
             <div>
-              <h3>Spusteni</h3>
-              <p>Konfiguraci muzes ulozit nebo rovnou spustit export z jednoho mista.</p>
+              <h3>Spuštění</h3>
+              <p>Konfiguraci můžeš uložit nebo rovnou spustit export z jednoho místa.</p>
             </div>
             <div class="field-grid compact">
               <label>
-                <span>Export mode</span>
+                <span>Režim exportu</span>
                 <select name="export_mode">
-                  <option value="single_account" {% if selected_export_mode == 'single_account' %}selected{% endif %}>Single account</option>
-                  <option value="selected_context" {% if selected_export_mode == 'selected_context' %}selected{% endif %}>Selected context</option>
-                  <option value="all_enabled_contexts" {% if selected_export_mode == 'all_enabled_contexts' %}selected{% endif %}>All enabled contexts</option>
+                  <option value="single_account" {% if selected_export_mode == 'single_account' %}selected{% endif %}>Jeden účet</option>
+                  <option value="selected_context" {% if selected_export_mode == 'selected_context' %}selected{% endif %}>Vybraný kontext</option>
+                  <option value="all_enabled_contexts" {% if selected_export_mode == 'all_enabled_contexts' %}selected{% endif %}>Všechny aktivní kontexty</option>
                 </select>
               </label>
               <label>
-                <span>Vybrany kontext</span>
+                <span>Vybraný kontext</span>
                 <select name="selected_context_key">
                   <option value="">Vyber kontext</option>
                   {% for context in state.account_contexts %}
@@ -549,11 +549,11 @@
             </div>
             {% if not state.has_multi_account_config %}
               <div class="policy-note">
-                Multi-context rezim se objevi automaticky, jakmile ulozis aspon jeden kontext v sekci <a href="{{ url_for('web.mapping_page') }}">Mapping</a>.
+                Multi-context režim se objeví automaticky, jakmile uložíš aspoň jeden kontext v sekci <a href="{{ url_for('web.mapping_page') }}">Propojení účtů</a>.
               </div>
             {% endif %}
             <div class="action-row">
-              <button class="btn btn-secondary" type="submit" formaction="{{ url_for('web.save_configuration') }}">Ulozit konfiguraci</button>
+              <button class="btn btn-secondary" type="submit" formaction="{{ url_for('web.save_configuration') }}">Uložit konfiguraci</button>
               <button class="btn btn-primary" type="submit" id="run-button">Spustit export</button>
             </div>
           </section>
@@ -562,8 +562,8 @@
         {% if run_result %}
           <section class="panel">
             <div class="panel-header">
-              <h3>Posledni spusteni</h3>
-              <p>Vysledek exportu, ktery jsi prave spustil.</p>
+            <h3>Poslední spuštění</h3>
+            <p>Výsledek exportu, který jsi právě spustil.</p>
             </div>
             {% if run_result.exit_code is defined %}
               <div class="result-grid">
@@ -572,11 +572,11 @@
                   <strong>{{ 'Hotovo' if run_result.exit_code == 0 else 'Chyba' }}</strong>
                 </div>
                 <div class="result-card">
-                  <span>Vystupni slozka</span>
+                  <span>Výstupní složka</span>
                   <strong>{{ run_result.export_paths.base_dir }}</strong>
                 </div>
                 <div class="result-card">
-                  <span>Obdobi</span>
+                  <span>Období</span>
                   <strong>{{ run_result.resolved_range.date_from }} -> {{ run_result.resolved_range.date_to }}</strong>
                 </div>
                 <div class="result-card {% if run_result.fallback_report_count %}result-card-warning{% endif %}">
@@ -587,13 +587,13 @@
 
               {% if run_result.fallback_report_count %}
                 <div class="flash flash-warning">
-                  {{ run_result.fallback_report_count }} report{% if run_result.fallback_report_count != 1 %}u{% endif %} bezel s fallbackem a nektera optional pole byla zahozena.
+                  {{ run_result.fallback_report_count }} report{% if run_result.fallback_report_count != 1 %}u{% endif %} běžel s fallbackem a některá optional pole byla zahozená.
                 </div>
               {% endif %}
 
               {% if run_result.account_info.get("time_zone") %}
                 <div class="flash flash-info">
-                  Casova zona uctu je <strong>{{ run_result.account_info.get("time_zone") }}</strong>. U dennich dat a hranic obdobi pocitej s interpretaci podle teto casove zony.
+                  Časová zóna účtu je <strong>{{ run_result.account_info.get("time_zone") }}</strong>. U denních dat a hranic období počítej s interpretací podle této časové zóny.
                 </div>
               {% endif %}
 
@@ -603,7 +603,7 @@
                     <tr>
                       <th>Report</th>
                       <th>Stav</th>
-                      <th>Radku</th>
+                      <th>Řádků</th>
                       <th>Detail</th>
                     </tr>
                   </thead>
@@ -611,7 +611,7 @@
                     {% for row in run_result.report_rows %}
                       <tr class="{% if row.status == 'warning' %}row-warning{% elif row.status == 'error' %}row-error{% endif %}">
                         <td>{{ state.report_labels.get(row.name, row.name) }}</td>
-                        <td>{{ 'OK' if row.status == 'ok' else ('Varovani' if row.status == 'warning' else 'Chyba') }}</td>
+                        <td>{{ 'OK' if row.status == 'ok' else ('Varování' if row.status == 'warning' else 'Chyba') }}</td>
                         <td>{{ row.rows }}</td>
                         <td>{{ row.details }}</td>
                       </tr>
@@ -632,19 +632,19 @@
             {% else %}
               <div class="result-grid">
                 <div class="result-card">
-                  <span>Rezim</span>
+                  <span>Režim</span>
                   <strong>{{ run_result.mode }}</strong>
                 </div>
                 <div class="result-card">
-                  <span>Hotove kontexty</span>
+                  <span>Hotové kontexty</span>
                   <strong>{{ run_result.context_results | length }}</strong>
                 </div>
                 <div class="result-card {% if run_result.context_errors %}result-card-warning{% endif %}">
-                  <span>Chybove kontexty</span>
+                  <span>Chybové kontexty</span>
                   <strong>{{ run_result.context_errors | length }}</strong>
                 </div>
                 <div class="result-card">
-                  <span>Cross-account slozka</span>
+                  <span>Cross-account složka</span>
                   <strong>{{ run_result.cross_account_dir or '-' }}</strong>
                 </div>
               </div>
@@ -654,8 +654,8 @@
                   <thead>
                     <tr>
                       <th>Kontext</th>
-                      <th>Vystup</th>
-                      <th>Pocet chyb</th>
+                      <th>Výstup</th>
+                      <th>Počet chyb</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -686,18 +686,18 @@
         <section id="history" class="panel">
           <div class="panel-header">
             <h3>Historie exportu</h3>
-            <p>Dosavadni exporty nalezene v lokalni slozce `exports/`.</p>
+            <p>Dosavadní exporty nalezené v lokální složce `exports/`.</p>
           </div>
 
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Slozka</th>
+                      <th>Složka</th>
                   <th>Customer ID</th>
-                  <th>Obdobi</th>
+                      <th>Období</th>
                   <th>Chyby</th>
-                  <th>Dotazu</th>
+                      <th>Dotazů</th>
                   <th>Soubor</th>
                 </tr>
               </thead>
@@ -711,7 +711,7 @@
                     <td>{{ item.query_count }}</td>
                     <td>
                       {% if item.xlsx_path %}
-                        <a href="{{ url_for('web.download_file', relative_path=item.relative_xlsx_path) }}">Stahnout XLSX</a>
+                        <a href="{{ url_for('web.download_file', relative_path=item.relative_xlsx_path) }}">Stáhnout XLSX</a>
                       {% else %}
                         <span class="muted">Bez workbooku</span>
                       {% endif %}
@@ -719,7 +719,7 @@
                   </tr>
                 {% else %}
                   <tr>
-                    <td colspan="6" class="muted">Zatim tu nejsou zadne exporty.</td>
+                    <td colspan="6" class="muted">Zatím tu nejsou žádné exporty.</td>
                   </tr>
                 {% endfor %}
               </tbody>
@@ -729,26 +729,26 @@
 
         <section id="roadmap" class="panel roadmap-panel">
           <div class="panel-header">
-            <h3>Pripraveny prostor pro rozsireni</h3>
-            <p>Rozhrani je schvalne navrzene jako workspace, ne jen jako jednorazovy formular.</p>
+            <h3>Připravený prostor pro rozšíření</h3>
+            <p>Rozhraní je schválně navržené jako workspace, ne jen jako jednorázový formulář.</p>
           </div>
 
           <div class="roadmap-grid">
             <article>
-              <h4>Srovnani obdobi</h4>
-              <p>Porovnani vykonu mezi obdobi, trendu a zmen v kampanich.</p>
+              <h4>Srovnání období</h4>
+              <p>Porovnání výkonu mezi obdobími, trendů a změn v kampaních.</p>
             </article>
             <article>
               <h4>Auditni pravidla</h4>
-              <p>Pokrocilejsi heuristiky, vlastni prahy a scorecardy pro konkretni ucty.</p>
+              <p>Pokročilejší heuristiky, vlastní prahy a scorecardy pro konkrétní účty.</p>
             </article>
             <article>
-              <h4>Sheets a sdileni</h4>
-              <p>Predani do Google Sheets nebo do prehlednejsich vystupu pro dalsi lidi.</p>
+              <h4>Sheets a sdílení</h4>
+              <p>Předání do Google Sheets nebo do přehlednějších výstupů pro další lidi.</p>
             </article>
             <article>
-              <h4>Navrhy zmen</h4>
-              <p>Budouci write-back vrstva s preview, kontrolou a schvalovacim workflow.</p>
+              <h4>Návrhy změn</h4>
+              <p>Budoucí write-back vrstva s preview, kontrolou a schvalovacím workflow.</p>
             </article>
           </div>
         </section>
@@ -797,7 +797,7 @@
         form.addEventListener("submit", (event) => {
           if (event.submitter === runButton) {
             runButton.disabled = true;
-            runButton.textContent = "Spoustim export...";
+            runButton.textContent = "Spouštím export...";
           }
         });
       }
@@ -806,7 +806,7 @@
         pickFolderButton.addEventListener("click", async () => {
           const originalLabel = pickFolderButton.textContent;
           pickFolderButton.disabled = true;
-          pickFolderButton.textContent = "Oteviram...";
+          pickFolderButton.textContent = "Otevírám...";
 
           try {
             const response = await fetch("{{ url_for('web.pick_folder') }}", {
@@ -823,10 +823,10 @@
             if (payload.ok && payload.path) {
               baseDirInput.value = payload.path;
             } else if (!payload.ok) {
-              window.alert(payload.error || "Vyber slozky se nepodaril.");
+              window.alert(payload.error || "Výběr složky se nepodařil.");
             }
           } catch (error) {
-            window.alert("Vyber slozky se nepodaril.");
+            window.alert("Výběr složky se nepodařil.");
           } finally {
             pickFolderButton.disabled = false;
             pickFolderButton.textContent = originalLabel;
@@ -883,7 +883,7 @@
 
         merchantStatusPanel.classList.remove("merchant-panel-success", "merchant-panel-error", "merchant-panel-muted");
         merchantStatusPanel.classList.add(payload.ok ? "merchant-panel-success" : "merchant-panel-error");
-        merchantStatusBadge.textContent = payload.ok ? "Pristup potvrzen" : "Problem";
+        merchantStatusBadge.textContent = payload.ok ? "Přístup potvrzen" : "Problém";
         merchantStatusMessage.textContent = payload.message || "";
         merchantStatusInstructions.innerHTML = "";
 
@@ -897,14 +897,14 @@
           if (payload.selected_account) {
             const account = payload.selected_account;
             merchantSelectedAccount.innerHTML = `
-              <div><strong>${account.account_name || account.account_id || "Merchant ucet"}</strong></div>
+              <div><strong>${account.account_name || account.account_id || "Merchant účet"}</strong></div>
               <div>ID: ${account.account_id || "-"}</div>
               <div>Timezone: ${account.time_zone || "-"}</div>
               <div>Jazyk: ${account.language_code || "-"}</div>
-              <div>Sluzby: ${payload.service_count ?? 0}</div>
+              <div>Služby: ${payload.service_count ?? 0}</div>
             `;
           } else {
-            merchantSelectedAccount.textContent = "Vybrany Merchant ucet zatim nebyl potvrzen.";
+            merchantSelectedAccount.textContent = "Vybraný Merchant účet zatím nebyl potvrzen.";
           }
         }
 
@@ -918,13 +918,13 @@
           return;
         }
         if (!accounts || !accounts.length) {
-          merchantAccountsList.textContent = "Nebyl nalezen zadny dostupny Merchant ucet.";
+          merchantAccountsList.textContent = "Nebyl nalezen žádný dostupný Merchant účet.";
           return;
         }
 
         const rows = accounts.map((account) => `
           <div class="merchant-account-card">
-            <strong>${account.account_name || account.account_id || "Merchant ucet"}</strong>
+            <strong>${account.account_name || account.account_id || "Merchant účet"}</strong>
             <span>ID: ${account.account_id || "-"}</span>
             <span>${account.homepage || account.time_zone || ""}</span>
           </div>
@@ -939,7 +939,7 @@
 
         ga4StatusPanel.classList.remove("merchant-panel-success", "merchant-panel-error", "merchant-panel-muted");
         ga4StatusPanel.classList.add(payload.ok ? "merchant-panel-success" : "merchant-panel-error");
-        ga4StatusBadge.textContent = payload.ok ? "Pristup potvrzen" : "Problem";
+        ga4StatusBadge.textContent = payload.ok ? "Přístup potvrzen" : "Problém";
         ga4StatusMessage.textContent = payload.message || "";
         ga4StatusInstructions.innerHTML = "";
 
@@ -956,10 +956,10 @@
               <div><strong>${property.property_name || property.property_id || "GA4 property"}</strong></div>
               <div>ID: ${property.property_id || "-"}</div>
               <div>Typ: ${property.property_type || "-"}</div>
-              <div>Ucet: ${property.account_name || "-"}</div>
+              <div>Účet: ${property.account_name || "-"}</div>
             `;
           } else {
-            ga4SelectedProperty.textContent = "Vybrana property zatim nebyla potvrzena.";
+            ga4SelectedProperty.textContent = "Vybraná property zatím nebyla potvrzena.";
           }
         }
 
@@ -973,7 +973,7 @@
           return;
         }
         if (!properties || !properties.length) {
-          ga4PropertiesList.textContent = "Nebyla nalezena zadna dostupna property.";
+          ga4PropertiesList.textContent = "Nebyla nalezena žádná dostupná property.";
           return;
         }
 
@@ -994,7 +994,7 @@
 
         gscStatusPanel.classList.remove("merchant-panel-success", "merchant-panel-error", "merchant-panel-muted");
         gscStatusPanel.classList.add(payload.ok ? "merchant-panel-success" : "merchant-panel-error");
-        gscStatusBadge.textContent = payload.ok ? "Pristup potvrzen" : "Problem";
+        gscStatusBadge.textContent = payload.ok ? "Přístup potvrzen" : "Problém";
         gscStatusMessage.textContent = payload.message || "";
         gscStatusInstructions.innerHTML = "";
 
@@ -1009,10 +1009,10 @@
             const property = payload.selected_property;
             gscSelectedProperty.innerHTML = `
               <div><strong>${property.site_url || "Search Console property"}</strong></div>
-              <div>Permission: ${property.permission_level || "-"}</div>
+              <div>Oprávnění: ${property.permission_level || "-"}</div>
             `;
           } else {
-            gscSelectedProperty.textContent = "Vybrana property zatim nebyla potvrzena.";
+            gscSelectedProperty.textContent = "Vybraná property zatím nebyla potvrzena.";
           }
         }
 
@@ -1026,7 +1026,7 @@
           return;
         }
         if (!properties || !properties.length) {
-          gscPropertiesList.textContent = "Nebyla nalezena zadna dostupna Search Console property.";
+          gscPropertiesList.textContent = "Nebyla nalezena žádná dostupná Search Console property.";
           return;
         }
 
@@ -1046,7 +1046,7 @@
 
         gtmStatusPanel.classList.remove("merchant-panel-success", "merchant-panel-error", "merchant-panel-muted");
         gtmStatusPanel.classList.add(payload.ok ? "merchant-panel-success" : "merchant-panel-error");
-        gtmStatusBadge.textContent = payload.ok ? "Pristup potvrzen" : "Problem";
+        gtmStatusBadge.textContent = payload.ok ? "Přístup potvrzen" : "Problém";
         gtmStatusMessage.textContent = payload.message || "";
         gtmStatusInstructions.innerHTML = "";
 
@@ -1062,13 +1062,13 @@
             const container = payload.selected_container || {};
             gtmSelectedContainer.innerHTML = `
               <div><strong>${container.name || account.name || "GTM kontejner"}</strong></div>
-              <div>Account ID: ${account.account_id || "-"}</div>
+              <div>Účet ID: ${account.account_id || "-"}</div>
               <div>Container ID: ${container.container_id || "-"}</div>
               <div>Public ID: ${container.public_id || "-"}</div>
               <div>Usage context: ${container.usage_context || "-"}</div>
             `;
           } else {
-            gtmSelectedContainer.textContent = "Vybrany GTM ucet a kontejner zatim nebyly potvrzeny.";
+            gtmSelectedContainer.textContent = "Vybraný GTM účet a kontejner zatím nebyly potvrzeny.";
           }
         }
 
@@ -1082,7 +1082,7 @@
           return;
         }
         if (!accounts || !accounts.length) {
-          gtmAccountsList.textContent = "Nebyl nalezen zadny dostupny GTM ucet.";
+          gtmAccountsList.textContent = "Nebyl nalezen žádný dostupný GTM účet.";
           return;
         }
 
@@ -1099,11 +1099,11 @@
 
           return `
             <div class="merchant-account-card">
-              <strong>${account.name || account.account_id || "GTM ucet"}</strong>
-              <span>Account ID: ${account.account_id || "-"}</span>
+              <strong>${account.name || account.account_id || "GTM účet"}</strong>
+              <span>Účet ID: ${account.account_id || "-"}</span>
               <span>Share data: ${account.share_data ? "ano" : "ne"}</span>
             </div>
-            ${hasContainers ? (containers || '<div class="merchant-empty">U tohoto uctu nebyly vraceny zadne kontejnery.</div>') : ""}
+            ${hasContainers ? (containers || '<div class="merchant-empty">U tohoto účtu nebyly vráceny žádné kontejnery.</div>') : ""}
           `;
         });
 
@@ -1119,7 +1119,7 @@
       ) {
         const originalLabel = button.textContent;
         button.disabled = true;
-        button.textContent = "Nacitam...";
+        button.textContent = "Načítám...";
         try {
           const response = await fetch(url, {
             method: "POST",
@@ -1136,8 +1136,8 @@
           } else {
             renderMerchantStatus({
               ok: false,
-              message: "Merchant API volani se nepodarilo.",
-              instructions: ["Zkontroluj lokalni server, OAuth token a Merchant API pristup."]
+              message: "Merchant API volání se nepodařilo.",
+              instructions: ["Zkontroluj lokální server, OAuth token a Merchant API přístup."]
             });
           }
         } finally {
@@ -1155,8 +1155,8 @@
             merchantPayload,
             () => renderMerchantStatus({
               ok: false,
-              message: "Merchant API volani se nepodarilo.",
-              instructions: ["Zkontroluj lokalni server, OAuth token a Merchant API pristup."]
+              message: "Merchant API volání se nepodařilo.",
+              instructions: ["Zkontroluj lokální server, OAuth token a Merchant API přístup."]
             })
           );
         });
@@ -1171,7 +1171,7 @@
               if (!payload.ok) {
                 renderMerchantStatus({
                   ok: false,
-                  message: payload.message || "Nepodarilo se nacist Merchant ucty.",
+                  message: payload.message || "Nepodařilo se načíst Merchant účty.",
                   instructions: []
                 });
                 return;
@@ -1189,8 +1189,8 @@
             merchantPayload,
             () => renderMerchantStatus({
               ok: false,
-              message: "Nepodarilo se nacist Merchant ucty.",
-              instructions: ["Zkontroluj pristup do Merchant Center a OAuth scope."]
+              message: "Nepodařilo se načíst Merchant účty.",
+              instructions: ["Zkontroluj přístup do Merchant Center a OAuth scope."]
             })
           );
         });
@@ -1205,8 +1205,8 @@
             ga4Payload,
             () => renderGa4Status({
               ok: false,
-              message: "GA4 API volani se nepodarilo.",
-              instructions: ["Zkontroluj lokalni server, OAuth token a GA4 pristup."]
+              message: "GA4 API volání se nepodařilo.",
+              instructions: ["Zkontroluj lokální server, OAuth token a GA4 přístup."]
             })
           );
         });
@@ -1221,7 +1221,7 @@
               if (!payload.ok) {
                 renderGa4Status({
                   ok: false,
-                  message: payload.message || "Nepodarilo se nacist GA4 properties.",
+                  message: payload.message || "Nepodařilo se načíst GA4 properties.",
                   instructions: []
                 });
                 return;
@@ -1238,8 +1238,8 @@
             ga4Payload,
             () => renderGa4Status({
               ok: false,
-              message: "Nepodarilo se nacist GA4 properties.",
-              instructions: ["Zkontroluj OAuth scope a pristup k GA4 property."]
+              message: "Nepodařilo se načíst GA4 properties.",
+              instructions: ["Zkontroluj OAuth scope a přístup k GA4 property."]
             })
           );
         });
@@ -1254,8 +1254,8 @@
             gscPayload,
             () => renderGscStatus({
               ok: false,
-              message: "Search Console API volani se nepodarilo.",
-              instructions: ["Zkontroluj lokalni server, OAuth token a pristup do Search Console."]
+              message: "Search Console API volání se nepodařilo.",
+              instructions: ["Zkontroluj lokální server, OAuth token a přístup do Search Console."]
             })
           );
         });
@@ -1270,7 +1270,7 @@
               if (!payload.ok) {
                 renderGscStatus({
                   ok: false,
-                  message: payload.message || "Nepodarilo se nacist Search Console properties.",
+                  message: payload.message || "Nepodařilo se načíst Search Console properties.",
                   instructions: []
                 });
                 return;
@@ -1287,8 +1287,8 @@
             gscPayload,
             () => renderGscStatus({
               ok: false,
-              message: "Nepodarilo se nacist Search Console properties.",
-              instructions: ["Zkontroluj OAuth scope a pristup k Search Console property."]
+              message: "Nepodařilo se načíst Search Console properties.",
+              instructions: ["Zkontroluj OAuth scope a přístup k Search Console property."]
             })
           );
         });
@@ -1303,8 +1303,8 @@
             gtmPayload,
             () => renderGtmStatus({
               ok: false,
-              message: "GTM API volani se nepodarilo.",
-              instructions: ["Zkontroluj lokalni server, OAuth token a pristup do Google Tag Manageru."]
+              message: "GTM API volání se nepodařilo.",
+              instructions: ["Zkontroluj lokální server, OAuth token a přístup do Google Tag Manageru."]
             })
           );
         });
@@ -1319,7 +1319,7 @@
               if (!payload.ok) {
                 renderGtmStatus({
                   ok: false,
-                  message: payload.message || "Nepodarilo se nacist GTM ucty a kontejnery.",
+                  message: payload.message || "Nepodařilo se načíst GTM účty a kontejnery.",
                   instructions: []
                 });
                 return;
@@ -1337,8 +1337,8 @@
             gtmPayload,
             () => renderGtmStatus({
               ok: false,
-              message: "Nepodarilo se nacist GTM ucty a kontejnery.",
-              instructions: ["Zkontroluj OAuth scope a pristup k GTM accountu."]
+              message: "Nepodařilo se načíst GTM účty a kontejnery.",
+              instructions: ["Zkontroluj OAuth scope a přístup k GTM účtu."]
             })
           );
         });

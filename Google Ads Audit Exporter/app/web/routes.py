@@ -17,11 +17,13 @@ from app.web.services.ga4_dashboard_service import ga4_list_properties, ga4_test
 from app.web.services.gtm_dashboard_service import gtm_list_accounts, gtm_test_connection
 from app.web.services.gsc_dashboard_service import gsc_list_properties, gsc_test_connection
 from app.web.services.mapping_service import (
+    get_context_test_job_status,
     load_mapping_state,
     parse_contexts_payload,
     run_all_context_exports,
     run_selected_context_export,
     save_mapping,
+    start_context_test_job,
     test_context_from_payload,
 )
 from app.web.services.merchant_dashboard_service import merchant_list_accounts, merchant_test_connection
@@ -61,9 +63,9 @@ def save_configuration():
     payload = parse_dashboard_form(request.form)
     try:
         save_dashboard_configuration(_project_root(), payload)
-        flash("Konfigurace byla ulozena do .env a config.yaml.", "success")
+        flash("Konfigurace byla uložena do .env a config.yaml.", "success")
     except Exception as exc:
-        flash(f"Ulozeni konfigurace selhalo: {exc}", "error")
+        flash(f"Uložení konfigurace selhalo: {exc}", "error")
     return redirect(url_for("web.dashboard"))
 
 
@@ -79,13 +81,13 @@ def run_export():
         if export_mode == "single_account":
             result = run_export_from_dashboard(_project_root(), payload)
             if result.exit_code == 0:
-                flash("Export byl dokonceny.", "success")
+                flash("Export byl dokončen.", "success")
             else:
-                flash("Export skoncil s chybou autentizace.", "error")
+                flash("Export skončil s chybou autentizace.", "error")
             run_result = result
         else:
             multi_result = run_multi_mode_export_from_dashboard(_project_root(), payload)
-            flash("Multi-context export byl dokonceny.", "success")
+            flash("Multi-context export byl dokončen.", "success")
             run_result = multi_result
         state = load_dashboard_state(_project_root())
         return render_template(
@@ -122,7 +124,7 @@ def discovery_page():
 def run_discovery_page():
     try:
         result = run_discovery(_project_root())
-        flash("Discovery bylo dokonceno a CSV byla ulozena do exports/_discovery.", "success")
+        flash("Průzkum byl dokončen a CSV byla uložena do exports/_discovery.", "success")
         return render_template(
             "discovery.html",
             state=load_dashboard_state(_project_root()),
@@ -130,7 +132,7 @@ def run_discovery_page():
             discovery_result=result,
         )
     except Exception as exc:
-        flash(f"Discovery selhalo: {exc}", "error")
+        flash(f"Průzkum selhal: {exc}", "error")
         return render_template(
             "discovery.html",
             state=load_dashboard_state(_project_root()),
@@ -159,7 +161,7 @@ def save_mapping_page():
         return jsonify(
             {
                 "ok": True,
-                "message": "Mapping byl ulozen do config.accounts.yaml.",
+                "message": "Mapování bylo uloženo do config.accounts.yaml.",
                 "contexts": mapping_state["contexts_payload"],
             }
         )
@@ -192,6 +194,25 @@ def test_mapping_context():
             context_label,
         )
         return jsonify({"ok": False, "message": str(exc)}), 500
+
+
+@web_bp.post("/mapping/test-context/start")
+def start_mapping_context_test():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = start_context_test_job(_project_root(), payload)
+        return jsonify(result), 202
+    except Exception as exc:
+        current_app.logger.exception("Mapping context test job start failed")
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.get("/mapping/test-context-status/<job_id>")
+def mapping_context_test_status(job_id: str):
+    try:
+        return jsonify(get_context_test_job_status(job_id)), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 404
 
 
 @web_bp.post("/run-context-export")

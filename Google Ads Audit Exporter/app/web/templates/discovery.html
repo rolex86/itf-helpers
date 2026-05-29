@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Discovery | Google Ads Audit Exporter</title>
+    <title>Průzkum | Google Ads Audit Exporter</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   </head>
   <body>
@@ -11,22 +11,22 @@
       <aside class="sidebar">
         <div class="brand">
           <p class="eyebrow">Multi-account vrstva</p>
-          <h1>Discovery</h1>
-          <p class="brand-copy">Vypsani dostupnych Ads uctu, GA4 properties, GSC sites, GTM kontejneru a Merchant uctu.</p>
+          <h1>Průzkum</h1>
+          <p class="brand-copy">Výpis dostupných Ads účtů, GA4 properties, GSC properties, GTM kontejnerů a Merchant účtů.</p>
         </div>
         <nav class="nav-block">
           <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
-          <a href="{{ url_for('web.discovery_page') }}">Discovery</a>
-          <a href="{{ url_for('web.mapping_page') }}">Mapping</a>
+          <a href="{{ url_for('web.discovery_page') }}">Průzkum</a>
+          <a href="{{ url_for('web.mapping_page') }}">Propojení účtů</a>
         </nav>
       </aside>
 
       <main class="content">
         <section class="hero">
           <div>
-            <p class="eyebrow">Faze 1</p>
-            <h2>Dostupne ucty a properties</h2>
-            <p>Discovery bezi read-only a uklada CSV do <code>exports/_discovery</code>. Pracuje s aktualnimi OAuth credentials ulozenymi v <code>.env</code>.</p>
+            <p class="eyebrow">Fáze 1</p>
+            <h2>Dostupné účty a properties</h2>
+            <p>Průzkum běží v režimu read-only a ukládá CSV do <code>exports/_discovery</code>. Pracuje s aktuálními OAuth credentials uloženými v <code>.env</code>.</p>
           </div>
         </section>
 
@@ -42,12 +42,12 @@
 
         <section class="panel action-panel">
           <div>
-            <h3>Spusteni discovery</h3>
-            <p>Neuklada zadne secrety do exportu. Pokud nektera sluzba selze, ostatni casti discovery se i tak ulozi.</p>
+            <h3>Spuštění průzkumu</h3>
+            <p>Neukládá žádné secrety do exportu. Pokud některá služba selže, ostatní části průzkumu se i tak uloží.</p>
           </div>
           <div class="action-row">
             <form method="post" action="{{ url_for('web.run_discovery_page') }}">
-              <button class="btn btn-primary" type="submit">Spustit discovery</button>
+              <button class="btn btn-primary" type="submit">Spustit průzkum</button>
             </form>
           </div>
         </section>
@@ -55,7 +55,7 @@
         {% if discovery_result and discovery_result.errors %}
           <section class="panel">
             <div class="panel-header">
-              <h3>Chyby discovery</h3>
+              <h3>Chyby průzkumu</h3>
             </div>
             {% for error in discovery_result.errors %}
               <div class="flash flash-error">
@@ -70,7 +70,7 @@
           'ga4_properties': 'GA4 properties',
           'gsc_sites': 'Search Console sites',
           'gtm_containers': 'GTM kontejnery',
-          'merchant_accounts': 'Merchant ucty'
+          'merchant_accounts': 'Merchant účty'
         } %}
 
         {% for key, rows in discovery_tables.items() %}
@@ -78,7 +78,7 @@
             <div class="panel-header">
               <div>
                 <h3>{{ discovery_titles.get(key, key) }}</h3>
-                <p>{{ rows | length }} zaznamu</p>
+                <p>{{ rows | length }} záznamů</p>
               </div>
             </div>
             <div class="table-wrap">
@@ -105,7 +105,7 @@
                     {% endfor %}
                   {% else %}
                     <tr>
-                      <td class="muted">Zatim tu nejsou zadna data. Spust discovery.</td>
+                      <td class="muted">Zatím tu nejsou žádná data. Spusť průzkum.</td>
                     </tr>
                   {% endif %}
                 </tbody>

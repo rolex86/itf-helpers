@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +19,11 @@ from app.accounts.context_runner import run_context_export, run_multi_context_ex
 from app.config.env_settings import load_env_config
 from app.config.settings import load_settings
 from app.web.services.discovery_service import load_discovery_tables
+
+
+LOGGER = logging.getLogger("google_ads_audit_exporter")
+_TEST_JOBS: dict[str, dict[str, Any]] = {}
+_TEST_JOBS_LOCK = threading.Lock()
 
 
 def accounts_config_path(project_root: Path) -> Path:
@@ -44,9 +52,8 @@ def _load_test_results(project_root: Path) -> dict[str, Any]:
 def _save_test_results(project_root: Path, results: dict[str, Any]) -> None:
     path = context_test_results_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"results": results}
     with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        json.dump({"results": results}, handle, ensure_ascii=False, indent=2)
 
 
 def _context_test_state(context: AccountContext, stored_result: dict[str, Any] | None) -> dict[str, Any]:
@@ -56,7 +63,7 @@ def _context_test_state(context: AccountContext, stored_result: dict[str, Any] |
             "label": "Disabled",
             "class_name": "status-disabled",
             "tested_at": stored_result.get("tested_at", "") if stored_result else "",
-            "summary": "Kontext je vypnuty a neucastni se multi-exportu.",
+            "summary": "Kontext je vypnut\u00fd a ne\u00fa\u010dastn\u00ed se multi-exportu.",
         }
     if not stored_result:
         return {
@@ -64,7 +71,7 @@ def _context_test_state(context: AccountContext, stored_result: dict[str, Any] |
             "label": "Not tested",
             "class_name": "status-unknown",
             "tested_at": "",
-            "summary": "Kontext zatim nebyl otestovany.",
+            "summary": "Kontext zat\u00edm nebyl otestovan\u00fd.",
         }
     ok = bool(stored_result.get("ok"))
     return {
@@ -97,6 +104,30 @@ def _serialize_test_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _job_snapshot(job_id: str) -> dict[str, Any] | None:
+    with _TEST_JOBS_LOCK:
+        job = _TEST_JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def _store_job(job_id: str, payload: dict[str, Any]) -> None:
+    with _TEST_JOBS_LOCK:
+        _TEST_JOBS[job_id] = payload
+
+
+def _update_job(job_id: str, **fields: Any) -> dict[str, Any] | None:
+    with _TEST_JOBS_LOCK:
+        job = _TEST_JOBS.get(job_id)
+        if job is None:
+            return None
+        job.update(fields)
+        return dict(job)
+
+
+def _service_job_entry(status: str, details: str) -> dict[str, str]:
+    return {"status": status, "details": details}
+
+
 def load_mapping_state(project_root: Path) -> dict[str, Any]:
     contexts = load_account_contexts(accounts_config_path(project_root))
     stored_results = _load_test_results(project_root)
@@ -105,7 +136,10 @@ def load_mapping_state(project_root: Path) -> dict[str, Any]:
         payload = context_to_mapping(context)
         stored_result = stored_results.get(context.key) if context.key else None
         payload["test_result"] = _serialize_test_result(stored_result) if isinstance(stored_result, dict) else None
-        payload["test_state"] = _context_test_state(context, stored_result if isinstance(stored_result, dict) else None)
+        payload["test_state"] = _context_test_state(
+            context,
+            stored_result if isinstance(stored_result, dict) else None,
+        )
         contexts_payload.append(payload)
     return {
         "contexts": contexts,
@@ -129,18 +163,52 @@ def parse_contexts_payload(payload: dict[str, Any]) -> list[AccountContext]:
         if not context.key:
             continue
         if context.key in seen_keys:
-            raise ValueError(f"Key '{context.key}' je v mappingu vicekrat.")
+            raise ValueError(f"Key '{context.key}' je v mappingu v\u00edckr\u00e1t.")
         seen_keys.add(context.key)
         contexts.append(context)
     return contexts
 
 
-def test_context_from_payload(project_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    context = context_from_mapping(payload)
+def _execute_context_test(
+    project_root: Path,
+    context: AccountContext,
+    *,
+    job_id: str | None = None,
+) -> dict[str, Any]:
     if not context.key:
-        raise ValueError("Kontext musi mit vyplneny key.")
+        raise ValueError("Kontext mus\u00ed m\u00edt vypln\u011bn\u00fd key.")
     env_config = load_env_config(project_root / ".env")
-    result = test_account_context(context=context, base_env_config=env_config)
+
+    def _progress(service_key: str, phase: str, details: str) -> None:
+        if not job_id:
+            return
+        snapshot = _job_snapshot(job_id)
+        if snapshot is None:
+            return
+        services = dict(snapshot.get("services", {}))
+        if phase == "running":
+            services[service_key] = _service_job_entry("running", details)
+            _update_job(
+                job_id,
+                services=services,
+                state="running",
+                current_service=service_key,
+                current_message=details,
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+        else:
+            services[service_key] = _service_job_entry("finished", details)
+            _update_job(
+                job_id,
+                services=services,
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+    result = test_account_context(
+        context=context,
+        base_env_config=env_config,
+        progress_callback=_progress if job_id else None,
+    )
     service_payload = {
         key: {
             "status": value.status,
@@ -153,14 +221,105 @@ def test_context_from_payload(project_root: Path, payload: dict[str, Any]) -> di
         "context_key": result.context_key,
         "context_label": result.context_label,
         "tested_at": datetime.now(timezone.utc).isoformat(),
-        "summary": "Vsechny kontroly prosly." if result.ok else "Alespon jedna kontrola skoncila problemem.",
+        "summary": (
+            "V\u0161echny kontroly pro\u0161ly."
+            if result.ok
+            else "Alespo\u0148 jedna kontrola skon\u010dila probl\u00e9mem."
+        ),
         "services": service_payload,
     }
     stored_results = _load_test_results(project_root)
     stored_results[context.key] = response
     _save_test_results(project_root, stored_results)
     response["test_state"] = _context_test_state(context, response)
+    if job_id:
+        _update_job(
+            job_id,
+            services={key: dict(value) for key, value in service_payload.items()},
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
     return response
+
+
+def test_context_from_payload(project_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    return _execute_context_test(project_root, context_from_mapping(payload))
+
+
+def start_context_test_job(project_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    context = context_from_mapping(payload)
+    if not context.key:
+        raise ValueError("Kontext mus\u00ed m\u00edt vypln\u011bn\u00fd key.")
+
+    job_id = uuid.uuid4().hex
+    now = datetime.now(timezone.utc).isoformat()
+    _store_job(
+        job_id,
+        {
+            "job_id": job_id,
+            "state": "queued",
+            "context_key": context.key,
+            "context_label": context.label,
+            "services": {},
+            "current_service": "",
+            "current_message": "Test kontextu je ve front\u011b.",
+            "created_at": now,
+            "updated_at": now,
+            "result": None,
+            "error": "",
+        },
+    )
+
+    def _runner() -> None:
+        LOGGER.info("Context test job queued job_id=%s context_key=%s", job_id, context.key)
+        _update_job(
+            job_id,
+            state="running",
+            current_message="Test kontextu byl spu\u0161t\u011bn na serveru.",
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        try:
+            result = _execute_context_test(project_root, context, job_id=job_id)
+            _update_job(
+                job_id,
+                state="finished",
+                current_service="",
+                current_message="Test kontextu byl dokon\u010den.",
+                updated_at=datetime.now(timezone.utc).isoformat(),
+                result=result,
+            )
+            LOGGER.info(
+                "Context test job finished job_id=%s context_key=%s ok=%s",
+                job_id,
+                context.key,
+                result.get("ok"),
+            )
+        except Exception as exc:
+            LOGGER.exception("Context test job failed job_id=%s context_key=%s", job_id, context.key)
+            _update_job(
+                job_id,
+                state="error",
+                current_service="",
+                current_message="Test kontextu selhal.",
+                updated_at=datetime.now(timezone.utc).isoformat(),
+                error=str(exc),
+            )
+
+    thread = threading.Thread(target=_runner, daemon=True, name=f"context-test-{context.key}")
+    thread.start()
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "context_key": context.key,
+        "context_label": context.label,
+        "state": "queued",
+    }
+
+
+def get_context_test_job_status(job_id: str) -> dict[str, Any]:
+    snapshot = _job_snapshot(job_id)
+    if snapshot is None:
+        raise ValueError("Testovac\u00ed job nebyl nalezen.")
+    return snapshot
 
 
 def run_selected_context_export(

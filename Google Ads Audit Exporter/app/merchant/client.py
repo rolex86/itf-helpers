@@ -126,7 +126,7 @@ class MerchantApiClient:
         if not self.config.enabled:
             return MerchantConnectionResult(
                 ok=False,
-                message="Merchant Center modul je vypnuty.",
+                message="Merchant Center modul je vypnutý.",
                 instructions=[
                     "V .env nastav GOOGLE_MERCHANT_ENABLED=true.",
                     "Vypln Merchant account ID a pouzij OAuth refresh token se scope https://www.googleapis.com/auth/content.",
@@ -153,7 +153,7 @@ class MerchantApiClient:
             services = self.list_account_services(account_id)
             return MerchantConnectionResult(
                 ok=True,
-                message="Pristup do Merchant Center byl potvrzen.",
+                message="Přístup do Merchant Center byl potvrzen.",
                 instructions=[],
                 selected_account=selected_account,
                 available_accounts=available_accounts,
@@ -184,22 +184,22 @@ class MerchantApiClient:
     def _build_instructions(self, exc: MerchantApiError) -> list[str]:
         if exc.status_code == 401:
             return [
-                "OAuth refresh token neni platny nebo chybi pristupovy scope.",
+                "OAuth refresh token nen\u00ed platn\u00fd nebo chyb\u00ed p\u0159\u00edstupov\u00fd scope.",
                 "Vygeneruj refresh token se scope https://www.googleapis.com/auth/content.",
             ]
         if exc.status_code == 403:
             return [
-                "OAuth token nema pristup k Merchant Center uctu nebo chybi opravneni.",
-                "Zkontroluj sdileni Merchant uctu pro dany Google ucet a scope https://www.googleapis.com/auth/content.",
+                "OAuth token nem\u00e1 p\u0159\u00edstup k Merchant Center \u00fa\u010dtu nebo chyb\u00ed opr\u00e1vn\u011bn\u00ed.",
+                "Zkontroluj sd\u00edlen\u00ed Merchant \u00fa\u010dtu pro dan\u00fd Google \u00fa\u010det a scope https://www.googleapis.com/auth/content.",
             ]
         if exc.status_code == 404:
             return [
-                "Merchant account ID nebyl nalezen nebo neni pristupny z aktualniho Google uctu.",
-                "Over MERCHANT_CENTER_ACCOUNT_ID a zkus vypsat dostupne ucty.",
+                "Merchant account ID nebyl nalezen nebo nen\u00ed p\u0159\u00edstupn\u00fd z aktu\u00e1ln\u00edho Google \u00fa\u010dtu.",
+                "Ov\u011b\u0159 MERCHANT_CENTER_ACCOUNT_ID a zkus vypsat dostupn\u00e9 \u00fa\u010dty.",
             ]
         return [
-            "Over Merchant API pristup v Google Cloud projektu.",
-            "Zkus nejdriv vypsat dostupne Merchant ucty a zkontroluj scope https://www.googleapis.com/auth/content.",
+            "Ov\u011b\u0159 Merchant API p\u0159\u00edstup v Google Cloud projektu.",
+            "Zkus nejd\u0159\u00edv vypsat dostupn\u00e9 Merchant \u00fa\u010dty a zkontroluj scope https://www.googleapis.com/auth/content.",
         ]
 
     def _access_token(self) -> str:

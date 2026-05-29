@@ -15,52 +15,52 @@ from app.web.services.export_history import ExportHistoryItem, list_export_histo
 
 PRESET_OPTIONS = ("LAST_30_DAYS", "LAST_90_DAYS", "LAST_365_DAYS", "CUSTOM")
 PRESET_LABELS = {
-    "LAST_30_DAYS": "Poslednich 30 dni",
-    "LAST_90_DAYS": "Poslednich 90 dni",
-    "LAST_365_DAYS": "Poslednich 365 dni",
-    "CUSTOM": "Vlastni obdobi",
+    "LAST_30_DAYS": "Posledních 30 dní",
+    "LAST_90_DAYS": "Posledních 90 dní",
+    "LAST_365_DAYS": "Posledních 365 dní",
+    "CUSTOM": "Vlastní období",
 }
 
 REPORT_LABELS = {
-    "account": "Ucet",
-    "account_diagnostics": "Diagnostika uctu",
-    "linked_accounts": "Propojene sluzby",
-    "campaigns": "Kampane",
-    "campaigns_monthly": "Kampane po mesicich",
+    "account": "Účet",
+    "account_diagnostics": "Diagnostika účtu",
+    "linked_accounts": "Propojené služby",
+    "campaigns": "Kampaně",
+    "campaigns_monthly": "Kampaně po měsících",
     "ad_groups": "Sestavy",
-    "keywords": "Klicova slova",
-    "search_terms": "Vyhledavaci dotazy",
+    "keywords": "Klíčová slova",
+    "search_terms": "Vyhledávací dotazy",
     "ads": "Reklamy",
     "assets": "Assety",
-    "devices": "Zarizeni",
+    "devices": "Zařízení",
     "locations": "Lokality",
-    "landing_pages": "Cilove stranky",
+    "landing_pages": "Cílové stránky",
     "shopping_products": "Shopping produkty",
     "shopping_products_summary": "Shopping produkty souhrn",
     "merchant_products": "Merchant produkty",
-    "merchant_product_issues": "Merchant problemy produktu",
+    "merchant_product_issues": "Merchant problémy produktů",
     "merchant_product_status_summary": "Merchant status summary",
-    "product_optimization": "Produktova optimalizace",
-    "product_feed_issues_with_spend": "Feed problemy se spendem",
-    "product_custom_label_performance": "Vykon custom labelu",
+    "product_optimization": "Produktová optimalizace",
+    "product_feed_issues_with_spend": "Feed problémy se spendem",
+    "product_custom_label_performance": "Výkon custom labelů",
     "ga4_landing_pages": "GA4 landing pages",
-    "landing_page_diagnostics": "Diagnostika cilovych stranek",
+    "landing_page_diagnostics": "Diagnostika cílových stránek",
     "ga4_ecommerce_funnel": "GA4 ecommerce funnel",
     "gsc_queries": "GSC queries",
     "gsc_pages": "GSC pages",
     "gsc_page_query": "GSC page-query",
-    "gsc_opportunities": "GSC prilezitosti",
+    "gsc_opportunities": "GSC příležitosti",
     "pagespeed_landing_pages": "PageSpeed landing pages",
     "gtm_tags": "GTM tagy",
     "gtm_triggers": "GTM triggery",
-    "gtm_variables": "GTM promenne",
+    "gtm_variables": "GTM proměnné",
     "gtm_versions": "GTM verze",
-    "measurement_diagnostics": "Diagnostika mereni",
-    "google_ads_recommendations": "Google Ads doporuceni",
+    "measurement_diagnostics": "Diagnostika měření",
+    "google_ads_recommendations": "Google Ads doporučení",
     "conversion_actions": "Konverze",
-    "pmax_campaigns": "PMax kampane",
+    "pmax_campaigns": "PMax kampaně",
     "pmax_asset_groups": "PMax asset groupy",
-    "change_history": "Historie zmen",
+    "change_history": "Historie změn",
 }
 
 
@@ -115,11 +115,11 @@ def run_multi_mode_export_from_dashboard(project_root: Path, payload: dict[str, 
 
     if export_mode == "selected_context":
         if not selected_context_key:
-            raise ValueError("Neni vybran zadny kontext pro selected-context export.")
+            raise ValueError("Není vybraný žádný kontext pro export vybraného kontextu.")
         return run_selected_context_export(project_root, context_key=selected_context_key)
     if export_mode == "all_enabled_contexts":
         return run_all_context_exports(project_root)
-    raise ValueError(f"Neznamy export mode: {export_mode}")
+    raise ValueError(f"Neznámý režim exportu: {export_mode}")
 
 
 def default_reports_payload() -> dict[str, bool]:

@@ -40,7 +40,7 @@ def gtm_list_accounts(payload: dict[str, Any]) -> dict[str, Any]:
     if not client.is_enabled():
         return {
             "ok": False,
-            "message": "GTM modul je vypnuty.",
+            "message": "GTM modul je vypnutý.",
             "accounts": [],
         }
 
@@ -58,7 +58,7 @@ def gtm_list_accounts(payload: dict[str, Any]) -> dict[str, Any]:
             )
         return {
             "ok": True,
-            "message": f"Nalezeno {len(enriched_accounts)} GTM uctu.",
+            "message": f"Nalezeno {len(enriched_accounts)} GTM účtů.",
             "accounts": enriched_accounts,
         }
     except GtmApiError as exc:

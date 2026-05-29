@@ -115,7 +115,7 @@ class SearchConsoleApiClient:
         if not self.config.enabled:
             return SearchConsoleConnectionResult(
                 ok=False,
-                message="Search Console modul je vypnuty.",
+                message="Search Console modul je vypnutý.",
                 instructions=[
                     "V .env nastav GSC_ENABLED=true.",
                     "Vypln GSC_SITE_URL a pouzij OAuth refresh token se scope https://www.googleapis.com/auth/webmasters.readonly.",
@@ -141,7 +141,7 @@ class SearchConsoleApiClient:
             selected = next((site for site in sites if site.get("site_url") == self.config.site_url), None)
             if selected is None:
                 raise SearchConsoleApiError(
-                    "Search Console property nebyla mezi dostupnymi properties nalezena.",
+                    "Search Console property nebyla mezi dostupnými properties nalezena.",
                     status_code=404,
                 )
             self.query_search_analytics(
@@ -152,7 +152,7 @@ class SearchConsoleApiClient:
             )
             return SearchConsoleConnectionResult(
                 ok=True,
-                message="Pristup do Search Console property byl potvrzen.",
+                message="Přístup do Search Console property byl potvrzen.",
                 instructions=[],
                 selected_property=selected,
                 available_properties=sites,
@@ -169,21 +169,21 @@ class SearchConsoleApiClient:
     def _build_instructions(self, exc: SearchConsoleApiError) -> list[str]:
         if exc.status_code == 401:
             return [
-                "OAuth refresh token neni platny nebo nema Search Console scope.",
+                "OAuth refresh token nen\u00ed platn\u00fd nebo nem\u00e1 Search Console scope.",
                 "Vygeneruj refresh token se scope https://www.googleapis.com/auth/webmasters.readonly.",
             ]
         if exc.status_code == 403:
             return [
-                "Google ucet nema pristup k dane Search Console property.",
-                "Zkontroluj opravneni v Search Console a scope https://www.googleapis.com/auth/webmasters.readonly.",
+                "Google \u00fa\u010det nem\u00e1 p\u0159\u00edstup k dan\u00e9 Search Console property.",
+                "Zkontroluj opr\u00e1vn\u011bn\u00ed v Search Console a scope https://www.googleapis.com/auth/webmasters.readonly.",
             ]
         if exc.status_code == 404:
             return [
-                "Property nebyla nalezena mezi dostupnymi sites.",
-                "Over GSC_SITE_URL a zkus nejdriv vypsat dostupne properties v UI.",
+                "Property nebyla nalezena mezi dostupn\u00fdmi sites.",
+                "Ov\u011b\u0159 GSC_SITE_URL a zkus nejd\u0159\u00edv vypsat dostupn\u00e9 properties v UI.",
             ]
         return [
-            "Over Search Console API pristup v Google Cloud projektu.",
+            "Ov\u011b\u0159 Search Console API p\u0159\u00edstup v Google Cloud projektu.",
             "Zkontroluj scope https://www.googleapis.com/auth/webmasters.readonly.",
         ]
 
