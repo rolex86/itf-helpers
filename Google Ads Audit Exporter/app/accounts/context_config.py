@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from app.accounts.domain_filter import extract_domains_from_gsc_site_url, normalize_source_domains, source_domains_display
 from app.config.env_settings import GoogleAdsEnvConfig
 from app.config.settings import AppSettings
 
@@ -23,15 +24,30 @@ class AccountContext:
     gtm_container_id: str = ""
     pagespeed_enabled: bool = True
     enabled: bool = True
+    source_domains: list[str] = field(default_factory=list)
 
     @property
     def source_domain(self) -> str:
-        site = str(self.gsc_site_url or "").strip()
-        if site.startswith("http://") or site.startswith("https://"):
-            return site.split("://", 1)[1].rstrip("/")
-        if site.startswith("sc-domain:"):
-            return site.replace("sc-domain:", "", 1).strip()
-        return site
+        if self.source_domains:
+            return self.source_domains[0]
+        suggested = self.suggested_source_domains
+        return suggested[0] if suggested else ""
+
+    @property
+    def effective_source_domains(self) -> list[str]:
+        return list(self.source_domains or self.suggested_source_domains)
+
+    @property
+    def source_domains_text(self) -> str:
+        return "\n".join(self.source_domains)
+
+    @property
+    def source_domains_display(self) -> str:
+        return source_domains_display(self.effective_source_domains)
+
+    @property
+    def suggested_source_domains(self) -> list[str]:
+        return extract_domains_from_gsc_site_url(self.gsc_site_url)
 
 
 DEFAULT_ACCOUNTS_PAYLOAD = {
@@ -60,11 +76,14 @@ def context_from_mapping(raw: dict[str, Any]) -> AccountContext:
         gtm_container_id=_normalize_id(raw.get("gtm_container_id")),
         pagespeed_enabled=bool(raw.get("pagespeed_enabled", True)),
         enabled=bool(raw.get("enabled", True)),
+        source_domains=normalize_source_domains(raw.get("source_domains")),
     )
 
 
 def context_to_mapping(context: AccountContext) -> dict[str, Any]:
-    return asdict(context)
+    payload = asdict(context)
+    payload["source_domains"] = list(context.source_domains)
+    return payload
 
 
 def load_account_contexts(config_path: Path) -> list[AccountContext]:

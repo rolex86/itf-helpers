@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import pandas as pd
 
 from app.accounts.context_config import AccountContext
+from app.accounts.domain_filter import extract_domain_from_url, source_domains_display, url_matches_source_domains
 from app.export.csv_exporter import export_csv
 from app.export.metadata_exporter import write_json
 from app.export.workflow import ExportExecutionResult
@@ -40,36 +41,57 @@ def _safe_float(value: object) -> float:
         return 0.0
 
 
-def _context_columns(context: AccountContext) -> dict[str, object]:
+def _context_columns(context: AccountContext, result: ExportExecutionResult) -> dict[str, object]:
+    metadata = result.context_metadata or {}
+    source_domains = list(metadata.get("source_domains", []) or context.effective_source_domains)
     return {
         "context_key": context.key,
         "context_label": context.label,
         "google_ads_customer_id": context.google_ads_customer_id,
-        "source_domain": context.source_domain,
+        "source_domain": source_domains[0] if source_domains else context.source_domain,
+        "source_domains": source_domains_display(source_domains),
+        "domain_filter_status": str(metadata.get("domain_filter_status", "") or "unknown"),
     }
 
 
-def _append_context(df: pd.DataFrame, context: AccountContext) -> pd.DataFrame:
+def _source_domain_match(url: object, context: AccountContext, result: ExportExecutionResult) -> str:
+    metadata = result.context_metadata or {}
+    source_domains = list(metadata.get("source_domains", []) or context.effective_source_domains)
+    if not source_domains:
+        return "unknown"
+    host = extract_domain_from_url(url)
+    if not host:
+        return "unknown"
+    return "matched" if url_matches_source_domains(url, source_domains) else "mismatch"
+
+
+def _append_context(df: pd.DataFrame, context: AccountContext, result: ExportExecutionResult) -> pd.DataFrame:
     if df.empty:
         return df.copy()
     enriched = df.copy()
-    for key, value in _context_columns(context).items():
+    context_values = _context_columns(context, result)
+    for key, value in context_values.items():
         enriched[key] = value
+    if "source_domain_match" not in enriched.columns:
+        enriched["source_domain_match"] = "unknown"
     return enriched
 
 
 def build_cross_account_summary(bundles: list[ContextExportBundle]) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for bundle in bundles:
+        metadata = bundle.result.context_metadata or {}
         campaigns = bundle.result.datasets.get("campaigns", pd.DataFrame())
         landing_pages = bundle.result.datasets.get("landing_pages", pd.DataFrame())
         rows.append(
             {
-                **_context_columns(bundle.context),
+                **_context_columns(bundle.context, bundle.result),
                 "campaign_count": int(campaigns["campaign_id"].astype(str).nunique())
                 if not campaigns.empty and "campaign_id" in campaigns.columns
                 else 0,
                 "landing_page_count": int(len(landing_pages)),
+                "matched_landing_pages": int(metadata.get("matched_landing_pages", 0) or 0),
+                "matched_campaigns": int(metadata.get("matched_campaigns", 0) or 0),
                 "error_count": len(bundle.result.errors),
                 "fallback_report_count": bundle.result.fallback_report_count,
                 "date_from": bundle.result.resolved_range.date_from.isoformat(),
@@ -77,29 +99,24 @@ def build_cross_account_summary(bundles: list[ContextExportBundle]) -> pd.DataFr
                 "export_path": str(bundle.result.export_paths.base_dir),
             }
         )
-    return pd.DataFrame(
-        rows,
-        columns=[
-            "context_key",
-            "context_label",
-            "google_ads_customer_id",
-            "source_domain",
-            "campaign_count",
-            "landing_page_count",
-            "error_count",
-            "fallback_report_count",
-            "date_from",
-            "date_to",
-            "export_path",
-        ],
-    )
+    return pd.DataFrame(rows)
 
 
 def build_cross_campaigns(bundles: list[ContextExportBundle]) -> pd.DataFrame:
-    frames = [_append_context(bundle.result.datasets.get("campaigns", pd.DataFrame()), bundle.context) for bundle in bundles]
-    if any(not frame.empty for frame in frames):
-        return pd.concat([frame for frame in frames if not frame.empty], ignore_index=True)
-    return pd.DataFrame(columns=["context_key", "context_label", "google_ads_customer_id", "source_domain"])
+    rows: list[pd.DataFrame] = []
+    for bundle in bundles:
+        frame = bundle.result.datasets.get("campaigns", pd.DataFrame()).copy()
+        if frame.empty:
+            continue
+        metadata = bundle.result.context_metadata or {}
+        frame = _append_context(frame, bundle.context, bundle.result)
+        frame["included_by_campaign_domain_match"] = "yes" if metadata.get("matched_campaigns", 0) else "no"
+        frame["matched_landing_page_count"] = int(metadata.get("matched_landing_pages", 0) or 0)
+        frame["matched_source_domains"] = source_domains_display(
+            list(metadata.get("source_domains", []) or bundle.context.effective_source_domains)
+        )
+        rows.append(frame)
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
 
 def build_cross_landing_pages(bundles: list[ContextExportBundle]) -> pd.DataFrame:
@@ -158,6 +175,7 @@ def build_cross_landing_pages(bundles: list[ContextExportBundle]) -> pd.DataFram
         )
 
         for _, row in base.iterrows():
+            landing_page_url = row.get("landing_page_url") or row.get("expanded_final_url") or ""
             cost_micros = _safe_float(row.get("cost_micros"))
             conversions = _safe_float(row.get("conversions"))
             diagnosis = str(row.get("diagnosis") or row.get("note") or "ok")
@@ -169,8 +187,9 @@ def build_cross_landing_pages(bundles: list[ContextExportBundle]) -> pd.DataFram
 
             rows.append(
                 {
-                    **_context_columns(context),
-                    "landing_page_url": row.get("landing_page_url") or row.get("expanded_final_url") or "",
+                    **_context_columns(context, bundle.result),
+                    "source_domain_match": _source_domain_match(landing_page_url, context, bundle.result),
+                    "landing_page_url": landing_page_url,
                     "landing_page_path": row.get("landing_page_path", ""),
                     "cost_micros": cost_micros,
                     "clicks": _safe_float(row.get("clicks")),
@@ -186,29 +205,14 @@ def build_cross_landing_pages(bundles: list[ContextExportBundle]) -> pd.DataFram
                     "priority": priority,
                 }
             )
-    return pd.DataFrame(
-        rows,
-        columns=[
-            "context_key",
-            "context_label",
-            "google_ads_customer_id",
-            "source_domain",
-            "landing_page_url",
-            "landing_page_path",
-            "cost_micros",
-            "clicks",
-            "conversions",
-            "conversions_value",
-            "ga4_sessions",
-            "ga4_engagement_rate",
-            "gsc_clicks",
-            "gsc_impressions",
-            "pagespeed_mobile_score",
-            "pagespeed_desktop_score",
-            "diagnosis",
-            "priority",
-        ],
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    mismatch_mask = (
+        frame["domain_filter_status"].astype(str).str.lower().eq("filtered")
+        & frame["source_domain_match"].astype(str).str.lower().eq("mismatch")
     )
+    return frame.loc[~mismatch_mask].reset_index(drop=True)
 
 
 def build_cross_product_optimization(bundles: list[ContextExportBundle]) -> pd.DataFrame:
@@ -243,7 +247,8 @@ def build_cross_product_optimization(bundles: list[ContextExportBundle]) -> pd.D
             flag = flag_lookup.get(item_id, {})
             rows.append(
                 {
-                    **_context_columns(context),
+                    **_context_columns(context, bundle.result),
+                    "source_domain_match": "matched",
                     "merchant_account_id": context.merchant_account_id,
                     "product_item_id": item_id,
                     "product_title": row.get("product_title") or row.get("title") or "",
@@ -258,27 +263,7 @@ def build_cross_product_optimization(bundles: list[ContextExportBundle]) -> pd.D
                     "severity": flag.get("severity", ""),
                 }
             )
-    return pd.DataFrame(
-        rows,
-        columns=[
-            "context_key",
-            "context_label",
-            "google_ads_customer_id",
-            "source_domain",
-            "merchant_account_id",
-            "product_item_id",
-            "product_title",
-            "custom_label_0",
-            "cost_micros",
-            "clicks",
-            "conversions",
-            "conversions_value",
-            "merchant_issue_count",
-            "availability",
-            "optimization_flag",
-            "severity",
-        ],
-    )
+    return pd.DataFrame(rows)
 
 
 def build_cross_feed_issues(bundles: list[ContextExportBundle]) -> pd.DataFrame:
@@ -287,31 +272,59 @@ def build_cross_feed_issues(bundles: list[ContextExportBundle]) -> pd.DataFrame:
         frame = bundle.result.datasets.get("product_feed_issues_with_spend", pd.DataFrame())
         if frame.empty:
             frame = bundle.result.datasets.get("merchant_product_issues", pd.DataFrame())
-        frame = _append_context(frame, bundle.context)
+        frame = _append_context(frame, bundle.context, bundle.result)
         if not frame.empty:
+            frame["source_domain_match"] = "matched"
             frames.append(frame)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["context_key", "context_label", "google_ads_customer_id", "source_domain"])
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def build_cross_ga4_funnel(bundles: list[ContextExportBundle]) -> pd.DataFrame:
-    frames = [_append_context(bundle.result.datasets.get("ga4_ecommerce_funnel", pd.DataFrame()), bundle.context) for bundle in bundles]
-    if any(not frame.empty for frame in frames):
-        return pd.concat([frame for frame in frames if not frame.empty], ignore_index=True)
-    return pd.DataFrame(columns=["context_key", "context_label", "google_ads_customer_id", "source_domain"])
+    frames = []
+    for bundle in bundles:
+        frame = _append_context(bundle.result.datasets.get("ga4_ecommerce_funnel", pd.DataFrame()), bundle.context, bundle.result)
+        if not frame.empty:
+            frame["source_domain_match"] = "matched"
+            frames.append(frame)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def build_cross_gsc_opportunities(bundles: list[ContextExportBundle]) -> pd.DataFrame:
-    frames = [_append_context(bundle.result.datasets.get("gsc_opportunities", pd.DataFrame()), bundle.context) for bundle in bundles]
-    if any(not frame.empty for frame in frames):
-        return pd.concat([frame for frame in frames if not frame.empty], ignore_index=True)
-    return pd.DataFrame(columns=["context_key", "context_label", "google_ads_customer_id", "source_domain"])
+    frames = []
+    for bundle in bundles:
+        frame = _append_context(bundle.result.datasets.get("gsc_opportunities", pd.DataFrame()), bundle.context, bundle.result)
+        if not frame.empty:
+            page_column = "parent_page" if "parent_page" in frame.columns else ""
+            if page_column:
+                frame["source_domain_match"] = frame[page_column].apply(
+                    lambda value: _source_domain_match(value, bundle.context, bundle.result)
+                )
+            else:
+                frame["source_domain_match"] = "unknown"
+            frames.append(frame)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def build_cross_pagespeed(bundles: list[ContextExportBundle]) -> pd.DataFrame:
-    frames = [_append_context(bundle.result.datasets.get("pagespeed_landing_pages", pd.DataFrame()), bundle.context) for bundle in bundles]
-    if any(not frame.empty for frame in frames):
-        return pd.concat([frame for frame in frames if not frame.empty], ignore_index=True)
-    return pd.DataFrame(columns=["context_key", "context_label", "google_ads_customer_id", "source_domain"])
+    frames = []
+    for bundle in bundles:
+        frame = _append_context(bundle.result.datasets.get("pagespeed_landing_pages", pd.DataFrame()), bundle.context, bundle.result)
+        if not frame.empty:
+            if "url" in frame.columns:
+                frame["source_domain_match"] = frame["url"].apply(
+                    lambda value: _source_domain_match(value, bundle.context, bundle.result)
+                )
+            else:
+                frame["source_domain_match"] = "unknown"
+            frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    frame = pd.concat(frames, ignore_index=True)
+    mismatch_mask = (
+        frame["domain_filter_status"].astype(str).str.lower().eq("filtered")
+        & frame["source_domain_match"].astype(str).str.lower().eq("mismatch")
+    )
+    return frame.loc[~mismatch_mask].reset_index(drop=True)
 
 
 def build_cross_measurement_diagnostics(bundles: list[ContextExportBundle]) -> pd.DataFrame:
@@ -320,34 +333,20 @@ def build_cross_measurement_diagnostics(bundles: list[ContextExportBundle]) -> p
         frame = bundle.result.datasets.get("measurement_diagnostics", pd.DataFrame())
         if frame.empty:
             continue
+        context_values = _context_columns(bundle.context, bundle.result)
         for _, row in frame.iterrows():
             rows.append(
                 {
-                    "context_key": bundle.context.key,
-                    "context_label": bundle.context.label,
-                    "google_ads_customer_id": bundle.context.google_ads_customer_id,
-                    "source_domain": bundle.context.source_domain,
-                    "domain": bundle.context.source_domain,
+                    **context_values,
+                    "source_domain_match": "matched",
+                    "domain": context_values["source_domain"],
                     "gtm_container_id": bundle.context.gtm_container_id,
                     "issue_key": row.get("diagnostic_key", ""),
                     "status": row.get("status", ""),
                     "details": row.get("details", ""),
                 }
             )
-    return pd.DataFrame(
-        rows,
-        columns=[
-            "context_key",
-            "context_label",
-            "google_ads_customer_id",
-            "source_domain",
-            "domain",
-            "gtm_container_id",
-            "issue_key",
-            "status",
-            "details",
-        ],
-    )
+    return pd.DataFrame(rows)
 
 
 def write_cross_account_exports(
@@ -433,6 +432,8 @@ def write_cross_account_exports(
                     "label": bundle.context.label,
                     "google_ads_customer_id": bundle.context.google_ads_customer_id,
                     "source_domain": bundle.context.source_domain,
+                    "source_domains": list(bundle.result.context_metadata.get("source_domains", []) or bundle.context.effective_source_domains),
+                    "domain_filter_status": bundle.result.context_metadata.get("domain_filter_status", "unknown"),
                 },
                 "export_path": str(bundle.result.export_paths.base_dir),
                 "error_count": len(bundle.result.errors),

@@ -92,6 +92,26 @@ class Ga4ApiClient:
             params["pageToken"] = next_token
         return items
 
+    def list_property_data_streams(self, property_id: str | None = None) -> list[dict[str, Any]]:
+        target_property = property_id or self.config.property_id
+        payload = self._get_json(
+            f"https://analyticsadmin.googleapis.com/v1alpha/properties/{target_property}/dataStreams"
+        )
+        rows = payload.get("dataStreams", []) or []
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            web_stream = row.get("webStreamData", {}) or {}
+            items.append(
+                {
+                    "name": row.get("name", ""),
+                    "display_name": row.get("displayName", ""),
+                    "type": row.get("type", ""),
+                    "default_uri": web_stream.get("defaultUri", ""),
+                    "measurement_id": web_stream.get("measurementId", ""),
+                }
+            )
+        return items
+
     def run_report(
         self,
         *,

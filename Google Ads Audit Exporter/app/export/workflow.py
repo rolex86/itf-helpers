@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from app.accounts.domain_filter import apply_context_domain_filters, source_domains_display
 from app.audit.basic_flags import build_basic_flags
 from app.auth.google_ads_client import build_google_ads_client
 from app.config.env_settings import GoogleAdsEnvConfig, load_env_config
@@ -116,14 +117,27 @@ def _build_summary_rows(
     ]
 
     if context_metadata:
-        for key in ("context_key", "context_label", "source_domain", "export_mode"):
+        for key in (
+            "context_key",
+            "context_label",
+            "source_domain",
+            "source_domains",
+            "export_mode",
+            "domain_filter_status",
+            "matched_landing_pages",
+            "matched_campaigns",
+        ):
             if not context_metadata.get(key):
                 continue
             rows.append(
                 {
                     "section": "context",
                     "name": key,
-                    "value": context_metadata.get(key, ""),
+                    "value": (
+                        source_domains_display(context_metadata.get(key, []))
+                        if key == "source_domains"
+                        else context_metadata.get(key, "")
+                    ),
                     "details": "",
                     "status": "ok",
                     "rows": "",
@@ -165,6 +179,113 @@ def _persist_metadata(export_paths: ExportPaths, state: ExportRunState, enabled:
     write_json(export_paths.metadata_dir / "account_info.json", state.account_info)
     write_json(export_paths.metadata_dir / "query_log.json", state.query_log)
     write_json(export_paths.metadata_dir / "errors.json", state.errors)
+
+
+def _apply_context_domain_filtering(
+    *,
+    logger,
+    state: ExportRunState,
+    context_metadata: dict[str, Any] | None,
+) -> None:
+    if not context_metadata:
+        return
+
+    source_domains = context_metadata.get("source_domains", []) or []
+    if not source_domains:
+        warning = (
+            "Kontext nema nastavene source_domains. Google Ads / PageSpeed data nemusi byt domenove oddelena."
+        )
+        context_metadata["domain_filter_status"] = "missing_source_domains"
+        context_metadata["matched_landing_pages"] = int(len(state.datasets.get("landing_pages", pd.DataFrame())))
+        context_metadata["matched_campaigns"] = 0
+        logger.warning("WARNING context=%s source_domains missing", context_metadata.get("context_key", ""))
+        state.report_rows.append(
+            {
+                "section": "warning",
+                "name": "source_domains",
+                "value": warning,
+                "details": "",
+                "status": "warning",
+                "rows": "",
+            }
+        )
+        return
+
+    logger.info(
+        "Context key=%s label=%s",
+        context_metadata.get("context_key", ""),
+        context_metadata.get("context_label", ""),
+    )
+    logger.info("Context source_domains=%s", source_domains_display(source_domains))
+    filter_result = apply_context_domain_filters(state.datasets, source_domains)
+    context_metadata["source_domains"] = filter_result.source_domains
+    context_metadata["source_domain"] = filter_result.source_domains[0] if filter_result.source_domains else ""
+    context_metadata["domain_filter_status"] = filter_result.status
+    context_metadata["matched_landing_pages"] = filter_result.landing_pages_after
+    context_metadata["matched_campaigns"] = filter_result.matched_campaign_count
+
+    logger.info("Google Ads domain filtering:")
+    logger.info(
+        "landing_pages before=%s after=%s",
+        filter_result.landing_pages_before,
+        filter_result.landing_pages_after,
+    )
+    logger.info(
+        "derived campaign_ids=%s",
+        ",".join(sorted(filter_result.matched_campaign_ids)) if filter_result.matched_campaign_ids else "",
+    )
+    for key in (
+        "campaigns",
+        "campaigns_monthly",
+        "ad_groups",
+        "keywords",
+        "search_terms",
+        "ads",
+        "assets",
+        "devices",
+        "locations",
+        "shopping_products",
+        "shopping_products_summary",
+        "pmax_campaigns",
+        "pmax_asset_groups",
+        "google_ads_recommendations",
+    ):
+        stats = filter_result.dataset_stats.get(key)
+        if not stats:
+            continue
+        existing_row = next((row for row in state.report_rows if row.get("name") == key), None)
+        if existing_row is not None:
+            existing_row["rows"] = stats["after"]
+            note = (
+                "Campaign included because at least one landing page matched context source_domains."
+            )
+            details = str(existing_row.get("details") or "")
+            if note not in details:
+                existing_row["details"] = f"{details} | {note}".strip(" |")
+        if stats["before"] == stats["after"]:
+            continue
+        logger.info("%s before=%s after=%s", key, stats["before"], stats["after"])
+
+    landing_pages_row = next((row for row in state.report_rows if row.get("name") == "landing_pages"), None)
+    if landing_pages_row is not None:
+        landing_pages_row["rows"] = filter_result.landing_pages_after
+
+    for warning in filter_result.warnings:
+        logger.warning(
+            "WARNING context=%s %s",
+            context_metadata.get("context_key", ""),
+            warning,
+        )
+        state.report_rows.append(
+            {
+                "section": "warning",
+                "name": "source_domains",
+                "value": warning,
+                "details": "",
+                "status": "warning",
+                "rows": "",
+            }
+        )
 
 
 def _record_auth_failure(state: ExportRunState, message: str) -> None:
@@ -407,6 +528,12 @@ def execute_export_with_overrides(
                 message=str(exc),
             )
 
+    _apply_context_domain_filtering(
+        logger=logger,
+        state=state,
+        context_metadata=context_metadata,
+    )
+
     flags_df = build_basic_flags(
         campaigns=state.datasets.get("campaigns", empty_report_frame(get_report_definition("campaigns"))),
         keywords=state.datasets.get("keywords", empty_report_frame(get_report_definition("keywords"))),
@@ -500,6 +627,12 @@ def execute_export_with_overrides(
     logger.info("Finished synthetic module=search_console")
 
     logger.info("Starting synthetic module=pagespeed")
+    if context_metadata:
+        logger.info(
+            "PageSpeed selected from filtered landing_pages only status=%s matched_landing_pages=%s",
+            context_metadata.get("domain_filter_status", ""),
+            context_metadata.get("matched_landing_pages", ""),
+        )
     pagespeed_result = build_pagespeed_export(
         env_config=env_config,
         pagespeed_config=settings.pagespeed,

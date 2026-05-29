@@ -26,7 +26,7 @@
           <div>
             <p class="eyebrow">Fáze 2 až 4</p>
             <h2>Propojení účtů a kontextové exporty</h2>
-            <p>Tabulka ukazuje všechny uložené account contexts z <code>config.accounts.yaml</code>. Vybraný řádek se dole otevře v detailním editoru.</p>
+            <p>Každý kontext může mít vlastní <code>source_domains</code>, podle kterých se oddělí landing pages, PageSpeed a další Google Ads data.</p>
           </div>
         </section>
 
@@ -44,7 +44,7 @@
           <div class="panel-header">
             <div>
               <h3>Detail vybraného kontextu</h3>
-              <p>Po kliknutí na řádek nebo Upravit se do formuláře načte vybraný kontext.</p>
+              <p>Po kliknutí na řádek nebo na tlačítko Upravit se sem načte vybraný kontext.</p>
             </div>
             <div class="action-row">
               <button class="btn btn-secondary btn-small" type="button" id="duplicate-selected-button">Duplikovat</button>
@@ -96,6 +96,15 @@
               </label>
             </div>
 
+            <label class="mapping-textarea">
+              <span>Source domains</span>
+              <textarea id="editor-source-domains" data-field="source_domains" rows="4" placeholder="www.shopid.cz&#10;shopid.cz"></textarea>
+              <small>Jedna doména na řádek. Mezery se oříznou, prázdné řádky se ignorují.</small>
+              <div class="action-row">
+                <button class="btn btn-secondary btn-small" type="button" id="suggest-domains-button">Navrhnout z GSC URL</button>
+              </div>
+            </label>
+
             <div class="toggle-row">
               <label class="toggle">
                 <input id="editor-pagespeed-enabled" type="checkbox" data-field="pagespeed_enabled">
@@ -121,7 +130,7 @@
           <div class="panel-header">
             <div>
               <h3>Uložené account contexts</h3>
-              <p>Nahoře upravíš vybraný kontext, tady níž máš přehled všech uložených vazeb a rychlé akce po řádcích.</p>
+              <p>Nahoře upravíš vybraný kontext. Tady máš tabulkový přehled uložených vazeb a rychlé akce po řádcích.</p>
             </div>
           </div>
 
@@ -135,12 +144,18 @@
                   <th>Klíč</th>
                   <th>Název</th>
                   <th>Google Ads customer ID</th>
+                  <th>Source domains</th>
+                  <th>Ads account type</th>
+                  <th>Domain filter status</th>
+                  <th>Matched landing pages</th>
+                  <th>Matched campaigns</th>
                   <th>Merchant account ID</th>
                   <th>GA4 property ID</th>
                   <th>GSC site URL</th>
                   <th>GTM container ID</th>
                   <th>PageSpeed</th>
                   <th>Poslední test / stav</th>
+                  <th>Poslední export</th>
                   <th>Akce</th>
                 </tr>
               </thead>
@@ -150,15 +165,15 @@
 
           <div class="action-row mapping-actions">
             <button class="btn btn-secondary" type="button" id="add-context-button">Přidat nový kontext</button>
-            <button class="btn btn-primary" type="button" id="save-mapping-button">Uložit propojení</button>
-            <a class="btn btn-secondary" href="{{ url_for('web.discovery_page') }}">Spustit průzkum</a>
+            <button class="btn btn-primary" type="button" id="save-mapping-button">Uložit mapping</button>
+            <a class="btn btn-secondary" href="{{ url_for('web.discovery_page') }}">Spustit discovery</a>
             <button class="btn btn-secondary" type="button" id="run-multi-button">Spustit všechny aktivní kontexty</button>
           </div>
         </section>
 
         <datalist id="google-ads-customers-list">
           {% for row in mapping_state.discovery_tables.google_ads_customers %}
-            <option value="{{ row.customer_id }}">{{ row.descriptive_name }}</option>
+            <option value="{{ row.customer_id }}">{{ row.descriptive_name }}{% if row.is_manager %} (Manager/MCC){% else %} (Klient){% endif %}</option>
           {% endfor %}
         </datalist>
         <datalist id="ga4-properties-list">
@@ -173,7 +188,7 @@
         </datalist>
         <datalist id="merchant-accounts-list">
           {% for row in mapping_state.discovery_tables.merchant_accounts %}
-            <option value="{{ row.merchant_account_id }}">{{ row.account_name }}</option>
+            <option value="{{ row.merchant_account_id }}">{{ row.account_name }} ({{ row.account_type }})</option>
           {% endfor %}
         </datalist>
         <datalist id="gtm-accounts-list">
@@ -183,7 +198,7 @@
         </datalist>
         <datalist id="gtm-containers-list">
           {% for row in mapping_state.discovery_tables.gtm_containers %}
-            <option value="{{ row.container_id }}">{{ row.container_name }}</option>
+            <option value="{{ row.container_id }}">{{ row.container_name }}{% if row.domain_name %} ({{ row.domain_name }}){% endif %}</option>
           {% endfor %}
         </datalist>
       </main>
@@ -200,6 +215,7 @@
       const testSelectedButton = document.getElementById("test-selected-button");
       const runSelectedExportButton = document.getElementById("run-selected-export-button");
       const deleteSelectedButton = document.getElementById("delete-selected-button");
+      const suggestDomainsButton = document.getElementById("suggest-domains-button");
       const editor = document.getElementById("context-editor");
       const editorEmpty = document.getElementById("mapping-editor-empty");
       const testOutput = document.getElementById("context-test-output");
@@ -214,13 +230,13 @@
         "gsc_site_url",
         "gtm_account_id",
         "gtm_container_id",
+        "source_domains",
         "pagespeed_enabled",
         "enabled"
       ];
 
       let contexts = Array.isArray(initialContexts) ? initialContexts.map(normalizeContext) : [];
       let selectedIndex = contexts.length ? 0 : -1;
-      let testInProgress = false;
 
       function defaultTestState(enabled = true) {
         if (!enabled) {
@@ -241,6 +257,66 @@
         };
       }
 
+      function normalizeSourceDomains(value) {
+        const values = Array.isArray(value)
+          ? value
+          : String(value || "").split(/\r?\n/);
+        const seen = new Set();
+        const rows = [];
+        for (const entry of values) {
+          const trimmed = String(entry || "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+          if (!trimmed) {
+            continue;
+          }
+          const normalized = trimmed.toLowerCase();
+          if (seen.has(normalized)) {
+            continue;
+          }
+          seen.add(normalized);
+          rows.push(normalized);
+        }
+        return rows;
+      }
+
+      function sourceDomainsText(value) {
+        return normalizeSourceDomains(value).join("\n");
+      }
+
+      function sourceDomainsDisplay(value) {
+        const rows = normalizeSourceDomains(value);
+        return rows.length ? rows.join(", ") : "";
+      }
+
+      function suggestSourceDomains(siteUrl) {
+        const raw = String(siteUrl || "").trim();
+        if (!raw) {
+          return [];
+        }
+        if (raw.startsWith("sc-domain:")) {
+          const domain = raw.replace("sc-domain:", "").trim().replace(/\/+$/, "");
+          if (!domain) {
+            return [];
+          }
+          return normalizeSourceDomains([domain, `www.${domain}`]);
+        }
+        try {
+          const parsed = new URL(raw);
+          const host = parsed.hostname.toLowerCase();
+          if (!host) {
+            return [];
+          }
+          const suggestions = [host];
+          if (host.startsWith("www.")) {
+            suggestions.push(host.replace(/^www\./, ""));
+          } else {
+            suggestions.push(`www.${host}`);
+          }
+          return normalizeSourceDomains(suggestions);
+        } catch (error) {
+          return [];
+        }
+      }
+
       function normalizeContext(context = {}) {
         const enabled = context.enabled !== false;
         return {
@@ -253,10 +329,18 @@
           gsc_site_url: context.gsc_site_url || "",
           gtm_account_id: context.gtm_account_id || "",
           gtm_container_id: context.gtm_container_id || "",
+          source_domains: normalizeSourceDomains(context.source_domains || []),
           pagespeed_enabled: context.pagespeed_enabled !== false,
           enabled,
           test_result: context.test_result || null,
-          test_state: context.test_state || defaultTestState(enabled)
+          test_state: context.test_state || defaultTestState(enabled),
+          source_domains_display: context.source_domains_display || sourceDomainsDisplay(context.source_domains || []),
+          ads_account_type: context.ads_account_type || "Neznámý",
+          domain_filter_status: context.domain_filter_status || "Neznámý",
+          matched_landing_pages: Number(context.matched_landing_pages || 0),
+          matched_campaigns: Number(context.matched_campaigns || 0),
+          last_export_status: context.last_export_status || "Neznámý",
+          last_export_at: context.last_export_at || ""
         };
       }
 
@@ -274,6 +358,16 @@
         return `<span class="status-pill ${state.class_name || "status-unknown"}">${escapeHtml(state.label || "Neznámý stav")}</span>`;
       }
 
+      function exportStatusBadge(status) {
+        const normalized = String(status || "Neznámý");
+        const className =
+          normalized === "ok" || normalized === "OK" ? "status-ok" :
+          normalized === "warning" ? "status-disabled" :
+          normalized === "error" || normalized === "Problem" ? "status-problem" :
+          "status-unknown";
+        return `<span class="status-pill ${className}">${escapeHtml(normalized)}</span>`;
+      }
+
       function shortValue(value) {
         const text = String(value || "").trim();
         return text ? escapeHtml(text) : '<span class="muted">-</span>';
@@ -286,11 +380,16 @@
         return `${statusBadge(state)}${testedAt}${summary}`;
       }
 
+      function lastExportCell(context) {
+        const exportedAt = context.last_export_at ? `<div class="context-test-time">${escapeHtml(context.last_export_at)}</div>` : "";
+        return `${exportStatusBadge(context.last_export_status)}${exportedAt}`;
+      }
+
       function renderTable() {
         if (!contexts.length) {
           tableBody.innerHTML = `
             <tr>
-              <td colspan="11" class="muted">Zatím není uložen žádný account context.</td>
+              <td colspan="17" class="muted">Zatím není uložen žádný account context.</td>
             </tr>
           `;
           return;
@@ -302,12 +401,18 @@
             <td>${shortValue(context.key)}</td>
             <td>${shortValue(context.label)}</td>
             <td>${shortValue(context.google_ads_customer_id)}</td>
+            <td>${shortValue(sourceDomainsDisplay(context.source_domains))}</td>
+            <td>${shortValue(context.ads_account_type)}</td>
+            <td>${shortValue(context.domain_filter_status)}</td>
+            <td>${context.matched_landing_pages || 0}</td>
+            <td>${context.matched_campaigns || 0}</td>
             <td>${shortValue(context.merchant_account_id)}</td>
             <td>${shortValue(context.ga4_property_id)}</td>
             <td>${shortValue(context.gsc_site_url)}</td>
             <td>${shortValue(context.gtm_container_id)}</td>
             <td>${context.pagespeed_enabled ? "Ano" : "Ne"}</td>
             <td>${lastTestCell(context)}</td>
+            <td>${lastExportCell(context)}</td>
             <td>
               <div class="table-action-group">
                 <button class="btn btn-secondary btn-small row-edit" type="button" data-index="${index}">Upravit</button>
@@ -320,6 +425,47 @@
             </td>
           </tr>
         `).join("");
+      }
+
+      function renderTestPanel(context) {
+        const testResult = context.test_result;
+        const testState = context.test_state || defaultTestState(context.enabled !== false);
+        const panelClass = testState.status === "ok"
+          ? "merchant-panel-success"
+          : testState.status === "problem"
+            ? "merchant-panel-error"
+            : "merchant-panel-muted";
+
+        if (!testResult || !testResult.services) {
+          testOutput.className = `merchant-panel ${panelClass} context-test-output`;
+          testOutput.innerHTML = `
+            <div class="merchant-panel-header">
+              <strong>${escapeHtml(context.label || context.key || "Kontext")}</strong>
+              <span>${escapeHtml(testState.label || "Neotestováno")}</span>
+            </div>
+            <div class="merchant-empty">${escapeHtml(testState.summary || "Kontext zatím nebyl otestovaný.")}</div>
+          `;
+          return;
+        }
+
+        const rows = Object.entries(testResult.services).map(([key, value]) => `
+          <div class="merchant-account-card">
+            <strong>${escapeHtml(key)}</strong>
+            <span>${escapeHtml(value.status === "ok" ? "OK" : "Problem")}</span>
+            <span>${escapeHtml(value.details || "")}</span>
+          </div>
+        `).join("");
+
+        testOutput.className = `merchant-panel ${panelClass} context-test-output`;
+        testOutput.innerHTML = `
+          <div class="merchant-panel-header">
+            <strong>${escapeHtml(context.label || context.key || "Kontext")}</strong>
+            <span>${escapeHtml(testState.label || "Neznámý stav")}</span>
+          </div>
+          <div class="context-test-summary">${escapeHtml(testState.summary || "")}</div>
+          ${testState.tested_at ? `<div class="context-test-time">${escapeHtml(testState.tested_at)}</div>` : ""}
+          ${rows || '<div class="merchant-empty">Bez detailu.</div>'}
+        `;
       }
 
       function renderEditor() {
@@ -347,52 +493,13 @@
           }
           if (input.type === "checkbox") {
             input.checked = Boolean(context[field]);
+          } else if (field === "source_domains") {
+            input.value = sourceDomainsText(context[field]);
           } else {
             input.value = context[field] || "";
           }
         }
         renderTestPanel(context);
-      }
-
-      function renderTestPanel(context) {
-        const testResult = context.test_result;
-        const testState = context.test_state || defaultTestState(context.enabled !== false);
-        const panelClass = testState.status === "ok"
-          ? "merchant-panel-success"
-          : testState.status === "problem"
-            ? "merchant-panel-error"
-            : "merchant-panel-muted";
-
-        if (!testResult || !testResult.services) {
-          testOutput.className = `merchant-panel ${panelClass} context-test-output`;
-          testOutput.innerHTML = `
-            <div class="merchant-panel-header">
-              <strong>${escapeHtml(context.label || context.key || "Kontext")}</strong>
-              <span>${escapeHtml(testState.label || "Neotestováno")}</span>
-            </div>
-            <div class="merchant-empty">${escapeHtml(testState.summary || "Kontext zatím nebyl otestovaný.")}</div>
-          `;
-          return;
-        }
-
-        const rows = Object.entries(testResult.services).map(([key, value]) => `
-          <div class="merchant-account-card">
-            <strong>${escapeHtml(key)}</strong>
-              <span>${escapeHtml(value.status === "ok" ? "OK" : "Problém")}</span>
-            <span>${escapeHtml(value.details || "")}</span>
-          </div>
-        `).join("");
-
-        testOutput.className = `merchant-panel ${panelClass} context-test-output`;
-        testOutput.innerHTML = `
-          <div class="merchant-panel-header">
-            <strong>${escapeHtml(context.label || context.key || "Kontext")}</strong>
-            <span>${escapeHtml(testState.label || "Neznámý stav")}</span>
-          </div>
-          <div class="context-test-summary">${escapeHtml(testState.summary || "")}</div>
-          ${testState.tested_at ? `<div class="context-test-time">${escapeHtml(testState.tested_at)}</div>` : ""}
-          ${rows || '<div class="merchant-empty">Bez detailu.</div>'}
-        `;
       }
 
       function renderAll() {
@@ -404,7 +511,7 @@
         const label = context.label || context.key || "Kontext";
         const currentMessage = job && job.current_message
           ? escapeHtml(job.current_message)
-          : "Kontroluji Google Ads, GA4, GSC, Merchant, GTM a PageSpeed. Podle dostupných API to může chvíli trvat.";
+          : "Kontroluji Google Ads, GA4, GSC, Merchant, GTM a PageSpeed. Může to chvíli trvat.";
         const services = job && job.services ? Object.entries(job.services) : [];
         const rows = services.map(([key, value]) => `
           <div class="merchant-account-card">
@@ -470,7 +577,14 @@
           if (!input) {
             continue;
           }
-          current[field] = input.type === "checkbox" ? input.checked : input.value.trim();
+          if (input.type === "checkbox") {
+            current[field] = input.checked;
+          } else if (field === "source_domains") {
+            current[field] = normalizeSourceDomains(input.value);
+            current.source_domains_display = sourceDomainsDisplay(current[field]);
+          } else {
+            current[field] = input.value.trim();
+          }
         }
         if (!current.enabled) {
           current.test_state = defaultTestState(false);
@@ -483,7 +597,7 @@
             tested_at: current.test_result.tested_at || "",
             summary: current.test_result.summary || ""
           };
-        } else if (!current.test_result) {
+        } else {
           current.test_state = defaultTestState(true);
         }
       }
@@ -500,6 +614,7 @@
           gsc_site_url: context.gsc_site_url,
           gtm_account_id: context.gtm_account_id,
           gtm_container_id: context.gtm_container_id,
+          source_domains: normalizeSourceDomains(context.source_domains),
           pagespeed_enabled: Boolean(context.pagespeed_enabled),
           enabled: Boolean(context.enabled)
         }));
@@ -545,7 +660,8 @@
           key: "",
           label: "",
           pagespeed_enabled: true,
-          enabled: true
+          enabled: true,
+          source_domains: []
         });
         contexts.push(context);
         selectedIndex = contexts.length - 1;
@@ -563,7 +679,9 @@
           key: uniqueCopyKey(source.key),
           label: source.label ? `${source.label} kopie` : "",
           test_result: null,
-          test_state: defaultTestState(source.enabled !== false)
+          test_state: defaultTestState(source.enabled !== false),
+          last_export_status: "Neznámý",
+          last_export_at: ""
         });
         contexts.splice(index + 1, 0, clone);
         selectedIndex = index + 1;
@@ -595,22 +713,10 @@
         contexts[index].enabled = !contexts[index].enabled;
         if (!contexts[index].enabled) {
           contexts[index].test_state = defaultTestState(false);
-        } else if (contexts[index].test_result) {
-          const ok = Boolean(contexts[index].test_result.ok);
-          contexts[index].test_state = {
-            status: ok ? "ok" : "problem",
-            label: ok ? "OK" : "Problem",
-            class_name: ok ? "status-ok" : "status-problem",
-            tested_at: contexts[index].test_result.tested_at || "",
-            summary: contexts[index].test_result.summary || ""
-          };
         } else {
           contexts[index].test_state = defaultTestState(true);
         }
-        if (selectedIndex === index) {
-          renderEditor();
-        }
-        renderTable();
+        renderAll();
       }
 
       async function saveMapping() {
@@ -640,7 +746,6 @@
         saveEditorIntoState();
         const context = contexts[index];
         const rowButton = document.querySelector(`.row-test[data-index="${index}"]`);
-        testInProgress = true;
         setButtonsBusy(
           [testSelectedButton, rowButton, runSelectedExportButton, saveMappingButton, runMultiButton],
           true,
@@ -653,13 +758,6 @@
         setStatus(`Spouštím backend test kontextu ${context.label || context.key}...`, "info");
         try {
           const startPayload = await postJson("{{ url_for('web.start_mapping_context_test') }}", context);
-          renderPendingTestPanel(context, {
-            current_message: "Backend test byl přijat a běží.",
-            services: {},
-            current_service: ""
-          });
-          setStatus(`Backend test kontextu ${context.label || context.key} byl spuštěn.`, "info");
-
           let payload = null;
           while (true) {
             const job = await getJson(`{{ url_for('web.mapping_context_test_status', job_id='JOB_ID') }}`.replace("JOB_ID", startPayload.job_id));
@@ -669,7 +767,7 @@
               break;
             }
             if (job.state === "error") {
-            throw new Error(job.error || job.current_message || "Test kontextu selhal.");
+              throw new Error(job.error || job.current_message || "Test kontextu selhal.");
             }
             await new Promise((resolve) => window.setTimeout(resolve, 800));
           }
@@ -679,10 +777,10 @@
           }
           context.test_result = payload;
           context.test_state = payload.test_state || defaultTestState(context.enabled !== false);
+          context.ads_account_type = payload.ads_account_type || context.ads_account_type || "Neznámý";
           renderAll();
           setStatus(`Test kontextu ${context.label || context.key} byl dokončen.`, payload.ok ? "success" : "warning");
         } finally {
-          testInProgress = false;
           setButtonsBusy(
             [testSelectedButton, rowButton, runSelectedExportButton, saveMappingButton, runMultiButton],
             false
@@ -706,12 +804,25 @@
         const payload = await postJson("{{ url_for('web.run_context_export_route') }}", {
           context_key: context.key
         });
+        context.last_export_status = payload.ok ? (payload.error_count ? "warning" : "ok") : "error";
+        context.last_export_at = new Date().toISOString();
+        if (typeof payload.matched_landing_pages !== "undefined") {
+          context.matched_landing_pages = Number(payload.matched_landing_pages || 0);
+        }
+        if (typeof payload.matched_campaigns !== "undefined") {
+          context.matched_campaigns = Number(payload.matched_campaigns || 0);
+        }
+        if (payload.domain_filter_status) {
+          context.domain_filter_status = payload.domain_filter_status;
+        }
+        renderTable();
         setStatus(`Export kontextu ${payload.context_label || payload.context_key} byl dokončen: ${payload.export_path}`, "success");
       }
 
       async function runMultiExport() {
         await saveMapping();
         const payload = await postJson("{{ url_for('web.run_multi_export_route') }}", {});
+        renderTable();
         setStatus(`Multi-export byl dokončen. Cross-account složka: ${payload.cross_account_dir || "-"}`, "success");
       }
 
@@ -747,8 +858,32 @@
         }
       });
 
-      addContextButton.addEventListener("click", () => {
-        addContext();
+      addContextButton.addEventListener("click", () => addContext());
+      duplicateSelectedButton.addEventListener("click", () => {
+        if (selectedIndex >= 0) {
+          duplicateContext(selectedIndex);
+        }
+      });
+      deleteSelectedButton.addEventListener("click", () => {
+        if (selectedIndex >= 0) {
+          deleteContext(selectedIndex);
+        }
+      });
+      suggestDomainsButton.addEventListener("click", () => {
+        if (selectedIndex < 0) {
+          return;
+        }
+        const current = contexts[selectedIndex];
+        const suggestions = suggestSourceDomains(current.gsc_site_url);
+        if (!suggestions.length) {
+          setStatus("Ze zadané GSC URL se nepodařilo navrhnout source domains.", "warning");
+          return;
+        }
+        current.source_domains = suggestions;
+        current.source_domains_display = sourceDomainsDisplay(suggestions);
+        renderEditor();
+        renderTable();
+        setStatus("Source domains byly doplněny podle GSC URL.", "success");
       });
 
       saveMappingButton.addEventListener("click", async () => {
@@ -764,18 +899,6 @@
           await runMultiExport();
         } catch (error) {
           setStatus(error.message, "error");
-        }
-      });
-
-      duplicateSelectedButton.addEventListener("click", () => {
-        if (selectedIndex >= 0) {
-          duplicateContext(selectedIndex);
-        }
-      });
-
-      deleteSelectedButton.addEventListener("click", () => {
-        if (selectedIndex >= 0) {
-          deleteContext(selectedIndex);
         }
       });
 
@@ -819,9 +942,6 @@
         });
       }
 
-      if (!contexts.length) {
-        contexts = [];
-      }
       renderAll();
     </script>
   </body>

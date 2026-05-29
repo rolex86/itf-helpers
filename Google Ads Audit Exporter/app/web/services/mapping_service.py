@@ -34,8 +34,27 @@ def context_test_results_path(project_root: Path) -> Path:
     return project_root / "exports" / "_mapping" / "context_test_results.json"
 
 
+def context_export_results_path(project_root: Path) -> Path:
+    return project_root / "exports" / "_mapping" / "context_export_results.json"
+
+
 def _load_test_results(project_root: Path) -> dict[str, Any]:
     path = context_test_results_path(project_root)
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle) or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    results = payload.get("results", {})
+    return results if isinstance(results, dict) else {}
+
+
+def _load_export_results(project_root: Path) -> dict[str, Any]:
+    path = context_export_results_path(project_root)
     if not path.exists():
         return {}
     try:
@@ -56,11 +75,18 @@ def _save_test_results(project_root: Path, results: dict[str, Any]) -> None:
         json.dump({"results": results}, handle, ensure_ascii=False, indent=2)
 
 
+def _save_export_results(project_root: Path, results: dict[str, Any]) -> None:
+    path = context_export_results_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump({"results": results}, handle, ensure_ascii=False, indent=2)
+
+
 def _context_test_state(context: AccountContext, stored_result: dict[str, Any] | None) -> dict[str, Any]:
     if not context.enabled:
         return {
             "status": "disabled",
-            "label": "Disabled",
+            "label": "Vypnuto",
             "class_name": "status-disabled",
             "tested_at": stored_result.get("tested_at", "") if stored_result else "",
             "summary": "Kontext je vypnut\u00fd a ne\u00fa\u010dastn\u00ed se multi-exportu.",
@@ -68,7 +94,7 @@ def _context_test_state(context: AccountContext, stored_result: dict[str, Any] |
     if not stored_result:
         return {
             "status": "unknown",
-            "label": "Not tested",
+            "label": "Neotestov\u00e1no",
             "class_name": "status-unknown",
             "tested_at": "",
             "summary": "Kontext zat\u00edm nebyl otestovan\u00fd.",
@@ -100,6 +126,7 @@ def _serialize_test_result(result: dict[str, Any]) -> dict[str, Any]:
         "context_label": str(result.get("context_label", "") or ""),
         "tested_at": str(result.get("tested_at", "") or ""),
         "summary": str(result.get("summary", "") or ""),
+        "ads_account_type": str(result.get("ads_account_type", "") or ""),
         "services": serialized_services,
     }
 
@@ -131,15 +158,24 @@ def _service_job_entry(status: str, details: str) -> dict[str, str]:
 def load_mapping_state(project_root: Path) -> dict[str, Any]:
     contexts = load_account_contexts(accounts_config_path(project_root))
     stored_results = _load_test_results(project_root)
+    stored_exports = _load_export_results(project_root)
     contexts_payload: list[dict[str, Any]] = []
     for context in contexts:
         payload = context_to_mapping(context)
         stored_result = stored_results.get(context.key) if context.key else None
+        stored_export = stored_exports.get(context.key) if context.key else None
         payload["test_result"] = _serialize_test_result(stored_result) if isinstance(stored_result, dict) else None
         payload["test_state"] = _context_test_state(
             context,
             stored_result if isinstance(stored_result, dict) else None,
         )
+        payload["source_domains_display"] = context.source_domains_display
+        payload["ads_account_type"] = str((stored_result or {}).get("ads_account_type", "") or "Neznámý")
+        payload["domain_filter_status"] = str((stored_export or {}).get("domain_filter_status", "") or "Neznámý")
+        payload["matched_landing_pages"] = int((stored_export or {}).get("matched_landing_pages", 0) or 0)
+        payload["matched_campaigns"] = int((stored_export or {}).get("matched_campaigns", 0) or 0)
+        payload["last_export_status"] = str((stored_export or {}).get("status", "") or "Neznámý")
+        payload["last_export_at"] = str((stored_export or {}).get("exported_at", "") or "")
         contexts_payload.append(payload)
     return {
         "contexts": contexts,
@@ -207,6 +243,7 @@ def _execute_context_test(
     result = test_account_context(
         context=context,
         base_env_config=env_config,
+        sibling_contexts=load_account_contexts(accounts_config_path(project_root)),
         progress_callback=_progress if job_id else None,
     )
     service_payload = {
@@ -227,6 +264,11 @@ def _execute_context_test(
             else "Alespo\u0148 jedna kontrola skon\u010dila probl\u00e9mem."
         ),
         "services": service_payload,
+        "ads_account_type": (
+            "Manager/MCC účet"
+            if "manager/mcc" in str(service_payload.get("google_ads", {}).get("details", "")).lower()
+            else "Klientský účet"
+        ),
     }
     stored_results = _load_test_results(project_root)
     stored_results[context.key] = response
@@ -343,6 +385,17 @@ def run_selected_context_export(
         export_base_name_override=f"{result_date_prefix(settings, project_root)}_{selected.key}_{selected.google_ads_customer_id}",
         export_mode="selected_context",
     )
+    stored_exports = _load_export_results(project_root)
+    stored_exports[selected.key] = {
+        "status": "ok" if result.exit_code == 0 and not result.errors else ("warning" if result.exit_code == 0 else "error"),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "domain_filter_status": str(result.context_metadata.get("domain_filter_status", "") or ""),
+        "matched_landing_pages": int(result.context_metadata.get("matched_landing_pages", 0) or 0),
+        "matched_campaigns": int(result.context_metadata.get("matched_campaigns", 0) or 0),
+        "source_domains": list(result.context_metadata.get("source_domains", []) or []),
+        "export_path": str(result.export_paths.base_dir),
+    }
+    _save_export_results(project_root, stored_exports)
     return {
         "ok": result.exit_code == 0,
         "context_key": selected.key,
@@ -350,6 +403,9 @@ def run_selected_context_export(
         "export_path": str(result.export_paths.base_dir),
         "error_count": len(result.errors),
         "xlsx_path": str(result.export_paths.xlsx_path),
+        "domain_filter_status": str(result.context_metadata.get("domain_filter_status", "") or ""),
+        "matched_landing_pages": int(result.context_metadata.get("matched_landing_pages", 0) or 0),
+        "matched_campaigns": int(result.context_metadata.get("matched_campaigns", 0) or 0),
     }
 
 
@@ -364,6 +420,18 @@ def run_all_context_exports(project_root: Path) -> dict[str, Any]:
         base_env_config=env_config,
         contexts=contexts,
     )
+    stored_exports = _load_export_results(project_root)
+    for bundle in result.context_results:
+        stored_exports[bundle.context.key] = {
+            "status": "ok" if bundle.result.exit_code == 0 and not bundle.result.errors else ("warning" if bundle.result.exit_code == 0 else "error"),
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "domain_filter_status": str(bundle.result.context_metadata.get("domain_filter_status", "") or ""),
+            "matched_landing_pages": int(bundle.result.context_metadata.get("matched_landing_pages", 0) or 0),
+            "matched_campaigns": int(bundle.result.context_metadata.get("matched_campaigns", 0) or 0),
+            "source_domains": list(bundle.result.context_metadata.get("source_domains", []) or []),
+            "export_path": str(bundle.result.export_paths.base_dir),
+        }
+    _save_export_results(project_root, stored_exports)
     return {
         "ok": True,
         "mode": result.mode,
@@ -374,6 +442,9 @@ def run_all_context_exports(project_root: Path) -> dict[str, Any]:
                 "context_label": bundle.context.label,
                 "export_path": str(bundle.result.export_paths.base_dir),
                 "error_count": len(bundle.result.errors),
+                "domain_filter_status": str(bundle.result.context_metadata.get("domain_filter_status", "") or ""),
+                "matched_landing_pages": int(bundle.result.context_metadata.get("matched_landing_pages", 0) or 0),
+                "matched_campaigns": int(bundle.result.context_metadata.get("matched_campaigns", 0) or 0),
             }
             for bundle in result.context_results
         ],

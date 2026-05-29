@@ -10,3 +10,6 @@ account_contexts:
     gtm_container_id: ""
     pagespeed_enabled: true
     enabled: true
+    source_domains:
+      - "www.shopid.cz"
+      - "shopid.cz"
