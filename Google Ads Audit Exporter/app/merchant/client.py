@@ -83,6 +83,45 @@ class MerchantApiClient:
         )
         return [self._account_to_view(account) for account in items]
 
+    def discover_accounts_hierarchy(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for account in self.list_accessible_accounts():
+            account_id = str(account.get("account_id") or "")
+            subaccounts: list[dict[str, Any]] = []
+            is_advanced_account = False
+            try:
+                subaccounts = self.list_subaccounts(account_id)
+                is_advanced_account = True
+            except MerchantApiError:
+                subaccounts = []
+
+            if account_id and account_id not in seen_ids:
+                seen_ids.add(account_id)
+                rows.append(
+                    {
+                        **account,
+                        "account_type": "advanced" if is_advanced_account else "standalone",
+                        "parent_account_id": "",
+                        "is_advanced_account": is_advanced_account,
+                    }
+                )
+
+            for subaccount in subaccounts:
+                subaccount_id = str(subaccount.get("account_id") or "")
+                if not subaccount_id or subaccount_id in seen_ids:
+                    continue
+                seen_ids.add(subaccount_id)
+                rows.append(
+                    {
+                        **subaccount,
+                        "account_type": "subaccount",
+                        "parent_account_id": account_id,
+                        "is_advanced_account": False,
+                    }
+                )
+        return rows
+
     def list_subaccounts(self, provider_account_id: str) -> list[dict[str, Any]]:
         target = _resource_name(provider_account_id)
         items = self._paginate_json(
@@ -106,7 +145,9 @@ class MerchantApiClient:
         )
 
     def list_products(self, account_id: str | None = None) -> list[dict[str, Any]]:
-        target = _resource_name(account_id or self.config.merchant_account_id)
+        target_account_id = account_id or self.config.merchant_account_id
+        self._validate_product_account(target_account_id)
+        target = _resource_name(target_account_id)
         return self._paginate_json(
             f"https://merchantapi.googleapis.com/products/v1/{target}/products",
             list_key="products",
@@ -114,7 +155,9 @@ class MerchantApiClient:
         )
 
     def list_aggregate_product_statuses(self, account_id: str | None = None) -> list[dict[str, Any]]:
-        target = _resource_name(account_id or self.config.merchant_account_id)
+        target_account_id = account_id or self.config.merchant_account_id
+        self._validate_product_account(target_account_id)
+        target = _resource_name(target_account_id)
         return self._paginate_json(
             f"https://merchantapi.googleapis.com/issueresolution/v1/{target}/aggregateProductStatuses",
             list_key="aggregateProductStatuses",
@@ -201,6 +244,23 @@ class MerchantApiClient:
             "Ov\u011b\u0159 Merchant API p\u0159\u00edstup v Google Cloud projektu.",
             "Zkus nejd\u0159\u00edv vypsat dostupn\u00e9 Merchant \u00fa\u010dty a zkontroluj scope https://www.googleapis.com/auth/content.",
         ]
+
+    def _validate_product_account(self, account_id: str | None) -> None:
+        target_account_id = _safe_text(account_id)
+        if not target_account_id:
+            raise MerchantApiError("Chybi Merchant account ID pro produktovy export.")
+
+        for account in self.discover_accounts_hierarchy():
+            if str(account.get("account_id") or "") != target_account_id:
+                continue
+            account_type = str(account.get("account_type") or "")
+            if account_type == "advanced":
+                raise MerchantApiError(
+                    "Merchant ID je pravdepodobne parent/MCA ucet. Zadejte konkretni subaccount Merchant ID pro dany context.",
+                    status_code=403,
+                    details="PERMISSION_DENIED_NOT_ELIGIBLE_ACCOUNT_TYPE",
+                )
+            return
 
     def _access_token(self) -> str:
         if self._cached_access_token:

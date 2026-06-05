@@ -13,11 +13,13 @@ from app.accounts.context_config import (
     context_from_mapping,
     context_to_mapping,
     load_account_contexts,
+    load_merchant_parent_account_id,
     save_account_contexts,
 )
 from app.accounts.context_runner import run_context_export, run_multi_context_export, test_account_context
 from app.config.env_settings import load_env_config
 from app.config.settings import load_settings
+from app.merchant.client import MerchantApiClient, MerchantApiError
 from app.web.services.discovery_service import load_discovery_tables
 
 
@@ -156,9 +158,21 @@ def _service_job_entry(status: str, details: str) -> dict[str, str]:
 
 
 def load_mapping_state(project_root: Path) -> dict[str, Any]:
+    config_path = accounts_config_path(project_root)
     contexts = load_account_contexts(accounts_config_path(project_root))
+    merchant_parent_account_id = load_merchant_parent_account_id(config_path)
     stored_results = _load_test_results(project_root)
     stored_exports = _load_export_results(project_root)
+    merchant_subaccounts: list[dict[str, Any]] = []
+    merchant_discovery_warning = ""
+    if merchant_parent_account_id:
+        try:
+            env_config = load_env_config(project_root / ".env")
+            merchant_subaccounts = MerchantApiClient.from_env_config(env_config).list_subaccounts(merchant_parent_account_id)
+        except MerchantApiError as exc:
+            merchant_discovery_warning = exc.message
+        except Exception as exc:
+            merchant_discovery_warning = str(exc)
     contexts_payload: list[dict[str, Any]] = []
     for context in contexts:
         payload = context_to_mapping(context)
@@ -180,12 +194,24 @@ def load_mapping_state(project_root: Path) -> dict[str, Any]:
     return {
         "contexts": contexts,
         "contexts_payload": contexts_payload,
+        "merchant_parent_account_id": merchant_parent_account_id,
+        "merchant_subaccounts": merchant_subaccounts,
+        "merchant_discovery_warning": merchant_discovery_warning,
         "discovery_tables": load_discovery_tables(project_root),
     }
 
 
-def save_mapping(project_root: Path, contexts: list[AccountContext]) -> None:
-    save_account_contexts(accounts_config_path(project_root), contexts)
+def save_mapping(
+    project_root: Path,
+    contexts: list[AccountContext],
+    *,
+    merchant_parent_account_id: str = "",
+) -> None:
+    save_account_contexts(
+        accounts_config_path(project_root),
+        contexts,
+        merchant_parent_account_id=merchant_parent_account_id,
+    )
 
 
 def parse_contexts_payload(payload: dict[str, Any]) -> list[AccountContext]:
@@ -198,11 +224,34 @@ def parse_contexts_payload(payload: dict[str, Any]) -> list[AccountContext]:
         context = context_from_mapping(item)
         if not context.key:
             continue
+        if context.merchant_account_id and not context.merchant_account_id.isdigit():
+            raise ValueError(
+                f"Merchant account ID v kontextu '{context.key}' musi byt ciselne."
+            )
         if context.key in seen_keys:
             raise ValueError(f"Key '{context.key}' je v mappingu v\u00edckr\u00e1t.")
         seen_keys.add(context.key)
         contexts.append(context)
     return contexts
+
+
+def parse_merchant_parent_account_id(payload: dict[str, Any]) -> str:
+    return str(payload.get("merchant_parent_account_id") or "").replace("-", "").strip()
+
+
+def merchant_mapping_warnings(contexts: list[AccountContext]) -> list[str]:
+    warnings: list[str] = []
+    merchant_usage: dict[str, list[str]] = {}
+    for context in contexts:
+        if not context.merchant_account_id:
+            continue
+        merchant_usage.setdefault(context.merchant_account_id, []).append(context.key)
+    for merchant_account_id, keys in merchant_usage.items():
+        if len(keys) > 1:
+            warnings.append(
+                f"Merchant account ID {merchant_account_id} je pouzity ve vice kontextech: {', '.join(keys)}."
+            )
+    return warnings
 
 
 def _execute_context_test(

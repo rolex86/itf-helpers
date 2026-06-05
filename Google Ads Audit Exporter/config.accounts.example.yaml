@@ -1,3 +1,5 @@
+merchant_parent_account_id: ""
+
 account_contexts:
   - key: shopid_cz
     label: "ShopID CZ"

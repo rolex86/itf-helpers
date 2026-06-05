@@ -4,6 +4,7 @@ from pathlib import Path
 
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, send_file, url_for
 
+from app.accounts.context_config import has_multi_account_config
 from app.web.forms import parse_dashboard_form
 from app.web.services.dashboard_service import (
     load_dashboard_state,
@@ -19,7 +20,9 @@ from app.web.services.gsc_dashboard_service import gsc_list_properties, gsc_test
 from app.web.services.mapping_service import (
     get_context_test_job_status,
     load_mapping_state,
+    merchant_mapping_warnings,
     parse_contexts_payload,
+    parse_merchant_parent_account_id,
     run_all_context_exports,
     run_selected_context_export,
     save_mapping,
@@ -45,12 +48,17 @@ def _selected_preset(config_payload: dict) -> str:
     return date_range.get("preset", "LAST_90_DAYS")
 
 
+def _has_multi_account_config() -> bool:
+    return has_multi_account_config(_project_root() / "config.accounts.yaml")
+
+
 @web_bp.get("/")
 def dashboard():
     state = load_dashboard_state(_project_root())
     return render_template(
         "dashboard.html",
         state=state,
+        has_multi_account_config=_has_multi_account_config(),
         run_result=None,
         selected_preset=_selected_preset(state.config_payload),
         selected_export_mode="single_account",
@@ -63,9 +71,9 @@ def save_configuration():
     payload = parse_dashboard_form(request.form)
     try:
         save_dashboard_configuration(_project_root(), payload)
-        flash("Konfigurace byla uložena do .env a config.yaml.", "success")
+        flash("Konfigurace byla ulozena do .env a config.yaml.", "success")
     except Exception as exc:
-        flash(f"Uložení konfigurace selhalo: {exc}", "error")
+        flash(f"Ulozeni konfigurace selhalo: {exc}", "error")
     return redirect(url_for("web.dashboard"))
 
 
@@ -81,18 +89,19 @@ def run_export():
         if export_mode == "single_account":
             result = run_export_from_dashboard(_project_root(), payload)
             if result.exit_code == 0:
-                flash("Export byl dokončen.", "success")
+                flash("Export byl dokoncen.", "success")
             else:
-                flash("Export skončil s chybou autentizace.", "error")
+                flash("Export skoncil s chybou autentizace.", "error")
             run_result = result
         else:
             multi_result = run_multi_mode_export_from_dashboard(_project_root(), payload)
-            flash("Multi-context export byl dokončen.", "success")
+            flash("Multi-context export byl dokoncen.", "success")
             run_result = multi_result
         state = load_dashboard_state(_project_root())
         return render_template(
             "dashboard.html",
             state=state,
+            has_multi_account_config=_has_multi_account_config(),
             run_result=run_result,
             selected_preset=selected_preset or _selected_preset(state.config_payload),
             selected_export_mode=export_mode,
@@ -103,6 +112,7 @@ def run_export():
         return render_template(
             "dashboard.html",
             state=state,
+            has_multi_account_config=_has_multi_account_config(),
             run_result=None,
             selected_preset=selected_preset or _selected_preset(state.config_payload),
             selected_export_mode=export_mode,
@@ -124,7 +134,7 @@ def discovery_page():
 def run_discovery_page():
     try:
         result = run_discovery(_project_root())
-        flash("Průzkum byl dokončen a CSV byla uložena do exports/_discovery.", "success")
+        flash("Pruzkum byl dokoncen a CSV byla ulozena do exports/_discovery.", "success")
         return render_template(
             "discovery.html",
             state=load_dashboard_state(_project_root()),
@@ -132,7 +142,7 @@ def run_discovery_page():
             discovery_result=result,
         )
     except Exception as exc:
-        flash(f"Průzkum selhal: {exc}", "error")
+        flash(f"Pruzkum selhal: {exc}", "error")
         return render_template(
             "discovery.html",
             state=load_dashboard_state(_project_root()),
@@ -156,13 +166,26 @@ def save_mapping_page():
     payload = request.get_json(silent=True) or {}
     try:
         contexts = parse_contexts_payload(payload)
-        save_mapping(_project_root(), contexts)
+        warnings = merchant_mapping_warnings(contexts)
+        merchant_parent_account_id = parse_merchant_parent_account_id(payload)
+        save_mapping(
+            _project_root(),
+            contexts,
+            merchant_parent_account_id=merchant_parent_account_id,
+        )
         mapping_state = load_mapping_state(_project_root())
         return jsonify(
             {
                 "ok": True,
-                "message": "Mapování bylo uloženo do config.accounts.yaml.",
+                "message": (
+                    "Mapovani bylo ulozeno do config.accounts.yaml."
+                    + (" Varovani: " + " | ".join(warnings) if warnings else "")
+                ),
                 "contexts": mapping_state["contexts_payload"],
+                "merchant_parent_account_id": mapping_state["merchant_parent_account_id"],
+                "merchant_subaccounts": mapping_state["merchant_subaccounts"],
+                "merchant_discovery_warning": mapping_state["merchant_discovery_warning"],
+                "warnings": warnings,
             }
         )
     except Exception as exc:

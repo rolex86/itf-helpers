@@ -56,6 +56,35 @@
 
           <div id="mapping-editor-empty" class="merchant-empty">Zatím není vybraný žádný kontext.</div>
 
+          <label class="mapping-textarea">
+            <span>Parent/MCA Merchant ID</span>
+            <input id="merchant-parent-account-id" placeholder="123456789">
+            <small>Zadejte parent/MCA Merchant ID jen pro discovery subúčtů. Pro export produktů používejte vždy konkrétní Merchant subaccount / standalone account ID v kontextu níže.</small>
+          </label>
+
+          <div id="merchant-subaccounts-panel" class="merchant-panel merchant-panel-muted context-test-output">
+            <div class="merchant-panel-header">
+              <strong>Merchant subúčty z parent/MCA discovery</strong>
+              <span>{% if mapping_state.merchant_parent_account_id %}Načteno{% else %}Nenastaveno{% endif %}</span>
+            </div>
+            {% if mapping_state.merchant_discovery_warning %}
+              <div class="flash flash-warning">{{ mapping_state.merchant_discovery_warning }}</div>
+            {% endif %}
+            {% if mapping_state.merchant_subaccounts %}
+              <div class="merchant-account-grid" id="merchant-subaccounts-list">
+                {% for row in mapping_state.merchant_subaccounts %}
+                  <div class="merchant-account-card">
+                    <strong>{{ row.account_name or row.account_id }}</strong>
+                    <span>ID: {{ row.account_id }}</span>
+                    <span>Web: {{ row.website_url or "-" }}</span>
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="merchant-empty" id="merchant-subaccounts-empty">Zatím nejsou k dispozici žádné nalezené Merchant subúčty.</div>
+            {% endif %}
+          </div>
+
           <form id="context-editor" class="mapping-editor" hidden>
             <div class="field-grid compact">
               <label>
@@ -77,6 +106,7 @@
               <label>
                 <span>Merchant account ID</span>
                 <input id="editor-merchant-account-id" data-field="merchant_account_id" list="merchant-accounts-list">
+                <small>Zadejte konkrétní Merchant Center subaccount / standalone account ID, ne parent/MCA ID.</small>
               </label>
               <label>
                 <span>GA4 property ID</span>
@@ -206,6 +236,7 @@
 
     <script>
       const initialContexts = {{ mapping_state.contexts_payload | tojson }};
+      const initialMerchantParentAccountId = {{ mapping_state.merchant_parent_account_id | tojson }};
       const tableBody = document.getElementById("contexts-table-body");
       const mappingStatus = document.getElementById("mapping-status");
       const addContextButton = document.getElementById("add-context-button");
@@ -219,6 +250,7 @@
       const editor = document.getElementById("context-editor");
       const editorEmpty = document.getElementById("mapping-editor-empty");
       const testOutput = document.getElementById("context-test-output");
+      const merchantParentAccountIdInput = document.getElementById("merchant-parent-account-id");
 
       const editorFields = [
         "key",
@@ -237,6 +269,7 @@
 
       let contexts = Array.isArray(initialContexts) ? initialContexts.map(normalizeContext) : [];
       let selectedIndex = contexts.length ? 0 : -1;
+      merchantParentAccountIdInput.value = String(initialMerchantParentAccountId || "");
 
       function defaultTestState(enabled = true) {
         if (!enabled) {
@@ -722,9 +755,11 @@
       async function saveMapping() {
         const selectedKey = selectedIndex >= 0 && contexts[selectedIndex] ? contexts[selectedIndex].key : "";
         const data = await postJson("{{ url_for('web.save_mapping_page') }}", {
+          merchant_parent_account_id: String(merchantParentAccountIdInput.value || "").trim(),
           account_contexts: contextsPayload().filter((context) => context.key)
         });
         contexts = Array.isArray(data.contexts) ? data.contexts.map(normalizeContext) : contexts;
+        merchantParentAccountIdInput.value = String(data.merchant_parent_account_id || merchantParentAccountIdInput.value || "");
         if (!contexts.length) {
           selectedIndex = -1;
         } else {

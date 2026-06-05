@@ -51,6 +51,7 @@ class AccountContext:
 
 
 DEFAULT_ACCOUNTS_PAYLOAD = {
+    "merchant_parent_account_id": "",
     "account_contexts": [],
 }
 
@@ -86,14 +87,27 @@ def context_to_mapping(context: AccountContext) -> dict[str, Any]:
     return payload
 
 
-def load_account_contexts(config_path: Path) -> list[AccountContext]:
+def load_accounts_config_payload(config_path: Path) -> dict[str, Any]:
     if not config_path.exists():
-        return []
+        return dict(DEFAULT_ACCOUNTS_PAYLOAD)
     with config_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
     if not isinstance(raw, dict):
         raise ValueError("Top-level config.accounts.yaml structure must be a mapping.")
-    contexts_raw = raw.get("account_contexts", []) or []
+    payload = dict(DEFAULT_ACCOUNTS_PAYLOAD)
+    payload["merchant_parent_account_id"] = _normalize_id(raw.get("merchant_parent_account_id"))
+    payload["account_contexts"] = raw.get("account_contexts", []) or []
+    return payload
+
+
+def load_merchant_parent_account_id(config_path: Path) -> str:
+    payload = load_accounts_config_payload(config_path)
+    return _normalize_id(payload.get("merchant_parent_account_id"))
+
+
+def load_account_contexts(config_path: Path) -> list[AccountContext]:
+    payload = load_accounts_config_payload(config_path)
+    contexts_raw = payload.get("account_contexts", []) or []
     if not isinstance(contexts_raw, list):
         raise ValueError("'account_contexts' in config.accounts.yaml must be a list.")
     contexts: list[AccountContext] = []
@@ -107,9 +121,15 @@ def load_account_contexts(config_path: Path) -> list[AccountContext]:
     return contexts
 
 
-def save_account_contexts(config_path: Path, contexts: list[AccountContext]) -> None:
+def save_account_contexts(
+    config_path: Path,
+    contexts: list[AccountContext],
+    *,
+    merchant_parent_account_id: str = "",
+) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
+        "merchant_parent_account_id": _normalize_id(merchant_parent_account_id),
         "account_contexts": [context_to_mapping(context) for context in contexts],
     }
     with config_path.open("w", encoding="utf-8") as handle:
