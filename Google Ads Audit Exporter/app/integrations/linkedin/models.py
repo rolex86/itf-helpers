@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_LINKEDIN_API_VERSION = "202606"
+DEFAULT_LINKEDIN_USER_AGENT = "ITFutureLinkedInAudit/1.0"
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -14,18 +18,24 @@ def utc_now_iso() -> str:
 def _json_safe(value: Any) -> Any:
     if value is None:
         return None
+
     if isinstance(value, (str, int, bool)):
         return value
+
     if isinstance(value, float):
         if math.isnan(value) or math.isinf(value):
             return None
         return value
+
     if isinstance(value, (datetime, date)):
         return value.isoformat()
+
     if isinstance(value, Path):
         return str(value)
+
     if isinstance(value, dict):
         return {str(key): _json_safe(nested) for key, nested in value.items()}
+
     if isinstance(value, (list, tuple, set)):
         return [_json_safe(nested) for nested in value]
 
@@ -56,7 +66,7 @@ class LinkedInConnection:
     label: str
     auth_type: str = "manual_token"
     client_id: str = ""
-    linkedin_api_version: str = "202605"
+    linkedin_api_version: str = DEFAULT_LINKEDIN_API_VERSION
     granted_scopes: list[str] = field(default_factory=list)
     requested_scopes: list[str] = field(default_factory=list)
     token_expires_at: str = ""
@@ -67,7 +77,7 @@ class LinkedInConnection:
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
     notes: str = ""
-    user_agent: str = "ITFutureLinkedInAudit/1.0"
+    user_agent: str = DEFAULT_LINKEDIN_USER_AGENT
     enable_write_actions: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -140,8 +150,8 @@ class LinkedInRuntimeConfig:
     client_id: str = ""
     client_secret: str = ""
     redirect_uri: str = "http://localhost:5000/linkedin/oauth/callback"
-    api_version: str = "202605"
-    user_agent: str = "ITFutureLinkedInAudit/1.0"
+    api_version: str = DEFAULT_LINKEDIN_API_VERSION
+    user_agent: str = DEFAULT_LINKEDIN_USER_AGENT
     enable_write_actions: bool = False
     default_date_range_days: int = 90
     request_timeout_seconds: int = 60
@@ -179,4 +189,3 @@ class LinkedInDiscoverySnapshot:
 
     def to_dict(self) -> dict[str, Any]:
         return _dict_json_safe(asdict(self))
-

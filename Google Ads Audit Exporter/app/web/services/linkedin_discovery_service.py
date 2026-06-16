@@ -9,9 +9,8 @@ import json
 from app.integrations.linkedin.client import LinkedInRestClient
 from app.integrations.linkedin.connections import load_linkedin_connections
 from app.integrations.linkedin.discovery import run_linkedin_discovery
-from app.integrations.linkedin.models import LinkedInDiscoverySnapshot
-from app.integrations.linkedin.token_store import load_token_payload
 from app.web.services.linkedin_runtime import load_linkedin_runtime_config
+from app.web.services.linkedin_oauth_service import ensure_connection_access_token
 
 
 def discovery_dir(project_root: Path) -> Path:
@@ -49,10 +48,7 @@ def run_linkedin_discovery_for_connection(project_root: Path, connection_key: st
     if connection is None:
         raise ValueError(f"LinkedIn connection '{connection_key}' nebyla nalezena.")
     runtime_config = load_linkedin_runtime_config(project_root)
-    token_payload = load_token_payload(project_root, connection.key)
-    access_token = token_payload.get("access_token") or token_payload.get("manual_token")
-    if not access_token:
-        raise ValueError("Pro discovery chybí LinkedIn access token.")
+    access_token = ensure_connection_access_token(project_root, connection)
     client = LinkedInRestClient(connection=connection, runtime_config=runtime_config, access_token=access_token)
     snapshot = run_linkedin_discovery(connection_key=connection.key, client=client)
     path = _snapshot_path(project_root, connection.key)
@@ -61,4 +57,3 @@ def run_linkedin_discovery_for_connection(project_root: Path, connection_key: st
     payload = snapshot.to_dict()
     payload["_path"] = str(path)
     return payload
-

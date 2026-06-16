@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
 
 from app.integrations.linkedin.client import LinkedInRestClient
 from app.integrations.linkedin.conversions import fetch_conversions_for_accounts
@@ -8,15 +8,49 @@ from app.integrations.linkedin.lead_sync import fetch_lead_forms
 from app.integrations.linkedin.models import LinkedInDiscoverySnapshot
 from app.integrations.linkedin.normalizers import normalize_entity_identifiers
 from app.integrations.linkedin.organizations import fetch_organizations
-from app.integrations.linkedin.restli import owner_param_for_organization, owner_param_for_sponsored_account, sponsored_account_urn
+from app.integrations.linkedin.restli import (
+    owner_param_for_organization,
+    owner_param_for_sponsored_account,
+    sponsored_account_urn,
+)
+
+
+CAMPAIGN_GROUP_STATUSES = (
+    "ACTIVE",
+    "ARCHIVED",
+    "CANCELED",
+    "DRAFT",
+    "PAUSED",
+    "PENDING_DELETION",
+    "REMOVED",
+)
+
+CAMPAIGN_STATUSES = (
+    "ACTIVE",
+    "PAUSED",
+    "ARCHIVED",
+    "COMPLETED",
+    "CANCELED",
+    "DRAFT",
+    "PENDING_DELETION",
+    "REMOVED",
+)
+
+
+def _status_search_params(statuses: tuple[str, ...]) -> dict[str, str]:
+    return {
+        "q": "search",
+        "search": f"(status:(values:List({','.join(statuses)})))",
+        "sortOrder": "DESCENDING",
+    }
 
 
 def _safe_collect(
     snapshot: LinkedInDiscoverySnapshot,
     *,
     key: str,
-    action: Callable[[], list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
+    action: Callable[[], list[dict[str, object]]],
+) -> list[dict[str, object]]:
     try:
         rows = action()
         snapshot.raw_snapshots[key] = rows
@@ -37,32 +71,74 @@ def run_linkedin_discovery(
     ad_accounts = _safe_collect(
         snapshot,
         key="ad_accounts",
-        action=lambda: [normalize_entity_identifiers(row) for row in client.paginate("adAccounts", params={"q": "search", "count": 100})],
+        action=lambda: [
+            normalize_entity_identifiers(row)
+            for row in client.paginate_cursor(
+                "adAccounts",
+                params={"q": "search"},
+                page_size=100,
+            )
+        ],
     )
     snapshot.ad_accounts.extend(ad_accounts)
 
     ad_account_users = _safe_collect(
         snapshot,
-        key="ad_account_users",
-        action=lambda: [normalize_entity_identifiers(row) for row in client.paginate("adAccountUsers", params={"q": "search", "count": 100})],
+        key="ad_account_users_authenticated_user",
+        action=lambda: [
+            normalize_entity_identifiers(row)
+            for row in client.paginate_cursor(
+                "adAccountUsers",
+                params={"q": "authenticatedUser"},
+                page_size=100,
+            )
+        ],
     )
     snapshot.ad_account_users.extend(ad_account_users)
-    snapshot.ad_account_roles.extend(ad_account_users)
 
-    account_ids = [str(row.get("account_id") or row.get("id") or "") for row in ad_accounts if str(row.get("account_id") or row.get("id") or "")]
+    account_ids = [
+        str(row.get("account_id") or row.get("id") or "")
+        for row in ad_accounts
+        if str(row.get("account_id") or row.get("id") or "")
+    ]
 
-    campaign_groups: list[dict[str, Any]] = []
-    campaigns: list[dict[str, Any]] = []
-    creatives: list[dict[str, Any]] = []
-    creative_content: list[dict[str, Any]] = []
+    ad_account_roles: list[dict[str, object]] = []
+    campaign_groups: list[dict[str, object]] = []
+    campaigns: list[dict[str, object]] = []
+    creatives: list[dict[str, object]] = []
+    creative_content: list[dict[str, object]] = []
+    campaign_ids_by_account: dict[str, list[str]] = {}
+
     for account_id in account_ids:
         account_urn = sponsored_account_urn(account_id)
+
+        account_role_rows = _safe_collect(
+            snapshot,
+            key=f"ad_account_users_roles_{account_id}",
+            action=lambda account_urn=account_urn: [
+                normalize_entity_identifiers(row)
+                for row in client.paginate_cursor(
+                    "adAccountUsers",
+                    params={
+                        "q": "accounts",
+                        "accounts": account_urn,
+                    },
+                    page_size=100,
+                )
+            ],
+        )
+        ad_account_roles.extend(account_role_rows)
+
         campaign_group_rows = _safe_collect(
             snapshot,
             key=f"campaign_groups_{account_id}",
-            action=lambda account_urn=account_urn: [
+            action=lambda account_id=account_id: [
                 normalize_entity_identifiers(row)
-                for row in client.paginate("adCampaignGroups", params={"q": "search", "search.account.values[0]": account_urn, "count": 100})
+                for row in client.paginate_cursor(
+                    f"adAccounts/{account_id}/adCampaignGroups",
+                    params=_status_search_params(CAMPAIGN_GROUP_STATUSES),
+                    page_size=100,
+                )
             ],
         )
         campaign_groups.extend(campaign_group_rows)
@@ -70,24 +146,40 @@ def run_linkedin_discovery(
         campaign_rows = _safe_collect(
             snapshot,
             key=f"campaigns_{account_id}",
-            action=lambda account_urn=account_urn: [
+            action=lambda account_id=account_id: [
                 normalize_entity_identifiers(row)
-                for row in client.paginate("adCampaigns", params={"q": "search", "search.account.values[0]": account_urn, "count": 100})
+                for row in client.paginate_cursor(
+                    f"adAccounts/{account_id}/adCampaigns",
+                    params=_status_search_params(CAMPAIGN_STATUSES),
+                    page_size=100,
+                )
             ],
         )
         campaigns.extend(campaign_rows)
 
+        campaign_ids_by_account[account_id] = [
+            str(row.get("campaign_id") or row.get("id") or "")
+            for row in campaign_rows
+            if str(row.get("campaign_id") or row.get("id") or "")
+        ]
+
         creative_rows = _safe_collect(
             snapshot,
             key=f"creatives_{account_id}",
-            action=lambda account_urn=account_urn: [
+            action=lambda account_id=account_id: [
                 normalize_entity_identifiers(row)
-                for row in client.paginate("adCreatives", params={"q": "search", "search.account.values[0]": account_urn, "count": 100})
+                for row in client.paginate_cursor(
+                    f"adAccounts/{account_id}/creatives",
+                    params={"q": "criteria"},
+                    page_size=100,
+                    extra_headers={"X-RestLi-Method": "FINDER"},
+                )
             ],
         )
         creatives.extend(creative_rows)
         creative_content.extend(creative_rows)
 
+    snapshot.ad_account_roles.extend(ad_account_roles)
     snapshot.campaign_groups.extend(campaign_groups)
     snapshot.campaigns.extend(campaigns)
     snapshot.creatives.extend(creatives)
@@ -98,9 +190,17 @@ def run_linkedin_discovery(
     snapshot.raw_snapshots["organizations"] = organizations
     snapshot.organization_roles.extend(snapshot.organizations)
 
-    conversions, campaign_conversions, insight_tags, insight_tag_domains, conversion_warnings = fetch_conversions_for_accounts(
+    (
+        conversions,
+        campaign_conversions,
+        insight_tags,
+        insight_tag_domains,
+        insight_tags_permission,
+        conversion_warnings,
+    ) = fetch_conversions_for_accounts(
         client,
         account_ids=account_ids,
+        campaign_ids_by_account=campaign_ids_by_account,
     )
     snapshot.conversions.extend(conversions)
     snapshot.campaign_conversions.extend(campaign_conversions)
@@ -110,6 +210,7 @@ def run_linkedin_discovery(
     snapshot.raw_snapshots["campaign_conversions"] = campaign_conversions
     snapshot.raw_snapshots["insight_tags"] = insight_tags
     snapshot.raw_snapshots["insight_tag_domains"] = insight_tag_domains
+    snapshot.raw_snapshots["insight_tags_permission"] = insight_tags_permission
     snapshot.warnings.extend(conversion_warnings)
 
     owner_urns = [owner_param_for_sponsored_account(account_id) for account_id in account_ids]
@@ -118,7 +219,11 @@ def run_linkedin_discovery(
         for row in snapshot.organizations
         if str(row.get("organization_id") or row.get("id") or "")
     )
-    lead_forms, lead_form_questions, lead_warnings = fetch_lead_forms(client, owner_urns=owner_urns)
+
+    lead_forms, lead_form_questions, lead_warnings = fetch_lead_forms(
+        client,
+        owner_urns=owner_urns,
+    )
     snapshot.lead_forms.extend(lead_forms)
     snapshot.lead_form_questions.extend(lead_form_questions)
     snapshot.raw_snapshots["lead_forms"] = lead_forms
@@ -127,4 +232,3 @@ def run_linkedin_discovery(
 
     snapshot.status = "success" if not snapshot.warnings else "partial"
     return snapshot
-

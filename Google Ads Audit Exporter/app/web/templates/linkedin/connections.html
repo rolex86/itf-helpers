@@ -38,7 +38,7 @@
               <label><span>Název</span><input id="connection-label" value="{{ selected_connection.label if selected_connection else '' }}"></label>
               <label><span>Auth type</span><input id="connection-auth-type" value="{{ selected_connection.auth_type if selected_connection else 'manual_token' }}"></label>
               <label><span>Client ID</span><input id="connection-client-id" value="{{ selected_connection.client_id if selected_connection else '' }}"></label>
-              <label><span>API version</span><input id="connection-version" value="{{ selected_connection.linkedin_api_version if selected_connection else '202605' }}"></label>
+              <label><span>API version</span><input id="connection-version" value="{{ selected_connection.linkedin_api_version if selected_connection else '202506' }}"></label>
               <label><span>User-Agent</span><input id="connection-user-agent" value="{{ selected_connection.user_agent if selected_connection else 'ITFutureLinkedInAudit/1.0' }}"></label>
               <label><span>Requested scopes</span><input id="connection-requested-scopes" value="{{ (selected_connection.requested_scopes | join(' ')) if selected_connection else 'r_ads r_ads_reporting r_marketing_leadgen_automation r_organization_lookup rw_organization_admin' }}"></label>
               <label><span>Poznámka</span><input id="connection-notes" value="{{ selected_connection.notes if selected_connection else '' }}"></label>
@@ -167,4 +167,3 @@
     </script>
   </body>
 </html>
-
