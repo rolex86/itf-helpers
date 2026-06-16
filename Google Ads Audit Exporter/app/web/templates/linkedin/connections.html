@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LinkedIn Audit | Připojení</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">LinkedIn Audit</p>
+          <h1>Připojení</h1>
+          <p class="brand-copy">Oddělený LinkedIn flow vedle Google a Meta exportů.</p>
+        </div>
+        <nav class="nav-block">
+          <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+          <a href="{{ url_for('web.meta_connections_page') }}">Meta Ads</a>
+          <a href="{{ url_for('web.linkedin_connections_page') }}">LinkedIn Připojení</a>
+          <a href="{{ url_for('web.linkedin_discovery_page') }}">LinkedIn Discovery</a>
+          <a href="{{ url_for('web.linkedin_mapping_page') }}">LinkedIn Mapping</a>
+          <a href="{{ url_for('web.linkedin_audit_page') }}">LinkedIn Export</a>
+        </nav>
+      </aside>
+      <main class="content">
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Nové LinkedIn připojení</h3>
+              <p>Podporuje ruční token i OAuth flow. Secrety se ukládají mimo JSON metadata.</p>
+            </div>
+          </div>
+          <div id="linkedin-connection-status"></div>
+          <form id="linkedin-connection-form" class="mapping-editor">
+            <div class="field-grid compact">
+              <label><span>Key</span><input id="connection-key" value="{{ selected_connection.key if selected_connection else '' }}"></label>
+              <label><span>Název</span><input id="connection-label" value="{{ selected_connection.label if selected_connection else '' }}"></label>
+              <label><span>Auth type</span><input id="connection-auth-type" value="{{ selected_connection.auth_type if selected_connection else 'manual_token' }}"></label>
+              <label><span>Client ID</span><input id="connection-client-id" value="{{ selected_connection.client_id if selected_connection else '' }}"></label>
+              <label><span>API version</span><input id="connection-version" value="{{ selected_connection.linkedin_api_version if selected_connection else '202605' }}"></label>
+              <label><span>User-Agent</span><input id="connection-user-agent" value="{{ selected_connection.user_agent if selected_connection else 'ITFutureLinkedInAudit/1.0' }}"></label>
+              <label><span>Requested scopes</span><input id="connection-requested-scopes" value="{{ (selected_connection.requested_scopes | join(' ')) if selected_connection else 'r_ads r_ads_reporting r_marketing_leadgen_automation r_organization_lookup rw_organization_admin' }}"></label>
+              <label><span>Poznámka</span><input id="connection-notes" value="{{ selected_connection.notes if selected_connection else '' }}"></label>
+            </div>
+            <label class="mapping-textarea">
+              <span>Access token</span>
+              <textarea id="connection-access-token" rows="4"></textarea>
+            </label>
+            <label class="mapping-textarea">
+              <span>Refresh token</span>
+              <textarea id="connection-refresh-token" rows="3"></textarea>
+            </label>
+            <label class="mapping-textarea">
+              <span>Client secret</span>
+              <textarea id="connection-client-secret" rows="3"></textarea>
+            </label>
+            <div class="action-row mapping-actions">
+              <button class="btn btn-primary" type="button" id="save-connection-button">Uložit connection</button>
+              <button class="btn btn-secondary" type="button" id="test-connection-button">Otestovat connection</button>
+              <button class="btn btn-secondary" type="button" id="oauth-start-button">Authorize LinkedIn</button>
+              <button class="btn btn-secondary" type="button" id="oauth-refresh-button">Obnovit token</button>
+              <button class="btn btn-secondary" type="button" id="oauth-revoke-button">Smazat lokální tokeny</button>
+              <button class="btn btn-secondary" type="button" id="delete-connection-button">Smazat connection</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Uložené LinkedIn connections</h3>
+              <p>Tokeny ani client secret nejsou v JSON metadata souboru.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>Název</th>
+                  <th>Auth type</th>
+                  <th>API version</th>
+                  <th>Status</th>
+                  <th>Requested scopes</th>
+                  <th>Granted scopes</th>
+                  <th>Poslední validace</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in connections %}
+                  <tr>
+                    <td><a href="{{ url_for('web.linkedin_connections_page', connection_key=row.key) }}">{{ row.key }}</a></td>
+                    <td>{{ row.label }}</td>
+                    <td>{{ row.auth_type }}</td>
+                    <td>{{ row.linkedin_api_version }}</td>
+                    <td>{{ row.status }}</td>
+                    <td>{{ row.requested_scopes | join(', ') }}</td>
+                    <td>{{ row.granted_scopes | join(', ') }}</td>
+                    <td>{{ row.last_validated_at or '-' }}</td>
+                  </tr>
+                {% else %}
+                  <tr><td colspan="8">Zatím nejsou uložená žádná LinkedIn připojení.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script>
+      function payload() {
+        return {
+          key: document.getElementById("connection-key").value.trim(),
+          label: document.getElementById("connection-label").value.trim(),
+          auth_type: document.getElementById("connection-auth-type").value.trim(),
+          client_id: document.getElementById("connection-client-id").value.trim(),
+          linkedin_api_version: document.getElementById("connection-version").value.trim(),
+          user_agent: document.getElementById("connection-user-agent").value.trim(),
+          requested_scopes: document.getElementById("connection-requested-scopes").value.trim(),
+          notes: document.getElementById("connection-notes").value.trim(),
+          access_token: document.getElementById("connection-access-token").value.trim(),
+          refresh_token: document.getElementById("connection-refresh-token").value.trim(),
+          client_secret: document.getElementById("connection-client-secret").value.trim()
+        };
+      }
+      async function post(url, body) {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(body || payload())
+        });
+        return response.json();
+      }
+      function setStatus(message, kind) {
+        document.getElementById("linkedin-connection-status").innerHTML =
+          `<div class="flash flash-${kind}">${message}</div>`;
+      }
+      document.getElementById("save-connection-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.save_linkedin_connection_route') }}");
+        setStatus(result.ok ? "LinkedIn connection byla uložena." : result.message, result.ok ? "success" : "error");
+      });
+      document.getElementById("test-connection-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.test_linkedin_connection_route') }}");
+        setStatus(result.ok ? result.message : result.message, result.ok ? "success" : "error");
+      });
+      document.getElementById("oauth-start-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.linkedin_oauth_start_route') }}");
+        if (result.ok && result.authorize_url) {
+          window.location.href = result.authorize_url;
+          return;
+        }
+        setStatus(result.message || "OAuth start selhal.", "error");
+      });
+      document.getElementById("oauth-refresh-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.linkedin_oauth_refresh_route') }}", {connection_key: document.getElementById("connection-key").value.trim()});
+        setStatus(result.ok ? result.message : result.message, result.ok ? "success" : "error");
+      });
+      document.getElementById("oauth-revoke-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.linkedin_oauth_revoke_local_route') }}", {connection_key: document.getElementById("connection-key").value.trim()});
+        setStatus(result.ok ? result.message : result.message, result.ok ? "success" : "error");
+      });
+      document.getElementById("delete-connection-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.delete_linkedin_connection_route') }}", {connection_key: document.getElementById("connection-key").value.trim()});
+        setStatus(result.ok ? "LinkedIn connection byla smazána." : result.message, result.ok ? "success" : "error");
+      });
+    </script>
+  </body>
+</html>
+

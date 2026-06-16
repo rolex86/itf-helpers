@@ -1,0 +1,750 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from app.accounts.domain_filter import apply_context_domain_filters, source_domains_display
+from app.audit.basic_flags import build_basic_flags
+from app.auth.google_ads_client import build_google_ads_client
+from app.config.env_settings import GoogleAdsEnvConfig, load_env_config
+from app.config.settings import AppSettings
+from app.export.csv_exporter import export_csv
+from app.export.derived_summaries import build_landing_pages_summary, build_locations_summary
+from app.export.metadata_exporter import write_json
+from app.export.xlsx_exporter import export_workbook
+from app.ga4.export import build_ga4_exports
+from app.google_ads.diagnostics import build_supplemental_reports
+from app.google_ads.fetcher import GoogleAdsFetcher
+from app.google_ads.postprocess import postprocess_report_dataframe
+from app.google_ads.report_definitions import REPORT_ORDER, empty_report_frame, get_report_definition
+from app.gtm.export import build_gtm_exports
+from app.merchant.export import build_merchant_exports
+from app.pagespeed.export import build_pagespeed_export
+from app.search_console.export import build_search_console_exports
+from app.utils.dates import ResolvedDateRange, resolve_date_range
+from app.utils.logging import configure_logging
+from app.utils.paths import ExportPaths, prepare_export_paths
+
+
+@dataclass(slots=True)
+class ExportRunState:
+    datasets: dict[str, pd.DataFrame] = field(default_factory=dict)
+    query_log: list[dict[str, Any]] = field(default_factory=list)
+    report_rows: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    account_info: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ExportExecutionResult:
+    exit_code: int
+    export_paths: ExportPaths
+    resolved_range: ResolvedDateRange
+    errors: list[dict[str, Any]]
+    report_rows: list[dict[str, Any]]
+    account_info: dict[str, Any]
+    fallback_report_count: int
+    datasets: dict[str, pd.DataFrame] = field(default_factory=dict)
+    context_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def _timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _build_summary_rows(
+    customer_id: str,
+    settings: AppSettings,
+    resolved_range: ResolvedDateRange,
+    export_paths: ExportPaths,
+    report_rows: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+    context_metadata: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = [
+        {
+            "section": "export",
+            "name": "customer_id",
+            "value": customer_id,
+            "details": "",
+            "status": "ok",
+            "rows": "",
+        },
+        {
+            "section": "export",
+            "name": "date_from",
+            "value": resolved_range.date_from.isoformat(),
+            "details": "",
+            "status": "ok",
+            "rows": "",
+        },
+        {
+            "section": "export",
+            "name": "date_to",
+            "value": resolved_range.date_to.isoformat(),
+            "details": "",
+            "status": "ok",
+            "rows": "",
+        },
+        {
+            "section": "export",
+            "name": "date_label",
+            "value": resolved_range.label,
+            "details": "",
+            "status": "ok",
+            "rows": "",
+        },
+        {
+            "section": "export",
+            "name": "output_dir",
+            "value": str(export_paths.base_dir),
+            "details": "",
+            "status": "ok",
+            "rows": "",
+        },
+        {
+            "section": "policy",
+            "name": "free_only",
+            "value": "true" if settings.cost_policy.free_only else "false",
+            "details": "Free-only rezim aktivni, pouze read-only API a lokalni uloziste.",
+            "status": "ok" if settings.cost_policy.free_only else "warning",
+            "rows": "",
+        },
+    ]
+
+    if context_metadata:
+        for key in (
+            "context_key",
+            "context_label",
+            "source_domain",
+            "source_domains",
+            "export_mode",
+            "domain_filter_status",
+            "matched_landing_pages",
+            "matched_campaigns",
+        ):
+            if not context_metadata.get(key):
+                continue
+            rows.append(
+                {
+                    "section": "context",
+                    "name": key,
+                    "value": (
+                        source_domains_display(context_metadata.get(key, []))
+                        if key == "source_domains"
+                        else context_metadata.get(key, "")
+                    ),
+                    "details": "",
+                    "status": "ok",
+                    "rows": "",
+                }
+            )
+
+    for warning in resolved_range.warnings:
+        rows.append(
+            {
+                "section": "warning",
+                "name": "date_range",
+                "value": warning,
+                "details": "",
+                "status": "warning",
+                "rows": "",
+            }
+        )
+
+    rows.extend(report_rows)
+
+    for error in errors:
+        rows.append(
+            {
+                "section": "error",
+                "name": error.get("report", "general"),
+                "value": error.get("message", ""),
+                "details": error.get("details", ""),
+                "status": "error",
+                "rows": "",
+            }
+        )
+
+    return rows
+
+
+def _persist_metadata(export_paths: ExportPaths, state: ExportRunState, enabled: bool) -> None:
+    if not enabled:
+        return
+    write_json(export_paths.metadata_dir / "account_info.json", state.account_info)
+    write_json(export_paths.metadata_dir / "query_log.json", state.query_log)
+    write_json(export_paths.metadata_dir / "errors.json", state.errors)
+
+
+def _apply_context_domain_filtering(
+    *,
+    logger,
+    state: ExportRunState,
+    context_metadata: dict[str, Any] | None,
+) -> None:
+    if not context_metadata:
+        return
+
+    source_domains = context_metadata.get("source_domains", []) or []
+    if not source_domains:
+        warning = (
+            "Kontext nema nastavene source_domains. Google Ads / PageSpeed data nemusi byt domenove oddelena."
+        )
+        context_metadata["domain_filter_status"] = "missing_source_domains"
+        context_metadata["matched_landing_pages"] = int(len(state.datasets.get("landing_pages", pd.DataFrame())))
+        context_metadata["matched_campaigns"] = 0
+        logger.warning("WARNING context=%s source_domains missing", context_metadata.get("context_key", ""))
+        state.report_rows.append(
+            {
+                "section": "warning",
+                "name": "source_domains",
+                "value": warning,
+                "details": "",
+                "status": "warning",
+                "rows": "",
+            }
+        )
+        return
+
+    logger.info(
+        "Context key=%s label=%s",
+        context_metadata.get("context_key", ""),
+        context_metadata.get("context_label", ""),
+    )
+    logger.info("Context source_domains=%s", source_domains_display(source_domains))
+    filter_result = apply_context_domain_filters(state.datasets, source_domains)
+    context_metadata["source_domains"] = filter_result.source_domains
+    context_metadata["source_domain"] = filter_result.source_domains[0] if filter_result.source_domains else ""
+    context_metadata["domain_filter_status"] = filter_result.status
+    context_metadata["matched_landing_pages"] = filter_result.landing_pages_after
+    context_metadata["matched_campaigns"] = filter_result.matched_campaign_count
+
+    logger.info("Google Ads domain filtering:")
+    logger.info(
+        "landing_pages before=%s after=%s",
+        filter_result.landing_pages_before,
+        filter_result.landing_pages_after,
+    )
+    logger.info(
+        "derived campaign_ids=%s",
+        ",".join(sorted(filter_result.matched_campaign_ids)) if filter_result.matched_campaign_ids else "",
+    )
+    for key in (
+        "campaigns",
+        "campaigns_monthly",
+        "ad_groups",
+        "keywords",
+        "search_terms",
+        "ads",
+        "assets",
+        "devices",
+        "locations",
+        "shopping_products",
+        "shopping_products_summary",
+        "pmax_campaigns",
+        "pmax_asset_groups",
+        "google_ads_recommendations",
+    ):
+        stats = filter_result.dataset_stats.get(key)
+        if not stats:
+            continue
+        existing_row = next((row for row in state.report_rows if row.get("name") == key), None)
+        if existing_row is not None:
+            existing_row["rows"] = stats["after"]
+            note = (
+                "Campaign included because at least one landing page matched context source_domains."
+            )
+            details = str(existing_row.get("details") or "")
+            if note not in details:
+                existing_row["details"] = f"{details} | {note}".strip(" |")
+        if stats["before"] == stats["after"]:
+            continue
+        logger.info("%s before=%s after=%s", key, stats["before"], stats["after"])
+
+    landing_pages_row = next((row for row in state.report_rows if row.get("name") == "landing_pages"), None)
+    if landing_pages_row is not None:
+        landing_pages_row["rows"] = filter_result.landing_pages_after
+
+    for warning in filter_result.warnings:
+        logger.warning(
+            "WARNING context=%s %s",
+            context_metadata.get("context_key", ""),
+            warning,
+        )
+        state.report_rows.append(
+            {
+                "section": "warning",
+                "name": "source_domains",
+                "value": warning,
+                "details": "",
+                "status": "warning",
+                "rows": "",
+            }
+        )
+
+
+def _record_auth_failure(state: ExportRunState, message: str) -> None:
+    state.errors.append(
+        {
+            "report": "authentication",
+            "message": message,
+            "details": "",
+            "timestamp": _timestamp(),
+        }
+    )
+
+
+def _record_report_success(
+    state: ExportRunState,
+    report_key: str,
+    sheet_name: str,
+    rows: int,
+    notes: list[str],
+    status: str,
+    dropped_fields: list[str],
+) -> None:
+    state.report_rows.append(
+        {
+            "section": "report",
+            "name": report_key,
+            "value": sheet_name,
+            "details": " | ".join(notes),
+            "status": status,
+            "rows": rows,
+            "dropped_fields": dropped_fields,
+        }
+    )
+
+
+def _record_report_failure(
+    state: ExportRunState,
+    report_key: str,
+    sheet_name: str,
+    priority: bool,
+    message: str,
+) -> None:
+    state.errors.append(
+        {
+            "report": report_key,
+            "message": message,
+            "details": "Priority report failure" if priority else "",
+            "timestamp": _timestamp(),
+        }
+    )
+    state.report_rows.append(
+        {
+            "section": "report",
+            "name": report_key,
+            "value": sheet_name,
+            "details": "Priority report failure" if priority else message,
+            "status": "error",
+            "rows": 0,
+        }
+    )
+
+
+def _persist_dataset_as_csv(
+    export_paths: ExportPaths,
+    dataset: pd.DataFrame,
+    report_key: str,
+    enabled: bool,
+) -> None:
+    if enabled:
+        export_csv(dataset, export_paths.raw_dir / f"{report_key}.csv")
+
+
+def _merge_export_result_datasets(
+    *,
+    state: ExportRunState,
+    export_paths: ExportPaths,
+    datasets: dict[str, pd.DataFrame],
+    report_notes: dict[str, list[str]],
+    report_warning_keys: set[str],
+    include_raw_csv: bool,
+) -> None:
+    for report_key, dataset in datasets.items():
+        state.datasets[report_key] = dataset
+        _persist_dataset_as_csv(
+            export_paths=export_paths,
+            dataset=dataset,
+            report_key=report_key,
+            enabled=include_raw_csv,
+        )
+        existing_row = next((row for row in state.report_rows if row.get("name") == report_key), None)
+        notes = list(report_notes.get(report_key, []))
+        if existing_row is not None:
+            existing_details = existing_row.get("details", "")
+            extra_details = " | ".join(note for note in notes if note)
+            if extra_details:
+                existing_row["details"] = (
+                    f"{existing_details} | {extra_details}" if existing_details else extra_details
+                )
+            existing_row["rows"] = int(len(dataset))
+            if report_key in report_warning_keys and existing_row.get("status") != "error":
+                existing_row["status"] = "warning"
+            continue
+
+        report = get_report_definition(report_key)
+        _record_report_success(
+            state=state,
+            report_key=report_key,
+            sheet_name=report.sheet_name,
+            rows=int(len(dataset)),
+            notes=notes,
+            status="warning" if report_key in report_warning_keys else "ok",
+            dropped_fields=[],
+        )
+
+
+def execute_export(settings: AppSettings, project_root: Path, config_path: Path) -> ExportExecutionResult:
+    return execute_export_with_overrides(
+        settings=settings,
+        project_root=project_root,
+        config_path=config_path,
+    )
+
+
+def execute_export_with_overrides(
+    settings: AppSettings,
+    project_root: Path,
+    config_path: Path,
+    *,
+    env_config_override: GoogleAdsEnvConfig | None = None,
+    export_base_name_override: str | None = None,
+    export_parent_dir_override: Path | None = None,
+    context_metadata: dict[str, Any] | None = None,
+) -> ExportExecutionResult:
+    resolved_range = resolve_date_range(settings.date_range)
+    export_paths = prepare_export_paths(
+        project_root=project_root,
+        base_dir_name=settings.output.base_dir,
+        customer_id=settings.customer_id,
+        run_date=resolved_range.export_date,
+        xlsx_filename=settings.output.xlsx_filename,
+        base_name_override=export_base_name_override,
+        parent_dir_override=export_parent_dir_override,
+    )
+    logger = configure_logging(export_paths.log_path)
+    state = ExportRunState(account_info={"customer_id": settings.customer_id})
+
+    logger.info("Starting export for customer_id=%s", settings.customer_id)
+    env_config = env_config_override or load_env_config(project_root / ".env")
+    logger.info(
+        "Resolved date range %s -> %s (%s)",
+        resolved_range.date_from.isoformat(),
+        resolved_range.date_to.isoformat(),
+        resolved_range.label,
+    )
+    for warning in resolved_range.warnings:
+        logger.warning(warning)
+
+    write_json(
+        export_paths.metadata_dir / "export_config.json",
+        settings.to_metadata(resolved_range=resolved_range, config_path=config_path),
+    )
+
+    try:
+        client = build_google_ads_client(env_config=env_config)
+    except Exception as exc:  # pragma: no cover - depends on credentials/runtime
+        message = f"Authentication failed: {exc}"
+        logger.exception(message)
+        _record_auth_failure(state, message)
+        _persist_metadata(export_paths, state, settings.output.include_metadata)
+        return ExportExecutionResult(
+            exit_code=1,
+            export_paths=export_paths,
+            resolved_range=resolved_range,
+            errors=list(state.errors),
+            report_rows=list(state.report_rows),
+            account_info=dict(state.account_info),
+            fallback_report_count=0,
+            datasets=dict(state.datasets),
+            context_metadata=dict(context_metadata or {}),
+        )
+
+    fetcher = GoogleAdsFetcher(client=client, project_root=project_root, logger=logger)
+
+    for report_key in REPORT_ORDER:
+        if not settings.reports.get(report_key, False):
+            logger.info("Skipping disabled report=%s", report_key)
+            continue
+
+        report = get_report_definition(report_key)
+        if not report.supports_fetch:
+            logger.info("Skipping synthetic report during GAQL fetch phase report=%s", report.key)
+            continue
+        logger.info("Starting report=%s", report.key)
+
+        try:
+            result = fetcher.fetch_report(
+                report=report,
+                customer_id=settings.customer_id,
+                resolved_range=resolved_range,
+            )
+            processed_dataframe = postprocess_report_dataframe(
+                report_key=report.key,
+                dataframe=result.dataframe,
+            )
+            state.datasets[report.key] = processed_dataframe
+            state.query_log.extend(result.query_attempts)
+
+            _persist_dataset_as_csv(
+                export_paths=export_paths,
+                dataset=processed_dataframe,
+                report_key=report.key,
+                enabled=settings.output.include_raw_csv,
+            )
+
+            if report.key == "account" and not processed_dataframe.empty:
+                state.account_info = processed_dataframe.iloc[0].to_dict()
+
+            notes = list(result.notes)
+            if result.dropped_optional_fields:
+                notes.append("Dropped optional fields: " + ", ".join(result.dropped_optional_fields))
+
+            _record_report_success(
+                state=state,
+                report_key=report.key,
+                sheet_name=report.sheet_name,
+                rows=int(len(processed_dataframe)),
+                notes=notes,
+                status="warning" if result.dropped_optional_fields else "ok",
+                dropped_fields=list(result.dropped_optional_fields),
+            )
+            logger.info("Finished report=%s rows=%s", report.key, len(processed_dataframe))
+        except Exception as exc:  # pragma: no cover - API dependent
+            logger.exception("Report failed report=%s", report.key)
+            state.datasets[report.key] = empty_report_frame(report)
+            _record_report_failure(
+                state=state,
+                report_key=report.key,
+                sheet_name=report.sheet_name,
+                priority=report.priority,
+                message=str(exc),
+            )
+
+    _apply_context_domain_filtering(
+        logger=logger,
+        state=state,
+        context_metadata=context_metadata,
+    )
+
+    flags_df = build_basic_flags(
+        campaigns=state.datasets.get("campaigns", empty_report_frame(get_report_definition("campaigns"))),
+        keywords=state.datasets.get("keywords", empty_report_frame(get_report_definition("keywords"))),
+        search_terms=state.datasets.get(
+            "search_terms",
+            empty_report_frame(get_report_definition("search_terms")),
+        ),
+        landing_pages=state.datasets.get(
+            "landing_pages",
+            empty_report_frame(get_report_definition("landing_pages")),
+        ),
+        devices=state.datasets.get("devices", empty_report_frame(get_report_definition("devices"))),
+        locations=state.datasets.get("locations", empty_report_frame(get_report_definition("locations"))),
+        flags_config=settings.flags,
+    )
+
+    supplemental = build_supplemental_reports(
+        fetcher=fetcher,
+        customer_id=settings.customer_id,
+        resolved_range=resolved_range,
+        datasets=state.datasets,
+        enabled_reports=settings.reports,
+        flags_config=settings.flags,
+    )
+    state.query_log.extend(supplemental.query_attempts)
+    state.errors.extend(supplemental.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=supplemental.datasets,
+        report_notes=supplemental.report_notes,
+        report_warning_keys=supplemental.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+
+    logger.info("Starting synthetic module=merchant")
+    merchant_result = build_merchant_exports(
+        env_config=env_config,
+        datasets=state.datasets,
+        reports_enabled=settings.reports,
+        flags_config=settings.flags,
+    )
+    state.errors.extend(merchant_result.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=merchant_result.datasets,
+        report_notes=merchant_result.report_notes,
+        report_warning_keys=merchant_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=merchant")
+
+    logger.info("Starting synthetic module=ga4")
+    ga4_result = build_ga4_exports(
+        env_config=env_config,
+        datasets=state.datasets,
+        reports_enabled=settings.reports,
+        resolved_range=resolved_range,
+        flags_config=settings.flags,
+    )
+    state.errors.extend(ga4_result.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=ga4_result.datasets,
+        report_notes=ga4_result.report_notes,
+        report_warning_keys=ga4_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=ga4")
+
+    logger.info("Starting synthetic module=search_console")
+    gsc_result = build_search_console_exports(
+        env_config=env_config,
+        datasets=state.datasets,
+        reports_enabled=settings.reports,
+        resolved_range=resolved_range,
+        flags_config=settings.flags,
+        cache_dir=project_root / "exports" / "_cache" / "search_console",
+    )
+    state.errors.extend(gsc_result.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=gsc_result.datasets,
+        report_notes=gsc_result.report_notes,
+        report_warning_keys=gsc_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=search_console")
+
+    logger.info("Starting synthetic module=pagespeed")
+    if context_metadata:
+        logger.info(
+            "PageSpeed selected from filtered landing_pages only status=%s matched_landing_pages=%s",
+            context_metadata.get("domain_filter_status", ""),
+            context_metadata.get("matched_landing_pages", ""),
+        )
+    pagespeed_result = build_pagespeed_export(
+        env_config=env_config,
+        pagespeed_config=settings.pagespeed,
+        flags_config=settings.flags,
+        reports_enabled=settings.reports,
+        landing_pages=state.datasets.get("landing_pages", pd.DataFrame()),
+        cache_dir=project_root / "exports" / "_cache" / "pagespeed",
+        currency_code=str(state.account_info.get("currency_code", "") or ""),
+    )
+    state.errors.extend(pagespeed_result.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=pagespeed_result.datasets,
+        report_notes=pagespeed_result.report_notes,
+        report_warning_keys=pagespeed_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=pagespeed")
+
+    logger.info("Starting synthetic module=gtm")
+    gtm_result = build_gtm_exports(
+        env_config=env_config,
+        reports_enabled=settings.reports,
+    )
+    state.errors.extend(gtm_result.errors)
+    _merge_export_result_datasets(
+        state=state,
+        export_paths=export_paths,
+        datasets=gtm_result.datasets,
+        report_notes=gtm_result.report_notes,
+        report_warning_keys=gtm_result.report_warning_keys,
+        include_raw_csv=settings.output.include_raw_csv,
+    )
+    logger.info("Finished synthetic module=gtm")
+
+    summary_rows = _build_summary_rows(
+        customer_id=settings.customer_id,
+        settings=settings,
+        resolved_range=resolved_range,
+        export_paths=export_paths,
+        report_rows=state.report_rows,
+        errors=state.errors,
+        context_metadata=context_metadata,
+    )
+
+    logger.info("Starting workbook export")
+    try:
+        export_workbook(
+            xlsx_path=export_paths.xlsx_path,
+            summary_rows=summary_rows,
+            datasets=state.datasets,
+            flags_df=flags_df,
+            derived_sheets=[
+                (
+                    "Landing pages summary",
+                    build_landing_pages_summary(
+                        landing_pages=state.datasets.get(
+                            "landing_pages",
+                            empty_report_frame(get_report_definition("landing_pages")),
+                        ),
+                        flags_config=settings.flags,
+                    ),
+                ),
+                (
+                    "Locations summary",
+                    build_locations_summary(
+                        locations=state.datasets.get(
+                            "locations",
+                            empty_report_frame(get_report_definition("locations")),
+                        ),
+                        flags_config=settings.flags,
+                    ),
+                ),
+            ],
+        )
+    except Exception as exc:  # pragma: no cover - environment dependent
+        logger.exception("Workbook export failed")
+        state.errors.append(
+            {
+                "report": "xlsx_export",
+                "message": f"Workbook export failed: {exc}",
+                "details": "",
+                "timestamp": _timestamp(),
+            }
+        )
+    logger.info("Finished workbook export phase")
+
+    _persist_metadata(export_paths, state, settings.output.include_metadata)
+    logger.info("Finished export path=%s", export_paths.base_dir)
+
+    fallback_report_count = sum(
+        1
+        for row in state.report_rows
+        if row.get("dropped_fields")
+    )
+    return ExportExecutionResult(
+        exit_code=0,
+        export_paths=export_paths,
+        resolved_range=resolved_range,
+        errors=list(state.errors),
+        report_rows=list(state.report_rows),
+        account_info=dict(state.account_info),
+        fallback_report_count=fallback_report_count,
+        datasets=dict(state.datasets),
+        context_metadata=dict(context_metadata or {}),
+    )
+
+
+def run_export(settings: AppSettings, project_root: Path, config_path: Path) -> int:
+    return execute_export_with_overrides(
+        settings=settings,
+        project_root=project_root,
+        config_path=config_path,
+    ).exit_code

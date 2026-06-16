@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LinkedIn Audit | Export</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">LinkedIn Audit</p>
+          <h1>Export</h1>
+          <p class="brand-copy">Samostatný LinkedIn export pro jeden nebo všechny aktivní contexty.</p>
+        </div>
+        <nav class="nav-block">
+          <a href="{{ url_for('web.linkedin_connections_page') }}">LinkedIn Připojení</a>
+          <a href="{{ url_for('web.linkedin_discovery_page') }}">LinkedIn Discovery</a>
+          <a href="{{ url_for('web.linkedin_mapping_page') }}">LinkedIn Mapping</a>
+          <a href="{{ url_for('web.linkedin_audit_page') }}">LinkedIn Export</a>
+        </nav>
+      </aside>
+      <main class="content">
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Spuštění LinkedIn exportu</h3>
+              <p>Volby exportu jsou oddělené od Google a Meta části, včetně Lead Sync, GTM cross-checku a web scanu.</p>
+            </div>
+          </div>
+          <div id="linkedin-audit-status"></div>
+          <div class="field-grid compact">
+            <label>
+              <span>Context</span>
+              <select id="linkedin-context-key">
+                {% for row in mapping_state.contexts_payload %}
+                  <option value="{{ row.key }}">{{ row.label }} ({{ row.key }})</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              <span>Preset</span>
+              <select id="linkedin-preset">
+                <option value="last_30_days">last_30_days</option>
+                <option value="last_90_days" selected>last_90_days</option>
+                <option value="last_180_days">last_180_days</option>
+                <option value="last_365_days">last_365_days</option>
+              </select>
+            </label>
+            <label><span>Date from</span><input id="linkedin-date-from" type="date"></label>
+            <label><span>Date to</span><input id="linkedin-date-to" type="date"></label>
+          </div>
+          <div class="toggle-row">
+            <label class="toggle"><input id="include-raw" type="checkbox" checked><span>Include raw</span></label>
+            <label class="toggle"><input id="include-reporting" type="checkbox" checked><span>Include reporting</span></label>
+            <label class="toggle"><input id="include-professional-demographics" type="checkbox" checked><span>Include professional demographics</span></label>
+            <label class="toggle"><input id="include-lead-sync" type="checkbox" checked><span>Include Lead Sync</span></label>
+            <label class="toggle"><input id="include-web-scan" type="checkbox" checked><span>Include web scan</span></label>
+            <label class="toggle"><input id="include-gtm-crosscheck" type="checkbox" checked><span>Include GTM cross-check</span></label>
+            <label class="toggle"><input id="limited-to-test-leads" type="checkbox" checked><span>Pull test leads only</span></label>
+          </div>
+          <div class="action-row mapping-actions">
+            <button class="btn btn-primary" type="button" id="run-linkedin-context-export-button">Spustit vybraný export</button>
+            <button class="btn btn-secondary" type="button" id="run-linkedin-all-export-button">Spustit všechny aktivní contexty</button>
+            <button class="btn btn-secondary" type="button" id="run-linkedin-web-scan-button">Spustit jen web scan</button>
+            <button class="btn btn-secondary" type="button" id="run-linkedin-leads-button">Stáhnout leady</button>
+          </div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>LinkedIn-enabled contexty</h3>
+              <p>Rychlá kontrola, co je pro LinkedIn namapované.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Context</th>
+                  <th>Enabled</th>
+                  <th>Connection</th>
+                  <th>Ad account IDs</th>
+                  <th>Organization IDs</th>
+                  <th>Expected domains</th>
+                  <th>Conversion type</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in mapping_state.contexts_payload %}
+                  <tr>
+                    <td>{{ row.label }}<br><small>{{ row.key }}</small></td>
+                    <td>{{ row.linkedin.enabled }}</td>
+                    <td>{{ row.linkedin.connection_key }}</td>
+                    <td>{{ row.linkedin.ad_account_ids | join(', ') }}</td>
+                    <td>{{ row.linkedin.organization_ids | join(', ') }}</td>
+                    <td>{{ row.linkedin.expected_domains | join(', ') }}</td>
+                    <td>{{ row.linkedin.expected_conversion_type }}</td>
+                  </tr>
+                {% else %}
+                  <tr><td colspan="7">Zatím nejsou dostupné žádné contexty.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script>
+      function payload() {
+        return {
+          context_key: document.getElementById("linkedin-context-key").value,
+          preset: document.getElementById("linkedin-preset").value,
+          date_from: document.getElementById("linkedin-date-from").value,
+          date_to: document.getElementById("linkedin-date-to").value,
+          include_raw: document.getElementById("include-raw").checked,
+          include_reporting: document.getElementById("include-reporting").checked,
+          include_professional_demographics: document.getElementById("include-professional-demographics").checked,
+          include_lead_sync: document.getElementById("include-lead-sync").checked,
+          include_web_scan: document.getElementById("include-web-scan").checked,
+          include_gtm_crosscheck: document.getElementById("include-gtm-crosscheck").checked,
+          limited_to_test_leads: document.getElementById("limited-to-test-leads").checked
+        };
+      }
+      function setStatus(message, kind) {
+        document.getElementById("linkedin-audit-status").innerHTML =
+          `<div class="flash flash-${kind}">${message}</div>`;
+      }
+      async function post(url, body) {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(body || payload())
+        });
+        return response.json();
+      }
+      document.getElementById("run-linkedin-context-export-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.run_linkedin_context_export_route') }}");
+        setStatus(result.ok ? `LinkedIn export doběhl. Výstup: ${result.export_dir}` : result.message, result.ok ? "success" : "error");
+      });
+      document.getElementById("run-linkedin-all-export-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.run_linkedin_all_export_route') }}");
+        setStatus(result.ok ? "All-enabled LinkedIn export doběhl." : result.message, result.ok ? "success" : "error");
+      });
+      document.getElementById("run-linkedin-web-scan-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.linkedin_web_scan_route') }}");
+        setStatus(result.ok ? `LinkedIn web scan doběhl. Výstup: ${result.export_dir}` : result.message, result.ok ? "success" : "error");
+      });
+      document.getElementById("run-linkedin-leads-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.linkedin_leads_pull_route') }}");
+        setStatus(result.ok ? `LinkedIn Lead Sync export doběhl. Výstup: ${result.export_dir}` : result.message, result.ok ? "success" : "error");
+      });
+    </script>
+  </body>
+</html>
+

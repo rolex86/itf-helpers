@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, send_file, url_for
 
 from app.accounts.context_config import has_multi_account_config
 from app.web.forms import parse_dashboard_form
@@ -21,21 +21,6 @@ from app.web.services.meta_audit_service import run_meta_export_for_all_enabled_
 from app.web.services.meta_connection_service import list_meta_connections, save_meta_connection, test_meta_connection
 from app.web.services.meta_discovery_service import load_all_meta_discovery_snapshots, run_meta_discovery_for_connection
 from app.web.services.meta_mapping_service import load_meta_mapping_state, save_meta_mapping
-from app.web.services.linkedin_audit_service import run_linkedin_export_for_all_enabled_contexts, run_linkedin_export_for_context
-from app.web.services.linkedin_connection_service import (
-    delete_linkedin_connection_locally,
-    list_linkedin_connections,
-    save_linkedin_connection,
-    test_linkedin_connection,
-)
-from app.web.services.linkedin_discovery_service import load_all_linkedin_discovery_snapshots, run_linkedin_discovery_for_connection
-from app.web.services.linkedin_mapping_service import load_linkedin_mapping_state, save_linkedin_mapping_state
-from app.web.services.linkedin_oauth_service import (
-    build_oauth_start,
-    handle_oauth_callback,
-    refresh_linkedin_connection_token,
-    revoke_local_linkedin_connection,
-)
 from app.web.services.mapping_service import (
     get_context_test_job_status,
     load_mapping_state,
@@ -241,65 +226,6 @@ def meta_audit_page():
     )
 
 
-@web_bp.get("/linkedin/connections")
-def linkedin_connections_page():
-    connections = list_linkedin_connections(_project_root())
-    selected_connection_key = str(
-        request.args.get("connection_key")
-        or request.args.get("key")
-        or ""
-    ).strip()
-    selected_connection = None
-    if selected_connection_key:
-        selected_connection = next(
-            (
-                item
-                for item in connections
-                if str(item.get("key") or "").strip() == selected_connection_key
-            ),
-            None,
-        )
-    return render_template(
-        "linkedin/connections.html",
-        connections=connections,
-        selected_connection=selected_connection,
-        selected_connection_key=selected_connection_key,
-    )
-
-
-@web_bp.get("/linkedin/discovery")
-def linkedin_discovery_page():
-    connections = list_linkedin_connections(_project_root())
-    selected_connection_key = str(
-        request.args.get("connection_key")
-        or (connections[0].get("key") if connections else "")
-        or ""
-    ).strip()
-    return render_template(
-        "linkedin/discovery.html",
-        connections=connections,
-        selected_connection_key=selected_connection_key,
-        snapshots=load_all_linkedin_discovery_snapshots(_project_root()),
-    )
-
-
-@web_bp.get("/linkedin/mapping")
-def linkedin_mapping_page():
-    return render_template(
-        "linkedin/mapping.html",
-        mapping_state=load_linkedin_mapping_state(_project_root()),
-        connections=list_linkedin_connections(_project_root()),
-    )
-
-
-@web_bp.get("/linkedin/audit")
-def linkedin_audit_page():
-    return render_template(
-        "linkedin/audit.html",
-        mapping_state=load_linkedin_mapping_state(_project_root()),
-    )
-
-
 @web_bp.post("/mapping/save")
 def save_mapping_page():
     payload = request.get_json(silent=True) or {}
@@ -387,165 +313,6 @@ def run_meta_context_export_route():
 def run_meta_all_export_route():
     try:
         result = run_meta_export_for_all_enabled_contexts(_project_root())
-        return jsonify(result), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/connections/save")
-def save_linkedin_connection_route():
-    payload = request.get_json(silent=True) or {}
-    try:
-        result = save_linkedin_connection(_project_root(), payload)
-        return jsonify({"ok": True, "connection": result}), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/connections/test")
-def test_linkedin_connection_route():
-    payload = request.get_json(silent=True) or {}
-    try:
-        result = test_linkedin_connection(_project_root(), payload)
-        return jsonify(result), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/connections/delete")
-def delete_linkedin_connection_route():
-    payload = request.get_json(silent=True) or {}
-    try:
-        result = delete_linkedin_connection_locally(_project_root(), str(payload.get("connection_key") or "").strip())
-        return jsonify(result), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/oauth/start")
-def linkedin_oauth_start_route():
-    payload = request.get_json(silent=True) or {}
-    try:
-        result = build_oauth_start(_project_root(), payload)
-        session["linkedin_oauth_state"] = result["state"]
-        session["linkedin_oauth_payload"] = payload
-        return jsonify({"ok": True, "authorize_url": result["authorize_url"], "state": result["state"]}), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.get("/linkedin/oauth/callback")
-def linkedin_oauth_callback_route():
-    error = str(request.args.get("error") or "").strip()
-    if error:
-        return render_template("linkedin/oauth_callback.html", ok=False, message=error)
-    state = str(request.args.get("state") or "").strip()
-    expected_state = str(session.get("linkedin_oauth_state") or "").strip()
-    if not state or state != expected_state:
-        return render_template("linkedin/oauth_callback.html", ok=False, message="OAuth state neodpovídá.")
-    payload = dict(session.get("linkedin_oauth_payload") or {})
-    payload["code"] = str(request.args.get("code") or "").strip()
-    try:
-        result = handle_oauth_callback(_project_root(), payload=payload)
-        session.pop("linkedin_oauth_state", None)
-        session.pop("linkedin_oauth_payload", None)
-        return render_template("linkedin/oauth_callback.html", ok=True, message=result["message"])
-    except Exception as exc:
-        return render_template("linkedin/oauth_callback.html", ok=False, message=str(exc))
-
-
-@web_bp.post("/linkedin/oauth/refresh")
-def linkedin_oauth_refresh_route():
-    payload = request.get_json(silent=True) or {}
-    try:
-        result = refresh_linkedin_connection_token(_project_root(), str(payload.get("connection_key") or "").strip())
-        return jsonify(result), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/oauth/revoke-local")
-def linkedin_oauth_revoke_local_route():
-    payload = request.get_json(silent=True) or {}
-    try:
-        result = revoke_local_linkedin_connection(_project_root(), str(payload.get("connection_key") or "").strip())
-        return jsonify(result), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/discovery/run")
-def run_linkedin_discovery_route():
-    payload = request.get_json(silent=True) or {}
-    connection_key = str(payload.get("connection_key") or "").strip()
-    try:
-        result = run_linkedin_discovery_for_connection(_project_root(), connection_key)
-        return jsonify({"ok": True, "snapshot": result}), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/mapping/save")
-def save_linkedin_mapping_route():
-    payload = request.get_json(silent=True) or {}
-    try:
-        result = save_linkedin_mapping_state(_project_root(), payload)
-        return jsonify({"ok": True, "mapping_state": result}), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/export/context")
-def run_linkedin_context_export_route():
-    payload = request.get_json(silent=True) or {}
-    context_key = str(payload.get("context_key") or "").strip()
-    try:
-        result = run_linkedin_export_for_context(_project_root(), context_key, payload)
-        return jsonify(result), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/export/all")
-def run_linkedin_all_export_route():
-    payload = request.get_json(silent=True) or {}
-    try:
-        result = run_linkedin_export_for_all_enabled_contexts(_project_root(), payload)
-        return jsonify(result), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/leads/pull")
-def linkedin_leads_pull_route():
-    payload = request.get_json(silent=True) or {}
-    payload["include_lead_sync"] = True
-    try:
-        result = run_linkedin_export_for_context(_project_root(), str(payload.get("context_key") or "").strip(), payload)
-        return jsonify(result), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/leads/test-pull")
-def linkedin_leads_test_pull_route():
-    payload = request.get_json(silent=True) or {}
-    payload["include_lead_sync"] = True
-    payload["limited_to_test_leads"] = True
-    try:
-        result = run_linkedin_export_for_context(_project_root(), str(payload.get("context_key") or "").strip(), payload)
-        return jsonify(result), 200
-    except Exception as exc:
-        return jsonify({"ok": False, "message": str(exc)}), 400
-
-
-@web_bp.post("/linkedin/web-scan/run")
-def linkedin_web_scan_route():
-    payload = request.get_json(silent=True) or {}
-    payload["include_web_scan"] = True
-    payload["include_reporting"] = False
-    try:
-        result = run_linkedin_export_for_context(_project_root(), str(payload.get("context_key") or "").strip(), payload)
         return jsonify(result), 200
     except Exception as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400

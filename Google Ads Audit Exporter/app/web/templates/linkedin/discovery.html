@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LinkedIn Audit | Discovery</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">LinkedIn Audit</p>
+          <h1>Discovery</h1>
+          <p class="brand-copy">Zjištění dostupných účtů, kampaní, kreativ, conversions a lead form assetů.</p>
+        </div>
+        <nav class="nav-block">
+          <a href="{{ url_for('web.linkedin_connections_page') }}">LinkedIn Připojení</a>
+          <a href="{{ url_for('web.linkedin_discovery_page') }}">LinkedIn Discovery</a>
+          <a href="{{ url_for('web.linkedin_mapping_page') }}">LinkedIn Mapping</a>
+          <a href="{{ url_for('web.linkedin_audit_page') }}">LinkedIn Export</a>
+        </nav>
+      </aside>
+      <main class="content">
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Spustit discovery</h3>
+              <p>Každý endpoint běží best-effort a chybějící scope vytvoří warning, ne pád celé úlohy.</p>
+            </div>
+          </div>
+          <div id="linkedin-discovery-status"></div>
+          <div class="field-grid compact">
+            <label>
+              <span>Connection</span>
+              <select id="linkedin-discovery-connection-key">
+                {% for row in connections %}
+                  <option value="{{ row.key }}" {% if row.key == selected_connection_key %}selected{% endif %}>{{ row.label }} ({{ row.key }})</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+          <div class="action-row mapping-actions">
+            <button class="btn btn-primary" type="button" id="run-linkedin-discovery-button">Spustit discovery</button>
+          </div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Poslední LinkedIn discovery snapshoty</h3>
+              <p>Vidíš tady uložené snapshoty i s počty objektů a warningy.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Connection</th>
+                  <th>Fetched at</th>
+                  <th>Status</th>
+                  <th>Ad accounts</th>
+                  <th>Campaign groups</th>
+                  <th>Campaigns</th>
+                  <th>Creatives</th>
+                  <th>Conversions</th>
+                  <th>Lead forms</th>
+                  <th>Warnings</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in snapshots %}
+                  <tr>
+                    <td>{{ row.connection_key }}</td>
+                    <td>{{ row.fetched_at }}</td>
+                    <td>{{ row.status }}</td>
+                    <td>{{ row.ad_accounts | length }}</td>
+                    <td>{{ row.campaign_groups | length }}</td>
+                    <td>{{ row.campaigns | length }}</td>
+                    <td>{{ row.creatives | length }}</td>
+                    <td>{{ row.conversions | length }}</td>
+                    <td>{{ row.lead_forms | length }}</td>
+                    <td>{{ row.warnings | length }}</td>
+                  </tr>
+                {% else %}
+                  <tr><td colspan="10">Zatím nejsou uložené žádné LinkedIn discovery snapshoty.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script>
+      function setStatus(message, kind) {
+        document.getElementById("linkedin-discovery-status").innerHTML =
+          `<div class="flash flash-${kind}">${message}</div>`;
+      }
+      document.getElementById("run-linkedin-discovery-button").addEventListener("click", async () => {
+        const response = await fetch("{{ url_for('web.run_linkedin_discovery_route') }}", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({connection_key: document.getElementById("linkedin-discovery-connection-key").value})
+        });
+        const result = await response.json();
+        setStatus(result.ok ? "LinkedIn discovery bylo dokončeno." : result.message, result.ok ? "success" : "error");
+      });
+    </script>
+  </body>
+</html>
+

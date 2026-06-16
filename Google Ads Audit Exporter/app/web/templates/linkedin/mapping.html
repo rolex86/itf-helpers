@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LinkedIn Audit | Mapping</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">LinkedIn Audit</p>
+          <h1>Mapping</h1>
+          <p class="brand-copy">Napojení LinkedIn účtů a tracking očekávání na existující lokální kontexty.</p>
+        </div>
+        <nav class="nav-block">
+          <a href="{{ url_for('web.linkedin_connections_page') }}">LinkedIn Připojení</a>
+          <a href="{{ url_for('web.linkedin_discovery_page') }}">LinkedIn Discovery</a>
+          <a href="{{ url_for('web.linkedin_mapping_page') }}">LinkedIn Mapping</a>
+          <a href="{{ url_for('web.linkedin_audit_page') }}">LinkedIn Export</a>
+        </nav>
+      </aside>
+      <main class="content">
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>LinkedIn mapping podle contextů</h3>
+              <p>Každý lokální context může mít vlastní LinkedIn connection, ad accounty, organizace, tagy a UTM očekávání.</p>
+            </div>
+          </div>
+          <div id="linkedin-mapping-status"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Context</th>
+                  <th>LinkedIn zapnuto</th>
+                  <th>Connection key</th>
+                  <th>Ad account IDs</th>
+                  <th>Organization IDs</th>
+                  <th>Expected domains</th>
+                  <th>Insight Tag IDs</th>
+                  <th>Conversion IDs</th>
+                  <th>Lead form IDs</th>
+                  <th>UTM source</th>
+                  <th>UTM medium</th>
+                  <th>Conv type</th>
+                  <th>Lead Sync</th>
+                  <th>Web scan</th>
+                </tr>
+              </thead>
+              <tbody id="linkedin-mapping-body"></tbody>
+            </table>
+          </div>
+          <div class="action-row mapping-actions">
+            <button class="btn btn-primary" type="button" id="save-linkedin-mapping-button">Uložit LinkedIn mapping</button>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script>
+      const rows = {{ mapping_state.contexts_payload | tojson }};
+      const connections = {{ connections | tojson }};
+      const body = document.getElementById("linkedin-mapping-body");
+      function connectionOptions(selected) {
+        const options = ['<option value=""></option>'];
+        for (const row of connections) {
+          options.push(`<option value="${row.key}" ${row.key === selected ? "selected" : ""}>${row.label} (${row.key})</option>`);
+        }
+        return options.join("");
+      }
+      function render() {
+        body.innerHTML = rows.map((row, index) => {
+          const linkedin = row.linkedin || {};
+          return `
+            <tr>
+              <td><strong>${row.label}</strong><br><small>${row.key}</small></td>
+              <td><input type="checkbox" data-index="${index}" data-field="enabled" ${linkedin.enabled ? "checked" : ""}></td>
+              <td><select data-index="${index}" data-field="connection_key">${connectionOptions(linkedin.connection_key || "")}</select></td>
+              <td><textarea data-index="${index}" data-field="ad_account_ids" rows="3">${(linkedin.ad_account_ids || []).join("\\n")}</textarea></td>
+              <td><textarea data-index="${index}" data-field="organization_ids" rows="3">${(linkedin.organization_ids || []).join("\\n")}</textarea></td>
+              <td><textarea data-index="${index}" data-field="expected_domains" rows="3">${(linkedin.expected_domains || row.source_domains || []).join("\\n")}</textarea></td>
+              <td><textarea data-index="${index}" data-field="expected_insight_tag_ids" rows="3">${(linkedin.expected_insight_tag_ids || []).join("\\n")}</textarea></td>
+              <td><textarea data-index="${index}" data-field="expected_conversion_ids" rows="3">${(linkedin.expected_conversion_ids || []).join("\\n")}</textarea></td>
+              <td><textarea data-index="${index}" data-field="expected_lead_form_ids" rows="3">${(linkedin.expected_lead_form_ids || []).join("\\n")}</textarea></td>
+              <td><input data-index="${index}" data-field="expected_utm_source" value="${linkedin.expected_utm_source || "linkedin"}"></td>
+              <td><input data-index="${index}" data-field="expected_utm_medium" value="${linkedin.expected_utm_medium || "paid_social"}"></td>
+              <td><input data-index="${index}" data-field="expected_conversion_type" value="${linkedin.expected_conversion_type || "lead"}"></td>
+              <td><input type="checkbox" data-index="${index}" data-field="lead_sync_enabled" ${linkedin.lead_sync_enabled !== false ? "checked" : ""}></td>
+              <td><input type="checkbox" data-index="${index}" data-field="web_scan_enabled" ${linkedin.web_scan_enabled !== false ? "checked" : ""}></td>
+            </tr>
+          `;
+        }).join("");
+      }
+      function payload() {
+        return {
+          contexts: rows.map((row, index) => {
+            const linkedin = {};
+            for (const field of ["enabled", "connection_key", "ad_account_ids", "organization_ids", "expected_domains", "expected_insight_tag_ids", "expected_conversion_ids", "expected_lead_form_ids", "expected_utm_source", "expected_utm_medium", "expected_conversion_type", "lead_sync_enabled", "web_scan_enabled"]) {
+              const element = body.querySelector(`[data-index="${index}"][data-field="${field}"]`);
+              if (!element) continue;
+              if (element.type === "checkbox") {
+                linkedin[field] = element.checked;
+              } else if (element.tagName === "TEXTAREA") {
+                linkedin[field] = element.value.split(/\n+/).map(item => item.trim()).filter(Boolean);
+              } else {
+                linkedin[field] = element.value.trim();
+              }
+            }
+            return {key: row.key, linkedin};
+          })
+        };
+      }
+      function setStatus(message, kind) {
+        document.getElementById("linkedin-mapping-status").innerHTML =
+          `<div class="flash flash-${kind}">${message}</div>`;
+      }
+      document.getElementById("save-linkedin-mapping-button").addEventListener("click", async () => {
+        const response = await fetch("{{ url_for('web.save_linkedin_mapping_route') }}", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload())
+        });
+        const result = await response.json();
+        setStatus(result.ok ? "LinkedIn mapping bylo uloženo." : result.message, result.ok ? "success" : "error");
+      });
+      render();
+    </script>
+  </body>
+</html>
+

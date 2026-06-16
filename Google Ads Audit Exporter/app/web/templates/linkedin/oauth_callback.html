@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LinkedIn OAuth Callback</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <main class="content">
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>LinkedIn OAuth callback</h3>
+              <p>Výsledek autorizace pro samostatný LinkedIn audit modul.</p>
+            </div>
+          </div>
+          <div class="flash flash-{{ 'success' if ok else 'error' }}">{{ message }}</div>
+          <div class="action-row">
+            <a class="btn btn-primary" href="{{ url_for('web.linkedin_connections_page') }}">Zpět na LinkedIn Připojení</a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
