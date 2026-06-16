@@ -17,6 +17,10 @@ from app.web.services.folder_picker import pick_directory
 from app.web.services.ga4_dashboard_service import ga4_list_properties, ga4_test_connection
 from app.web.services.gtm_dashboard_service import gtm_list_accounts, gtm_test_connection
 from app.web.services.gsc_dashboard_service import gsc_list_properties, gsc_test_connection
+from app.web.services.meta_audit_service import run_meta_export_for_all_enabled_contexts, run_meta_export_for_context
+from app.web.services.meta_connection_service import list_meta_connections, save_meta_connection, test_meta_connection
+from app.web.services.meta_discovery_service import load_all_meta_discovery_snapshots, run_meta_discovery_for_connection
+from app.web.services.meta_mapping_service import load_meta_mapping_state, save_meta_mapping
 from app.web.services.mapping_service import (
     get_context_test_job_status,
     load_mapping_state,
@@ -161,6 +165,67 @@ def mapping_page():
     )
 
 
+@web_bp.get("/meta/connections")
+def meta_connections_page():
+    connections = list_meta_connections(_project_root())
+    selected_connection_key = str(
+        request.args.get("connection_key")
+        or request.args.get("key")
+        or ""
+    ).strip()
+
+    selected_connection = None
+    if selected_connection_key:
+        selected_connection = next(
+            (
+                item
+                for item in connections
+                if str(item.get("key") or "").strip() == selected_connection_key
+            ),
+            None,
+        )
+
+    return render_template(
+        "meta/connections.html",
+        connections=connections,
+        selected_connection=selected_connection,
+        selected_connection_key=selected_connection_key,
+    )
+
+
+@web_bp.get("/meta/discovery")
+def meta_discovery_page():
+    connections = list_meta_connections(_project_root())
+    selected_connection_key = str(
+        request.args.get("connection_key")
+        or (connections[0].get("key") if connections else "")
+        or ""
+    ).strip()
+
+    return render_template(
+        "meta/discovery.html",
+        connections=connections,
+        selected_connection_key=selected_connection_key,
+        snapshots=load_all_meta_discovery_snapshots(_project_root()),
+    )
+
+
+@web_bp.get("/meta/mapping")
+def meta_mapping_page():
+    return render_template(
+        "meta/mapping.html",
+        mapping_state=load_meta_mapping_state(_project_root()),
+    )
+
+
+@web_bp.get("/meta/audit")
+def meta_audit_page():
+    return render_template(
+        "meta/audit.html",
+        mapping_state=load_meta_mapping_state(_project_root()),
+    )
+
+
 @web_bp.post("/mapping/save")
 def save_mapping_page():
     payload = request.get_json(silent=True) or {}
@@ -188,6 +253,67 @@ def save_mapping_page():
                 "warnings": warnings,
             }
         )
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/meta/connections/save")
+def save_meta_connection_route():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = save_meta_connection(_project_root(), payload)
+        return jsonify({"ok": True, "connection": result}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/meta/connections/test")
+def test_meta_connection_route():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = test_meta_connection(_project_root(), payload)
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/meta/discovery/run")
+def run_meta_discovery_route():
+    payload = request.get_json(silent=True) or {}
+    connection_key = str(payload.get("connection_key") or "").strip()
+    try:
+        result = run_meta_discovery_for_connection(_project_root(), connection_key)
+        return jsonify({"ok": True, "snapshot": result}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/meta/mapping/save")
+def save_meta_mapping_route():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = save_meta_mapping(_project_root(), payload)
+        return jsonify({"ok": True, "mapping_state": result}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/meta/export/context")
+def run_meta_context_export_route():
+    payload = request.get_json(silent=True) or {}
+    context_key = str(payload.get("context_key") or "").strip()
+    try:
+        result = run_meta_export_for_context(_project_root(), context_key)
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/meta/export/all")
+def run_meta_all_export_route():
+    try:
+        result = run_meta_export_for_all_enabled_contexts(_project_root())
+        return jsonify(result), 200
     except Exception as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
 

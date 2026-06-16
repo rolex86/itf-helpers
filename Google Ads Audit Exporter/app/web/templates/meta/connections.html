@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Meta Audit | Připojení</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    {% set selected = selected_connection or {} %}
+    {% set is_edit_mode = selected_connection is not none %}
+
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Meta Audit</p>
+          <h1>Připojení</h1>
+          <p class="brand-copy">Oddělený Meta flow vedle Google auditů.</p>
+        </div>
+        <nav class="nav-block">
+          <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+          <a href="{{ url_for('web.meta_connections_page') }}">Meta Připojení</a>
+          <a href="{{ url_for('web.meta_discovery_page') }}">Meta Discovery</a>
+          <a href="{{ url_for('web.meta_mapping_page') }}">Meta Mapping</a>
+          <a href="{{ url_for('web.meta_audit_page') }}">Meta Export</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>{% if is_edit_mode %}Editace Meta připojení{% else %}Nové Meta připojení{% endif %}</h3>
+              <p>
+                {% if is_edit_mode %}
+                  Upravuješ connection <strong>{{ selected.key }}</strong>. Maskovaná secret pole můžeš nechat beze změny.
+                {% else %}
+                  System User token a Meta Graph API držíme odděleně od Google auth flow.
+                {% endif %}
+              </p>
+            </div>
+            <div class="action-row">
+              <a class="btn btn-secondary" href="{{ url_for('web.meta_connections_page') }}">Nová connection</a>
+            </div>
+          </div>
+
+          {% if selected_connection_key and not is_edit_mode %}
+            <div class="flash flash-error">
+              Connection <strong>{{ selected_connection_key }}</strong> nebyla nalezena. Můžeš založit novou.
+            </div>
+          {% endif %}
+
+          <div id="meta-connection-status"></div>
+
+          <form id="meta-connection-form" class="mapping-editor">
+            <div class="field-grid compact">
+              <label>
+                <span>Key</span>
+                <input id="connection-key" value="{{ selected.key or '' }}" {% if is_edit_mode %}readonly{% endif %}>
+              </label>
+
+              <label>
+                <span>Název</span>
+                <input id="connection-label" value="{{ selected.label or '' }}">
+              </label>
+
+              <label>
+                <span>Business ID</span>
+                <input id="connection-business-id" value="{{ selected.business_id or '' }}">
+              </label>
+
+              <label>
+                <span>Business name</span>
+                <input id="connection-business-name" value="{{ selected.business_name or '' }}">
+              </label>
+
+              <label>
+                <span>App ID</span>
+                <input id="connection-app-id" value="{{ selected.app_id or '' }}">
+              </label>
+
+              <label>
+                <span>App secret</span>
+                <input id="connection-app-secret" value="{{ selected.app_secret or '' }}" autocomplete="off">
+              </label>
+
+              <label>
+                <span>API version</span>
+                <input id="connection-version" value="{{ selected.meta_api_version or 'v25.0' }}">
+              </label>
+
+              <label>
+                <span>User-Agent</span>
+                <input id="connection-user-agent" value="{{ selected.user_agent or 'ITFutureMetaAudit/1.0' }}">
+              </label>
+            </div>
+
+            <label class="mapping-textarea">
+              <span>Access token</span>
+              <textarea id="connection-access-token" rows="5" autocomplete="off">{{ selected.access_token or '' }}</textarea>
+            </label>
+
+            {% if is_edit_mode %}
+              <p class="muted">
+                Pokud je token nebo app secret zobrazený jako <code>***</code>, můžeš ho nechat tak. Aplikace použije uloženou hodnotu z <code>.env.meta.local</code>.
+              </p>
+            {% endif %}
+
+            <div class="action-row mapping-actions">
+              <button class="btn btn-primary" type="button" id="save-connection-button">
+                {% if is_edit_mode %}Uložit změny{% else %}Uložit connection{% endif %}
+              </button>
+              <button class="btn btn-secondary" type="button" id="test-connection-button">Otestovat connection</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Uložené Meta connections</h3>
+              <p>Jedna connection může obsloužit více Meta kontextů. Klikni na „Upravit“ pro načtení do formuláře.</p>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>Název</th>
+                  <th>Business ID</th>
+                  <th>Auth type</th>
+                  <th>API version</th>
+                  <th>Status</th>
+                  <th>Scopes</th>
+                  <th>Akce</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in connections %}
+                  {% set row_is_selected = selected_connection_key and row.key == selected_connection_key %}
+                  <tr{% if row_is_selected %} class="is-selected"{% endif %}>
+                    <td>
+                      <a href="{{ url_for('web.meta_connections_page', connection_key=row.key) }}">
+                        {{ row.key }}
+                      </a>
+                    </td>
+                    <td>{{ row.label }}</td>
+                    <td>{{ row.business_id }}</td>
+                    <td>{{ row.auth_type }}</td>
+                    <td>{{ row.meta_api_version }}</td>
+                    <td>{{ row.status }}</td>
+                    <td>{{ row.granted_scopes | join(', ') }}</td>
+                    <td>
+                      <a class="btn btn-secondary btn-small" href="{{ url_for('web.meta_connections_page', connection_key=row.key) }}">
+                        Upravit
+                      </a>
+                    </td>
+                  </tr>
+                {% else %}
+                  <tr><td colspan="8">Zatím nejsou uložená žádná Meta připojení.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      function payload() {
+        return {
+          key: document.getElementById("connection-key").value.trim(),
+          label: document.getElementById("connection-label").value.trim(),
+          business_id: document.getElementById("connection-business-id").value.trim(),
+          business_name: document.getElementById("connection-business-name").value.trim(),
+          app_id: document.getElementById("connection-app-id").value.trim(),
+          app_secret: document.getElementById("connection-app-secret").value.trim(),
+          meta_api_version: document.getElementById("connection-version").value.trim(),
+          user_agent: document.getElementById("connection-user-agent").value.trim(),
+          access_token: document.getElementById("connection-access-token").value.trim(),
+          auth_type: "system_user"
+        };
+      }
+
+      async function post(url) {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload())
+        });
+        return response.json();
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function setStatus(message, kind) {
+        document.getElementById("meta-connection-status").innerHTML =
+          `<div class="flash flash-${kind}">${message}</div>`;
+      }
+
+      function renderWarnings(warnings) {
+        if (!warnings || !warnings.length) {
+          return "";
+        }
+        return "<ul>" + warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join("") + "</ul>";
+      }
+
+      document.getElementById("save-connection-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.save_meta_connection_route') }}");
+
+        if (!result.ok) {
+          setStatus(result.message, "error");
+          return;
+        }
+
+        const key = result.connection && result.connection.key ? result.connection.key : payload().key;
+        setStatus("Meta connection byla uložena.", "success");
+
+        if (key) {
+          window.setTimeout(() => {
+            window.location.href = "{{ url_for('web.meta_connections_page') }}" + "?connection_key=" + encodeURIComponent(key);
+          }, 450);
+        }
+      });
+
+      document.getElementById("test-connection-button").addEventListener("click", async () => {
+        const result = await post("{{ url_for('web.test_meta_connection_route') }}");
+
+        if (!result.ok) {
+          setStatus(result.message, "error");
+          return;
+        }
+
+        const warningsHtml = renderWarnings(result.scope_warnings || []);
+        const scopes = result.granted_scopes && result.granted_scopes.length
+          ? `<p><strong>Scopes:</strong> ${escapeHtml(result.granted_scopes.join(", "))}</p>`
+          : "";
+
+        setStatus(
+          `${escapeHtml(result.message)}${scopes}${warningsHtml}`,
+          result.scope_warnings && result.scope_warnings.length ? "warning" : "success"
+        );
+      });
+    </script>
+  </body>
+</html>

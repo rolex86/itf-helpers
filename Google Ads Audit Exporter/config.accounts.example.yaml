@@ -15,3 +15,12 @@ account_contexts:
     source_domains:
       - "www.shopid.cz"
       - "shopid.cz"
+    meta:
+      enabled: false
+      connection_key: "meta_main"
+      business_id: ""
+      ad_account_ids: []
+      pixel_ids: []
+      catalog_ids: []
+      product_set_ids: []
+      expected_conversion_event: "Purchase"

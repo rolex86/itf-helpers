@@ -1,0 +1,57 @@
+account_contexts:
+  - key: shopid_cz
+    label: "ShopID CZ"
+    enabled: true
+    google_ads_customer_id: "4035172792"
+    source_domains:
+      - "www.shopid.cz"
+      - "shopid.cz"
+    meta:
+      enabled: true
+      connection_key: "meta_main"
+      business_id: "123456789012345"
+      ad_account_ids:
+        - "act_123456789012345"
+      pixel_ids:
+        - "123456789012345"
+      catalog_ids:
+        - "987654321098765"
+      product_set_ids: []
+      expected_conversion_event: "Purchase"
+
+  - key: kaufid_de
+    label: "KaufID DE"
+    enabled: true
+    google_ads_customer_id: "4035172792"
+    source_domains:
+      - "www.kaufid.de"
+      - "kaufid.de"
+    meta:
+      enabled: true
+      connection_key: "meta_main"
+      business_id: "123456789012345"
+      ad_account_ids:
+        - "act_222222222222222"
+      pixel_ids:
+        - "222222222222222"
+      catalog_ids:
+        - "333333333333333"
+      product_set_ids: []
+      expected_conversion_event: "Purchase"
+
+  - key: chainway_cz
+    label: "Chainway CZ"
+    enabled: true
+    google_ads_customer_id: "4035172792"
+    source_domains:
+      - "www.chainway.cz"
+      - "chainway.cz"
+    meta:
+      enabled: false
+      connection_key: ""
+      business_id: ""
+      ad_account_ids: []
+      pixel_ids: []
+      catalog_ids: []
+      product_set_ids: []
+      expected_conversion_event: "Lead"

@@ -1,0 +1,188 @@
+﻿<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Meta Audit | Export</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Meta Audit</p>
+          <h1>Export</h1>
+          <p class="brand-copy">Samostatný export a findings pipeline vedle Google části.</p>
+        </div>
+        <nav class="nav-block">
+          <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+          <a href="{{ url_for('web.meta_connections_page') }}">Meta Připojení</a>
+          <a href="{{ url_for('web.meta_discovery_page') }}">Meta Discovery</a>
+          <a href="{{ url_for('web.meta_mapping_page') }}">Meta Mapping</a>
+          <a href="{{ url_for('web.meta_audit_page') }}">Meta Export</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Meta audit exporty</h3>
+              <p>Vyber context z uloženého mappingu a spusť Meta audit export.</p>
+            </div>
+          </div>
+
+          <div id="meta-audit-status"></div>
+
+          <div class="field-grid compact">
+            <label>
+              <span>Context</span>
+              <select id="meta-context-key">
+                {% for row in mapping_state.contexts_payload %}
+                  <option value="{{ row.key }}">
+                    {{ row.label }} ({{ row.key }}){% if row.meta.enabled %} - Meta aktivní{% else %} - Meta vypnuto{% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+
+          <div class="action-row mapping-actions">
+            <button class="btn btn-primary" type="button" id="run-meta-context-button">Spustit vybraný export</button>
+            <button class="btn btn-secondary" type="button" id="run-meta-all-button">Spustit všechny aktivní Meta contexty</button>
+          </div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Dostupné Meta contexty</h3>
+              <p>Export očekává technický key, ne label. Dropdown ho vyplní automaticky.</p>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Context label</th>
+                  <th>Context key</th>
+                  <th>Meta enabled</th>
+                  <th>Connection</th>
+                  <th>Business</th>
+                  <th>Ad accounts</th>
+                  <th>Pixels</th>
+                  <th>Catalogs</th>
+                  <th>Expected event</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in mapping_state.contexts_payload %}
+                  <tr>
+                    <td>{{ row.label }}</td>
+                    <td><code>{{ row.key }}</code></td>
+                    <td>{{ row.meta.enabled }}</td>
+                    <td>{{ row.meta.connection_key }}</td>
+                    <td>{{ row.meta.business_id }}</td>
+                    <td>{{ row.meta.ad_account_ids | join(', ') }}</td>
+                    <td>{{ row.meta.pixel_ids | join(', ') }}</td>
+                    <td>{{ row.meta.catalog_ids | join(', ') }}</td>
+                    <td>{{ row.meta.expected_conversion_event }}</td>
+                  </tr>
+                {% else %}
+                  <tr><td colspan="9">Zatím nejsou k dispozici žádné Meta contexty.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function setStatus(message, kind) {
+        document.getElementById("meta-audit-status").innerHTML =
+          `<div class="flash flash-${kind}">${message}</div>`;
+      }
+
+      document.getElementById("run-meta-context-button").addEventListener("click", async () => {
+        const select = document.getElementById("meta-context-key");
+        const contextKey = String(select.value || "").trim();
+
+        if (!contextKey) {
+          setStatus("Vyber context.", "error");
+          return;
+        }
+
+        const button = document.getElementById("run-meta-context-button");
+        const originalLabel = button.textContent;
+        button.disabled = true;
+        button.textContent = "Spouštím export...";
+
+        try {
+          const response = await fetch("{{ url_for('web.run_meta_context_export_route') }}", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({context_key: contextKey})
+          });
+
+          const result = await response.json();
+
+          if (!result.ok) {
+            setStatus(escapeHtml(result.message || "Meta export selhal."), "error");
+            return;
+          }
+
+          const exportDir = result.export_dir || result.export_path || "";
+          setStatus(
+            "Meta export hotov" + (exportDir ? ": " + escapeHtml(exportDir) : "."),
+            "success"
+          );
+        } catch (error) {
+          setStatus("Meta export selhal. Zkontroluj terminálový log.", "error");
+        } finally {
+          button.disabled = false;
+          button.textContent = originalLabel;
+        }
+      });
+
+      document.getElementById("run-meta-all-button").addEventListener("click", async () => {
+        const button = document.getElementById("run-meta-all-button");
+        const originalLabel = button.textContent;
+        button.disabled = true;
+        button.textContent = "Spouštím exporty...";
+
+        try {
+          const response = await fetch("{{ url_for('web.run_meta_all_export_route') }}", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({})
+          });
+
+          const result = await response.json();
+
+          if (!result.ok) {
+            setStatus(escapeHtml(result.message || "Meta multi-export selhal."), "error");
+            return;
+          }
+
+          setStatus("Meta multi-export byl dokončen.", "success");
+        } catch (error) {
+          setStatus("Meta multi-export selhal. Zkontroluj terminálový log.", "error");
+        } finally {
+          button.disabled = false;
+          button.textContent = originalLabel;
+        }
+      });
+    </script>
+  </body>
+</html>
