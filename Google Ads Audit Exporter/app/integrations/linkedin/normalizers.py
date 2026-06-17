@@ -8,15 +8,37 @@ from typing import Any
 import pandas as pd
 
 
-URN_ID_PATTERN = re.compile(r":([^:()]+)(?::\d+)?$")
 PII_KEY_PATTERN = re.compile(
     r"(email|e-mail|mail|phone|mobile|telephone|tel|first[_-]?name|last[_-]?name|full[_-]?name|name|company|job[_-]?title|title|address)",
     re.IGNORECASE,
 )
 
 
+URN_PREFIX_TO_FIELD_PREFIX = {
+    "sponsoredAccount": "account",
+    "sponsoredCampaign": "campaign",
+    "sponsoredCampaignGroup": "campaign_group",
+    "sponsoredCreative": "creative",
+    "organization": "organization",
+    "leadGenForm": "lead_form",
+    "versionedLeadGenForm": "lead_form",
+    "conversion": "conversion",
+    "insightTag": "insight_tag",
+    "leadGenFormResponse": "lead_form_response",
+}
+
+
+def _string(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _split_urn(value: object) -> list[str]:
+    text = _string(value)
+    return text.split(":") if text.startswith("urn:li:") else []
+
+
 def urn_to_id(value: object) -> str:
-    text = str(value or "").strip()
+    text = _string(value)
 
     if not text:
         return ""
@@ -24,11 +46,37 @@ def urn_to_id(value: object) -> str:
     if text.startswith("act_"):
         return text.replace("act_", "", 1).strip()
 
-    match = URN_ID_PATTERN.search(text)
-    if match:
-        return str(match.group(1) or "").strip()
+    parts = _split_urn(text)
+    if not parts:
+        return text
+
+    entity_type = parts[2] if len(parts) >= 3 else ""
+
+    if entity_type == "versionedLeadGenForm":
+        # LinkedIn may return values like:
+        # urn:li:versionedLeadGenForm:(urn:li:leadGenForm:123,2)
+        match = re.search(r"leadGenForm:(\d+)", text)
+        if match:
+            return match.group(1)
+
+    if entity_type == "leadGenForm" and len(parts) >= 5:
+        # Versioned lead form URNs may look like urn:li:leadGenForm:123:2.
+        # For entity matching we want the base lead form id, not the version.
+        return parts[-2].strip()
+
+    if len(parts) >= 4:
+        return parts[-1].strip("() ")
 
     return text
+
+
+def urn_to_entity_type(value: object) -> str:
+    parts = _split_urn(value)
+    return parts[2] if len(parts) >= 3 else ""
+
+
+def urn_to_field_prefix(value: object) -> str:
+    return URN_PREFIX_TO_FIELD_PREFIX.get(urn_to_entity_type(value), "")
 
 
 def records_to_frame(records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -51,36 +99,42 @@ def _copy_urn_and_id(
     prefix: str,
     value: Any,
 ) -> None:
-    if not value:
+    text = _string(value)
+    if not text:
         return
 
     urn_key = f"{prefix}_urn"
     id_key = f"{prefix}_id"
 
-    if urn_key not in normalized:
-        normalized[urn_key] = str(value)
+    if text.startswith("urn:li:") and urn_key not in normalized:
+        normalized[urn_key] = text
 
     if id_key not in normalized:
-        normalized[id_key] = urn_to_id(value)
+        normalized[id_key] = urn_to_id(text)
+
+
+def _copy_generic_urn_id(
+    normalized: dict[str, Any],
+    *,
+    key: str,
+    value: Any,
+) -> None:
+    text = _string(value)
+    if not text.startswith("urn:li:"):
+        return
+
+    generic_id_key = f"{key}_id"
+    if generic_id_key not in normalized:
+        normalized[generic_id_key] = urn_to_id(text)
 
 
 def normalize_entity_identifiers(record: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(record)
 
-    direct_id = normalized.get("id")
-    if direct_id:
-        text_id = str(direct_id)
-
-        if "urn:li:sponsoredAccount:" in text_id:
-            _copy_urn_and_id(normalized, prefix="account", value=text_id)
-        elif "urn:li:sponsoredCampaign:" in text_id:
-            _copy_urn_and_id(normalized, prefix="campaign", value=text_id)
-        elif "urn:li:sponsoredCreative:" in text_id:
-            _copy_urn_and_id(normalized, prefix="creative", value=text_id)
-        elif "urn:li:organization:" in text_id:
-            _copy_urn_and_id(normalized, prefix="organization", value=text_id)
-        elif "urn:li:leadGenForm:" in text_id or "urn:li:versionedLeadGenForm:" in text_id:
-            _copy_urn_and_id(normalized, prefix="lead_form", value=text_id)
+    direct_id = _string(normalized.get("id"))
+    direct_prefix = urn_to_field_prefix(direct_id)
+    if direct_prefix:
+        _copy_urn_and_id(normalized, prefix=direct_prefix, value=direct_id)
 
     for prefix, source_key in (
         ("account", "account"),
@@ -110,13 +164,23 @@ def normalize_entity_identifiers(record: dict[str, Any]) -> dict[str, Any]:
         ("lead_form", "leadGenFormUrn"),
         ("lead_form", "versionedLeadGenForm"),
         ("lead_form", "versionedLeadGenFormUrn"),
+        ("conversion", "conversion"),
+        ("conversion", "conversion_urn"),
+        ("insight_tag", "insightTag"),
+        ("insight_tag", "insight_tag_urn"),
+        ("lead_form_response", "leadGenFormResponse"),
+        ("lead_form_response", "lead_form_response_urn"),
     ):
         value = normalized.get(source_key)
         _copy_urn_and_id(normalized, prefix=prefix, value=value)
 
     for key, value in list(normalized.items()):
         if isinstance(value, str) and value.startswith("urn:li:"):
-            normalized.setdefault(f"{key}_id", urn_to_id(value))
+            _copy_generic_urn_id(normalized, key=key, value=value)
+
+            detected_prefix = urn_to_field_prefix(value)
+            if detected_prefix:
+                _copy_urn_and_id(normalized, prefix=detected_prefix, value=value)
 
     return normalized
 

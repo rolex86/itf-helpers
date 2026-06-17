@@ -120,6 +120,7 @@ class LinkedInExportManifest:
     ad_account_ids: list[str] = field(default_factory=list)
     organization_ids: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
+    infos: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
     counts: dict[str, Any] = field(default_factory=dict)

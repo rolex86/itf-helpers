@@ -5,6 +5,7 @@ import logging
 import time
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import quote, urlencode
 
 import requests
 
@@ -16,18 +17,58 @@ from app.integrations.linkedin.rate_limit import raise_if_rate_limited
 LOGGER = logging.getLogger("google_ads_audit_exporter")
 
 
+RESTLI_SYNTAX_PARAMS = {
+    "dateRange",
+    "search",
+    "owner",
+    "targetingCriteria",
+}
+
+RESTLI_LIST_URN_PARAMS = {
+    "account",
+    "accounts",
+    "campaign",
+    "campaigns",
+    "campaignGroup",
+    "campaignGroups",
+    "creative",
+    "creatives",
+    "organization",
+    "organizations",
+}
+
+RESTLI_FIELD_PARAMS = {
+    "fields",
+    "projection",
+}
+
+
 class LinkedInRestClient:
     def __init__(
         self,
         *,
-        connection: LinkedInConnection,
-        runtime_config: LinkedInRuntimeConfig,
+        connection: LinkedInConnection | None = None,
+        runtime_config: LinkedInRuntimeConfig | None = None,
         access_token: str,
+        session: requests.Session | None = None,
+        config: LinkedInRuntimeConfig | None = None,
     ) -> None:
+        resolved_runtime_config = runtime_config or config
+        if resolved_runtime_config is None:
+            raise ValueError("LinkedInRestClient requires runtime_config.")
+
+        if connection is None:
+            connection = LinkedInConnection(
+                key="linkedin-runtime",
+                label="LinkedIn runtime",
+                linkedin_api_version=resolved_runtime_config.api_version,
+                user_agent=resolved_runtime_config.user_agent,
+            )
+
         self.connection = connection
-        self.runtime_config = runtime_config
+        self.runtime_config = resolved_runtime_config
         self.access_token = str(access_token or "").strip()
-        self._session = requests.Session()
+        self._session = session or requests.Session()
         self._base_url = "https://api.linkedin.com/rest"
 
     def get(
@@ -232,7 +273,12 @@ class LinkedInRestClient:
         clean_path = str(path or "").lstrip("/")
         url = f"{self._base_url}/{clean_path}"
 
+        request_url = self._url_with_params(url, params)
+        encoded_form_data = self._encode_params(form_data) if form_data is not None else None
+
         headers = self._headers()
+        if form_data is not None:
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
         if extra_headers:
             headers.update(extra_headers)
 
@@ -256,10 +302,10 @@ class LinkedInRestClient:
             try:
                 response = self._session.request(
                     method=method.upper(),
-                    url=url,
-                    params=params,
+                    url=request_url,
+                    params=None,
                     json=data if form_data is None and method.upper() != "GET" else None,
-                    data=form_data,
+                    data=encoded_form_data,
                     headers=headers,
                     timeout=self.runtime_config.request_timeout_seconds,
                 )
@@ -291,6 +337,14 @@ class LinkedInRestClient:
             error_message = self._error_message(payload, response)
             retry_after = self._retry_after_seconds(response)
             details = self._safe_json(payload)
+
+            LOGGER.warning(
+                "LinkedIn request failed status=%s path=%s message=%s details=%s",
+                response.status_code,
+                clean_path,
+                error_message,
+                details,
+            )
 
             try:
                 raise_if_rate_limited(response.status_code, error_message, details, retry_after)
@@ -333,11 +387,60 @@ class LinkedInRestClient:
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.access_token}",
-            "Linkedin-Version": self.connection.linkedin_api_version or self.runtime_config.api_version,
+            "LinkedIn-Version": self.connection.linkedin_api_version or self.runtime_config.api_version,
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
             "User-Agent": self.connection.user_agent or self.runtime_config.user_agent,
         }
+
+    def _encode_value_for_key(self, key: str, value: Any) -> str:
+        key_text = str(key or "")
+        value_text = str(value or "")
+
+        if key_text in RESTLI_FIELD_PARAMS:
+            return quote(value_text, safe="(),:$*")
+
+        if key_text in RESTLI_SYNTAX_PARAMS:
+            return quote(value_text, safe="(),:")
+
+        if key_text in RESTLI_LIST_URN_PARAMS:
+            return quote(value_text, safe="(),")
+
+        if "urn:li:" in value_text:
+            return quote(value_text, safe="(),")
+
+        return quote(value_text, safe="")
+
+    def _encode_params(self, params: dict[str, Any] | None) -> str:
+        if not params:
+            return ""
+
+        pairs: list[str] = []
+
+        for key, value in params.items():
+            if value is None:
+                continue
+
+            key_text = quote(str(key), safe="")
+
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    if item is None:
+                        continue
+                    pairs.append(f"{key_text}={self._encode_value_for_key(str(key), item)}")
+                continue
+
+            pairs.append(f"{key_text}={self._encode_value_for_key(str(key), value)}")
+
+        return "&".join(pairs)
+
+    def _url_with_params(self, url: str, params: dict[str, Any] | None) -> str:
+        query = self._encode_params(params)
+        if not query:
+            return url
+
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}{query}"
 
     def _elements(self, payload: dict[str, Any]) -> list[Any]:
         if not isinstance(payload, dict):
@@ -403,6 +506,16 @@ class LinkedInRestClient:
 
     def _error_message(self, payload: Any, response: requests.Response) -> str:
         if isinstance(payload, dict):
+            error_details = payload.get("errorDetails")
+            if isinstance(error_details, dict):
+                details_message = error_details.get("message")
+                if details_message:
+                    return str(details_message)
+
+                input_errors = error_details.get("inputErrors")
+                if input_errors:
+                    return f"LinkedIn API input errors: {input_errors}"
+
             for key in ("message", "error_description", "description"):
                 value = payload.get(key)
                 if value:

@@ -95,7 +95,7 @@ def export_linkedin_bundle(
             _add_file(manifest, export_root, target)
 
             if _is_pii_payload_key(key):
-                manifest.warnings.append(
+                manifest.infos.append(
                     {
                         "message": f"Soubor {_relative_path(export_root, target)} může obsahovat PII. Nesdílet mimo oprávněné osoby.",
                         "category": "pii",
@@ -104,7 +104,7 @@ def export_linkedin_bundle(
                 )
 
     if "lead_form_responses.csv" in manifest.files:
-        manifest.warnings.append(
+        manifest.infos.append(
             {
                 "message": "Soubor lead_form_responses.csv může obsahovat PII. Nesdílet mimo oprávněné osoby.",
                 "category": "pii",

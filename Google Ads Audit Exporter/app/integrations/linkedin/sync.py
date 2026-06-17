@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,9 +24,15 @@ from app.integrations.linkedin.models import (
     LinkedInExportManifest,
     LinkedInRuntimeConfig,
 )
-from app.integrations.linkedin.normalizers import normalize_entity_identifiers, records_to_frame, sanitize_pii_for_report
+from app.integrations.linkedin.normalizers import (
+    normalize_entity_identifiers,
+    records_to_frame,
+    sanitize_pii_for_report,
+    urn_to_id,
+)
 from app.integrations.linkedin.reporting import LinkedInDateRange, build_reporting_exports
 from app.integrations.linkedin.restli import (
+    campaign_urn,
     owner_param_for_organization,
     owner_param_for_sponsored_account,
     sponsored_account_urn,
@@ -63,12 +70,44 @@ class LinkedInSyncResult:
     datasets: dict[str, pd.DataFrame] = field(default_factory=dict)
     raw_payloads: dict[str, Any] = field(default_factory=dict)
     findings: list[LinkedInAuditFinding] = field(default_factory=list)
+    info_notes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def _string(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _add_info(result: LinkedInSyncResult, message: str) -> None:
+    text = _string(message)
+    if text:
+        result.info_notes.append(text)
+
+
+def _add_warning(result: LinkedInSyncResult, message: str) -> None:
+    text = _string(message)
+    if text:
+        result.warnings.append(text)
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+
+    for value in values or []:
+        text = _string(value)
+        if text and text not in deduped:
+            deduped.append(text)
+
+    return deduped
+
+
+def _restli_list(values: list[str] | tuple[str, ...]) -> str:
+    return "List(" + ",".join(_dedupe([_string(value) for value in values or []])) + ")"
 
 
 def _status_search_params(statuses: tuple[str, ...]) -> dict[str, str]:
@@ -79,14 +118,65 @@ def _status_search_params(statuses: tuple[str, ...]) -> dict[str, str]:
     }
 
 
+def _search_without_status_params() -> dict[str, str]:
+    return {
+        "q": "search",
+        "sortOrder": "DESCENDING",
+    }
+
+
+def _elements_from_payload(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+
+    if not isinstance(payload, dict):
+        return []
+
+    for key in ("elements", "data", "values"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [row for row in value if isinstance(row, dict)]
+
+    return []
+
+
+def _safe_collect(
+    *,
+    result: LinkedInSyncResult,
+    raw_key: str,
+    action: Callable[[], list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    try:
+        rows = action()
+        result.raw_payloads[raw_key] = rows
+        return rows
+    except Exception as exc:
+        _add_warning(result, f"{raw_key} selhalo: {exc}")
+        result.raw_payloads[raw_key] = []
+        return []
+
+
+def _safe_get_elements(
+    *,
+    client: LinkedInRestClient,
+    path: str,
+    params: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    payload = client.get(path, params=params or {}, extra_headers=extra_headers)
+    return _elements_from_payload(payload)
+
+
 def _extract_landing_url(record: dict[str, Any]) -> str:
     direct_keys = ("landingPageUrl", "landingPage", "clickUri", "url")
+
     for key in direct_keys:
-        candidate = str(record.get(key) or "").strip()
+        candidate = _string(record.get(key))
         if candidate.startswith(("http://", "https://")):
             return candidate
 
     nested_keys = ("variables", "content", "object", "reference")
+
     for nested_key in nested_keys:
         nested = record.get(nested_key)
         if isinstance(nested, dict):
@@ -97,33 +187,306 @@ def _extract_landing_url(record: dict[str, Any]) -> str:
     return ""
 
 
-def _enrich_creatives(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _row_id(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = _string(row.get(key))
+        if value:
+            return urn_to_id(value)
+    return ""
+
+
+def _merge_unique_rows(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+    *,
+    id_keys: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    rows = list(existing)
+    seen = {
+        _row_id(row, *id_keys)
+        for row in rows
+        if _row_id(row, *id_keys)
+    }
+
+    for row in incoming:
+        row_key = _row_id(row, *id_keys)
+        if row_key and row_key in seen:
+            continue
+        if row_key:
+            seen.add(row_key)
+        rows.append(row)
+
+    return rows
+
+
+def _extract_campaign_ids(rows: list[dict[str, Any]]) -> list[str]:
+    ids: list[str] = []
+
+    for row in rows:
+        campaign_id = _string(
+            row.get("campaign_id")
+            or row.get("campaign")
+            or row.get("campaign_urn")
+            or row.get("sponsoredCampaign")
+            or row.get("sponsoredCampaignUrn")
+            or row.get("id")
+        )
+        if campaign_id:
+            ids.append(urn_to_id(campaign_id))
+
+    return _dedupe(ids)
+
+
+def _enrich_creatives(
+    *,
+    account_id: str,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     enriched: list[dict[str, Any]] = []
 
     for row in rows:
         normalized = normalize_entity_identifiers(row)
+
+        normalized.setdefault("account_id", account_id)
+        normalized.setdefault("account_urn", sponsored_account_urn(account_id))
+
+        campaign_id = _string(
+            normalized.get("campaign_id")
+            or normalized.get("campaign")
+            or normalized.get("campaign_urn")
+            or normalized.get("sponsoredCampaign")
+            or normalized.get("sponsoredCampaignUrn")
+        )
+        if campaign_id:
+            normalized["campaign_id"] = urn_to_id(campaign_id)
+            normalized["campaign_urn"] = campaign_urn(campaign_id)
+
         landing_page_url = _extract_landing_url(row)
         normalized["landing_page_url"] = landing_page_url
         normalized["final_domain"] = urlsplit(landing_page_url).netloc.lower() if landing_page_url else ""
+
         enriched.append(normalized)
 
     return enriched
 
 
-def _safe_collect(
+def _normalize_account_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_rows: list[dict[str, Any]] = []
+
+    for row in rows:
+        normalized = normalize_entity_identifiers(row)
+        account_id = _string(normalized.get("account_id") or normalized.get("id") or normalized.get("account"))
+
+        if account_id:
+            normalized["account_id"] = urn_to_id(account_id)
+            normalized["account_urn"] = sponsored_account_urn(account_id)
+
+        account_name = _string(
+            normalized.get("name")
+            or normalized.get("localizedName")
+            or normalized.get("accountName")
+            or normalized.get("reference")
+        )
+        if account_name:
+            normalized["account_name"] = account_name
+
+        normalized_rows.append(normalized)
+
+    return normalized_rows
+
+
+def _fetch_campaign_group_rows(
     *,
+    client: LinkedInRestClient,
     result: LinkedInSyncResult,
-    raw_key: str,
-    action,
+    account_id: str,
 ) -> list[dict[str, Any]]:
-    try:
-        rows = action()
-        result.raw_payloads[raw_key] = rows
-        return rows
-    except Exception as exc:
-        result.warnings.append(f"{raw_key} selhalo: {exc}")
-        result.raw_payloads[raw_key] = []
-        return []
+    first_pass = _safe_collect(
+        result=result,
+        raw_key=f"campaign_groups_raw_{account_id}",
+        action=lambda: [
+            normalize_entity_identifiers(row)
+            for row in client.paginate_cursor(
+                f"adAccounts/{account_id}/adCampaignGroups",
+                params=_status_search_params(CAMPAIGN_GROUP_STATUSES),
+                page_size=100,
+            )
+        ],
+    )
+
+    if first_pass:
+        return first_pass
+
+    fallback = _safe_collect(
+        result=result,
+        raw_key=f"campaign_groups_raw_{account_id}_fallback_all",
+        action=lambda: [
+            normalize_entity_identifiers(row)
+            for row in client.paginate_cursor(
+                f"adAccounts/{account_id}/adCampaignGroups",
+                params=_search_without_status_params(),
+                page_size=100,
+            )
+        ],
+    )
+
+    return _merge_unique_rows(
+        first_pass,
+        fallback,
+        id_keys=("campaign_group_id", "campaignGroup_id", "campaignGroup", "id"),
+    )
+
+
+def _fetch_campaign_rows(
+    *,
+    client: LinkedInRestClient,
+    result: LinkedInSyncResult,
+    account_id: str,
+) -> list[dict[str, Any]]:
+    first_pass = _safe_collect(
+        result=result,
+        raw_key=f"campaigns_raw_{account_id}",
+        action=lambda: [
+            normalize_entity_identifiers(row)
+            for row in client.paginate_cursor(
+                f"adAccounts/{account_id}/adCampaigns",
+                params=_status_search_params(CAMPAIGN_STATUSES),
+                page_size=100,
+            )
+        ],
+    )
+
+    fallback = _safe_collect(
+        result=result,
+        raw_key=f"campaigns_raw_{account_id}_fallback_all",
+        action=lambda: [
+            normalize_entity_identifiers(row)
+            for row in client.paginate_cursor(
+                f"adAccounts/{account_id}/adCampaigns",
+                params=_search_without_status_params(),
+                page_size=100,
+            )
+        ],
+    )
+
+    return _merge_unique_rows(
+        first_pass,
+        fallback,
+        id_keys=("campaign_id", "campaign", "campaign_urn", "id"),
+    )
+
+
+def _fetch_creative_rows(
+    *,
+    client: LinkedInRestClient,
+    result: LinkedInSyncResult,
+    account_id: str,
+) -> list[dict[str, Any]]:
+    rows = _safe_collect(
+        result=result,
+        raw_key=f"creatives_raw_{account_id}",
+        action=lambda: list(
+            client.paginate_cursor(
+                f"adAccounts/{account_id}/creatives",
+                params={"q": "criteria"},
+                page_size=100,
+                extra_headers={"X-RestLi-Method": "FINDER"},
+            )
+        ),
+    )
+
+    return _enrich_creatives(account_id=account_id, rows=rows)
+
+
+def _fetch_campaign_by_id(
+    *,
+    client: LinkedInRestClient,
+    account_id: str,
+    campaign_id: str,
+) -> dict[str, Any] | None:
+    clean_campaign_id = urn_to_id(campaign_id)
+    if not clean_campaign_id:
+        return None
+
+    candidate_paths = (
+        f"adAccounts/{account_id}/adCampaigns/{clean_campaign_id}",
+        f"adCampaigns/{clean_campaign_id}",
+        f"adCampaigns/{campaign_urn(clean_campaign_id)}",
+    )
+
+    for path in candidate_paths:
+        try:
+            payload = client.get(path)
+        except Exception:
+            continue
+
+        if isinstance(payload, dict) and payload:
+            normalized = normalize_entity_identifiers(payload)
+            normalized.setdefault("account_id", account_id)
+            normalized.setdefault("account_urn", sponsored_account_urn(account_id))
+            normalized.setdefault("campaign_id", clean_campaign_id)
+            normalized.setdefault("campaign_urn", campaign_urn(clean_campaign_id))
+            normalized["_sync_source"] = "direct_campaign_lookup"
+            return normalized
+
+    return None
+
+
+def _fetch_missing_campaigns_from_creatives(
+    *,
+    client: LinkedInRestClient,
+    result: LinkedInSyncResult,
+    account_id: str,
+    campaign_rows: list[dict[str, Any]],
+    creative_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    known_campaign_ids = set(_extract_campaign_ids(campaign_rows))
+    creative_campaign_ids = set(_extract_campaign_ids(creative_rows))
+    missing_campaign_ids = sorted(creative_campaign_ids - known_campaign_ids)
+
+    if not missing_campaign_ids:
+        result.raw_payloads[f"campaigns_raw_{account_id}_direct_from_creatives"] = []
+        return campaign_rows
+
+    direct_rows: list[dict[str, Any]] = []
+
+    for campaign_id in missing_campaign_ids:
+        direct_row = _fetch_campaign_by_id(
+            client=client,
+            account_id=account_id,
+            campaign_id=campaign_id,
+        )
+        if direct_row:
+            direct_rows.append(direct_row)
+
+    result.raw_payloads[f"campaigns_raw_{account_id}_direct_from_creatives"] = direct_rows
+
+    if missing_campaign_ids and not direct_rows:
+        result.warnings.append(
+            f"campaigns_raw_{account_id} selhalo: creatives odkazují na kampaně "
+            f"{', '.join(missing_campaign_ids)}, ale direct lookup nic nevrátil."
+        )
+
+    return _merge_unique_rows(
+        campaign_rows,
+        direct_rows,
+        id_keys=("campaign_id", "campaign", "campaign_urn", "id"),
+    )
+
+
+def _empty_reporting_datasets() -> dict[str, pd.DataFrame]:
+    keys = (
+        "insights_account_daily",
+        "insights_campaign_daily",
+        "insights_creative_daily",
+        "insights_account_all",
+        "insights_campaign_all",
+        "insights_creative_all",
+        "professional_demographics_account",
+        "professional_demographics_campaign",
+        "professional_demographics_creative",
+    )
+    return {key: records_to_frame([]) for key in keys}
 
 
 def run_linkedin_context_sync(
@@ -144,8 +507,11 @@ def run_linkedin_context_sync(
     gtm_env_config: GoogleAdsEnvConfig | None = None,
 ) -> LinkedInSyncResult:
     include_raw = bool(include_raw and runtime_config.export_raw)
+    include_reporting = bool(include_reporting)
+    include_professional_demographics = bool(include_professional_demographics)
     include_lead_sync = bool(include_lead_sync and runtime_config.enable_lead_sync and mapping.lead_sync_enabled)
     include_web_scan = bool(include_web_scan and runtime_config.enable_web_scan and mapping.web_scan_enabled)
+    include_gtm_crosscheck = bool(include_gtm_crosscheck)
 
     client = LinkedInRestClient(connection=connection, runtime_config=runtime_config, access_token=access_token)
     result = LinkedInSyncResult(context_key=mapping.context_key)
@@ -166,20 +532,22 @@ def run_linkedin_context_sync(
     ad_accounts = _safe_collect(
         result=result,
         raw_key="ad_accounts_raw",
-        action=lambda: [
-            normalize_entity_identifiers(row)
-            for row in client.paginate_cursor(
-                "adAccounts",
-                params={"q": "search"},
-                page_size=100,
-            )
-        ],
+        action=lambda: _normalize_account_rows(
+            [
+                row
+                for row in client.paginate_cursor(
+                    "adAccounts",
+                    params={"q": "search"},
+                    page_size=100,
+                )
+            ]
+        ),
     )
 
     ad_account_lookup = {
-        str(row.get("account_id") or row.get("id") or ""): row
+        _string(row.get("account_id") or row.get("id")): row
         for row in ad_accounts
-        if str(row.get("account_id") or row.get("id") or "")
+        if _string(row.get("account_id") or row.get("id"))
     }
     filtered_ad_accounts = [
         ad_account_lookup[account_id]
@@ -192,10 +560,10 @@ def run_linkedin_context_sync(
         raw_key="ad_account_users_raw",
         action=lambda: [
             normalize_entity_identifiers(row)
-            for row in client.paginate_cursor(
-                "adAccountUsers",
+            for row in _safe_get_elements(
+                client=client,
+                path="adAccountUsers",
                 params={"q": "authenticatedUser"},
-                page_size=100,
             )
         ],
     )
@@ -214,68 +582,53 @@ def run_linkedin_context_sync(
             raw_key=f"ad_account_roles_raw_{account_id}",
             action=lambda account_urn=account_urn: [
                 normalize_entity_identifiers(row)
-                for row in client.paginate_cursor(
-                    "adAccountUsers",
+                for row in _safe_get_elements(
+                    client=client,
+                    path="adAccountUsers",
                     params={
                         "q": "accounts",
-                        "accounts": account_urn,
+                        "accounts": _restli_list([account_urn]),
                     },
-                    page_size=100,
                 )
             ],
         )
         account_roles.extend(account_role_rows)
 
-        campaign_group_rows = _safe_collect(
+        campaign_group_rows = _fetch_campaign_group_rows(
+            client=client,
             result=result,
-            raw_key=f"campaign_groups_raw_{account_id}",
-            action=lambda account_id=account_id: [
-                normalize_entity_identifiers(row)
-                for row in client.paginate_cursor(
-                    f"adAccounts/{account_id}/adCampaignGroups",
-                    params=_status_search_params(CAMPAIGN_GROUP_STATUSES),
-                    page_size=100,
-                )
-            ],
+            account_id=account_id,
         )
         campaign_groups.extend(campaign_group_rows)
 
-        campaign_rows = _safe_collect(
+        campaign_rows = _fetch_campaign_rows(
+            client=client,
             result=result,
-            raw_key=f"campaigns_raw_{account_id}",
-            action=lambda account_id=account_id: [
-                normalize_entity_identifiers(row)
-                for row in client.paginate_cursor(
-                    f"adAccounts/{account_id}/adCampaigns",
-                    params=_status_search_params(CAMPAIGN_STATUSES),
-                    page_size=100,
-                )
-            ],
+            account_id=account_id,
         )
+
+        creative_rows = _fetch_creative_rows(
+            client=client,
+            result=result,
+            account_id=account_id,
+        )
+
+        campaign_rows = _fetch_missing_campaigns_from_creatives(
+            client=client,
+            result=result,
+            account_id=account_id,
+            campaign_rows=campaign_rows,
+            creative_rows=creative_rows,
+        )
+
         campaigns.extend(campaign_rows)
-
-        campaign_ids_by_account[account_id] = [
-            str(row.get("campaign_id") or row.get("id") or "")
-            for row in campaign_rows
-            if str(row.get("campaign_id") or row.get("id") or "")
-        ]
-
-        creative_rows = _safe_collect(
-            result=result,
-            raw_key=f"creatives_raw_{account_id}",
-            action=lambda account_id=account_id: _enrich_creatives(
-                list(
-                    client.paginate_cursor(
-                        f"adAccounts/{account_id}/creatives",
-                        params={"q": "criteria"},
-                        page_size=100,
-                        extra_headers={"X-RestLi-Method": "FINDER"},
-                    )
-                )
-            ),
-        )
         creatives.extend(creative_rows)
 
+        campaign_ids_by_account[account_id] = _dedupe(
+            _extract_campaign_ids(campaign_rows) + _extract_campaign_ids(creative_rows)
+        )
+
+    result.raw_payloads["ad_account_roles_raw"] = list(account_roles)
     result.raw_payloads["campaign_groups_raw"] = list(campaign_groups)
     result.raw_payloads["campaigns_raw"] = list(campaigns)
     result.raw_payloads["creatives_raw"] = list(creatives)
@@ -348,15 +701,19 @@ def run_linkedin_context_sync(
             ),
         )
     else:
-        result.warnings.append("Lead Sync byl vypnutý runtime flagem nebo mappingem.")
+        _add_info(result, "Lead Sync byl vypnutý runtime flagem, UI volbou nebo mappingem.")
+        result.raw_payloads["lead_forms_raw"] = []
+        result.raw_payloads["lead_form_responses_raw"] = []
+        result.raw_payloads["lead_notifications_raw"] = []
 
-    reporting_datasets: dict[str, pd.DataFrame] = {}
+    reporting_datasets: dict[str, pd.DataFrame] = _empty_reporting_datasets()
 
     if include_reporting:
         reporting_datasets, reporting_raw, reporting_warnings = build_reporting_exports(
             client,
             account_ids=mapping.ad_account_ids,
             date_range=date_range,
+            include_professional_demographics=include_professional_demographics,
         )
         result.raw_payloads.update(reporting_raw)
         result.raw_payloads["ad_analytics_raw"] = {
@@ -365,11 +722,9 @@ def run_linkedin_context_sync(
             if key.startswith("insights_") or key.startswith("professional_demographics_")
         }
         result.warnings.extend(reporting_warnings)
-
-        if not include_professional_demographics:
-            reporting_datasets["professional_demographics_account"] = records_to_frame([])
-            reporting_datasets["professional_demographics_campaign"] = records_to_frame([])
-            reporting_datasets["professional_demographics_creative"] = records_to_frame([])
+    else:
+        _add_info(result, "Reporting byl vypnutý UI volbou.")
+        result.raw_payloads["ad_analytics_raw"] = {}
 
     gtm_crosscheck: dict[str, Any] = {
         "context_key": mapping.context_key,
@@ -394,14 +749,16 @@ def run_linkedin_context_sync(
             expected_insight_tag_ids=mapping.expected_insight_tag_ids,
             gtm_tags=gtm_tags,
         )
+    elif not include_gtm_crosscheck:
+        _add_info(result, "GTM cross-check byl vypnutý UI volbou.")
 
     landing_rows: list[dict[str, Any]] = []
 
     if include_web_scan:
         landing_urls = [
-            str(row.get("landing_page_url") or "")
+            _string(row.get("landing_page_url"))
             for row in creatives
-            if str(row.get("landing_page_url") or "")
+            if _string(row.get("landing_page_url"))
         ]
         landing_rows, web_warnings = scan_landing_pages(
             landing_urls,
@@ -409,23 +766,32 @@ def run_linkedin_context_sync(
         )
         result.warnings.extend(web_warnings)
     else:
-        result.warnings.append("Web scan byl vypnutý runtime flagem nebo mappingem.")
+        _add_info(result, "Web scan byl vypnutý runtime flagem, UI volbou nebo mappingem.")
+
+
+    creative_landing_seed_rows = [
+        {
+            "landing_page_url": row.get("landing_page_url", ""),
+            "final_domain": row.get("final_domain", ""),
+            "account_id": row.get("account_id", ""),
+            "campaign_id": row.get("campaign_id", ""),
+            "campaign_name": row.get("campaign_name", ""),
+            "creative_id": row.get("creative_id", ""),
+            "creative_name": row.get("name", ""),
+        }
+        for row in creatives
+        if _string(row.get("landing_page_url"))
+    ]
+
+    utm_source_rows = landing_rows if landing_rows else creative_landing_seed_rows
+    utm_source_rows = [
+        row
+        for row in utm_source_rows
+        if _string(row.get("source_url") or row.get("landing_page_url") or row.get("final_url"))
+    ]
 
     utm_audit_rows = build_utm_audit_rows(
-        landing_rows
-        if landing_rows
-        else [
-            {
-                "landing_page_url": row.get("landing_page_url", ""),
-                "final_domain": row.get("final_domain", ""),
-                "account_id": row.get("account_id", ""),
-                "campaign_id": row.get("campaign_id", ""),
-                "campaign_name": row.get("campaign_name", ""),
-                "creative_id": row.get("creative_id", ""),
-                "creative_name": row.get("name", ""),
-            }
-            for row in creatives
-        ],
+        utm_source_rows,
         expected_source=mapping.expected_utm_source,
         expected_medium=mapping.expected_utm_medium,
         expected_domains=list(mapping.expected_domains),
@@ -436,6 +802,7 @@ def run_linkedin_context_sync(
         "mapping_used": records_to_frame([mapping.to_dict()]),
         "ad_accounts": records_to_frame(filtered_ad_accounts),
         "ad_account_users": records_to_frame(ad_account_users),
+        "ad_account_roles": records_to_frame(account_roles),
         "organizations": records_to_frame(organizations),
         "campaign_groups": records_to_frame(campaign_groups),
         "campaigns": records_to_frame(campaigns),
@@ -445,6 +812,7 @@ def run_linkedin_context_sync(
         "campaign_conversions": records_to_frame(campaign_conversions),
         "insight_tags": records_to_frame(insight_tags),
         "insight_tag_domains": records_to_frame(insight_tag_domains),
+        "insight_tags_permission": records_to_frame(insight_tags_permission),
         "lead_forms": records_to_frame(lead_forms),
         "lead_form_questions": records_to_frame(lead_form_questions),
         "lead_form_responses": records_to_frame(lead_form_responses),
@@ -456,26 +824,18 @@ def run_linkedin_context_sync(
     }
     datasets.update(reporting_datasets)
 
-    for key in (
-        "insights_account_daily",
-        "insights_campaign_daily",
-        "insights_creative_daily",
-        "insights_account_all",
-        "insights_campaign_all",
-        "insights_creative_all",
-        "professional_demographics_account",
-        "professional_demographics_campaign",
-        "professional_demographics_creative",
-    ):
-        datasets.setdefault(key, records_to_frame([]))
+    for key, value in _empty_reporting_datasets().items():
+        datasets.setdefault(key, value)
 
     findings = build_audit_findings(
         connection=connection,
         mapping=mapping,
+        lead_sync_active=include_lead_sync,
         datasets=datasets,
         gtm_crosscheck=gtm_crosscheck,
         web_scan_rows=landing_rows,
         export_warnings=result.warnings,
+        export_info_notes=result.info_notes,
     )
     result.findings = findings
     result.datasets = datasets
@@ -486,6 +846,7 @@ def run_linkedin_context_sync(
         if isinstance(dataframe, pd.DataFrame)
     }
     manifest.counts = counts
+    manifest.infos = [{"message": note} for note in result.info_notes]
     manifest.warnings = [{"message": warning} for warning in result.warnings]
     manifest.errors = [{"message": error} for error in result.errors]
     manifest.finished_at = datetime.now(timezone.utc).isoformat()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pandas as pd
@@ -46,6 +47,14 @@ def _row_evidence(row: pd.Series, allowed_keys: list[str] | None = None) -> dict
         payload = {key: payload.get(key) for key in allowed_keys if key in payload}
 
     return sanitize_pii_for_report(payload)
+
+
+def _row_text(row: pd.Series | dict[str, Any]) -> str:
+    try:
+        payload = row.to_dict() if isinstance(row, pd.Series) else dict(row)
+        return json.dumps(payload, ensure_ascii=False, default=str).lower()
+    except Exception:
+        return str(row).lower()
 
 
 def _append_finding(
@@ -123,6 +132,77 @@ def _is_dataframe(value: Any) -> bool:
 def _dataframe(datasets: dict[str, pd.DataFrame], key: str) -> pd.DataFrame:
     value = datasets.get(key, pd.DataFrame())
     return value if _is_dataframe(value) else pd.DataFrame()
+
+
+def _creative_id_from_row(row: pd.Series) -> str:
+    return _safe_str(
+        _column_value(
+            row,
+            "creative_id",
+            "creative",
+            "creative_urn",
+            "id",
+        )
+    )
+
+
+def _looks_like_lead_gen_creative(row: pd.Series) -> bool:
+    text = _row_text(row)
+
+    return any(
+        marker in text
+        for marker in (
+            "leadgen",
+            "lead_gen",
+            "lead form",
+            "leadform",
+            "oneclicklead",
+            "adform",
+            "urn:li:adform",
+            "leadgencalltoaction",
+        )
+    )
+
+
+def _lead_gen_creative_ids(creatives: pd.DataFrame) -> set[str]:
+    if creatives.empty:
+        return set()
+
+    ids: set[str] = set()
+
+    for _, row in creatives.iterrows():
+        if not _looks_like_lead_gen_creative(row):
+            continue
+
+        creative_id = _creative_id_from_row(row)
+        if creative_id:
+            ids.add(creative_id)
+
+    return ids
+
+
+def _is_lead_gen_utm_false_positive(row: pd.Series, *, lead_gen_creative_ids: set[str]) -> bool:
+    landing_page_url = _safe_str(_column_value(row, "landing_page_url", "source_url", "final_url", "url"))
+    if landing_page_url:
+        return False
+
+    creative_id = _safe_str(_column_value(row, "creative_id", "creative", "creative_urn", "id"))
+    if creative_id and creative_id in lead_gen_creative_ids:
+        return True
+
+    text = _row_text(row)
+    return any(
+        marker in text
+        for marker in (
+            "leadgen",
+            "lead_gen",
+            "lead form",
+            "leadform",
+            "oneclicklead",
+            "adform",
+            "urn:li:adform",
+        )
+    )
 
 
 def _audit_access(
@@ -290,7 +370,9 @@ def _audit_structure(
 def _audit_tracking(
     findings: list[LinkedInAuditFinding],
     *,
+    connection: LinkedInConnection,
     mapping: LinkedInAccountContextMapping,
+    lead_sync_active: bool,
     datasets: dict[str, pd.DataFrame],
     gtm_crosscheck: dict[str, Any],
     web_scan_rows: list[dict[str, Any]],
@@ -300,7 +382,14 @@ def _audit_tracking(
     insight_tag_domains = _dataframe(datasets, "insight_tag_domains")
     campaign_conversions = _dataframe(datasets, "campaign_conversions")
 
-    if mapping.expected_conversion_type == "lead" and mapping.lead_sync_enabled and lead_forms.empty:
+    lead_sync_scope_available = "r_marketing_leadgen_automation" in connection.granted_scopes
+
+    if (
+        mapping.expected_conversion_type == "lead"
+        and lead_sync_active
+        and lead_sync_scope_available
+        and lead_forms.empty
+    ):
         _append_finding(
             findings,
             severity="warning",
@@ -540,13 +629,19 @@ def _audit_utm(
     findings: list[LinkedInAuditFinding],
     *,
     utm_audit: pd.DataFrame,
+    creatives: pd.DataFrame,
 ) -> None:
     if utm_audit.empty:
         return
 
+    lead_gen_ids = _lead_gen_creative_ids(creatives)
+
     for _, row in utm_audit.iterrows():
         issue_code = _safe_str(row.get("issue_code"))
         if issue_code == "ok":
+            continue
+
+        if _is_lead_gen_utm_false_positive(row, lead_gen_creative_ids=lead_gen_ids):
             continue
 
         _append_finding(
@@ -568,10 +663,12 @@ def build_audit_findings(
     *,
     connection: LinkedInConnection,
     mapping: LinkedInAccountContextMapping,
+    lead_sync_active: bool,
     datasets: dict[str, pd.DataFrame],
     gtm_crosscheck: dict[str, Any],
     web_scan_rows: list[dict[str, Any]],
     export_warnings: list[str],
+    export_info_notes: list[str],
 ) -> list[LinkedInAuditFinding]:
     findings: list[LinkedInAuditFinding] = []
 
@@ -597,7 +694,9 @@ def build_audit_findings(
     )
     _audit_tracking(
         findings,
+        connection=connection,
         mapping=mapping,
+        lead_sync_active=lead_sync_active,
         datasets=datasets,
         gtm_crosscheck=gtm_crosscheck,
         web_scan_rows=web_scan_rows,
@@ -609,17 +708,29 @@ def build_audit_findings(
     _audit_utm(
         findings,
         utm_audit=utm_audit,
+        creatives=creatives,
     )
 
     for warning in export_warnings:
         _append_finding(
             findings,
-            severity="info",
+            severity="warning",
             category="export",
             code="LINKEDIN_EXPORT_WARNING",
             title="Export doběhl s warningem",
             detail=str(warning),
             recommendation="Zkontroluj manifest a konkrétní přeskočené endpointy.",
+        )
+
+    for note in export_info_notes:
+        _append_finding(
+            findings,
+            severity="info",
+            category="export",
+            code="LINKEDIN_EXPORT_INFO",
+            title="Export poznámka",
+            detail=str(note),
+            recommendation="Jen informativní poznámka, export není považovaný za částečně neúspěšný.",
         )
 
     return findings

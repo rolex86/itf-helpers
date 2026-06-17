@@ -131,8 +131,12 @@ def build_utm_audit_rows(
     }
 
     for row in landing_rows:
-        landing_page_url = str(row.get("source_url") or row.get("landing_page_url") or "")
-        final_url = str(row.get("final_url") or landing_page_url or "")
+        landing_page_url = str(row.get("source_url") or row.get("landing_page_url") or "").strip()
+        final_url = str(row.get("final_url") or landing_page_url or "").strip()
+
+        if not landing_page_url and not final_url:
+            continue
+
         parsed_source = urlsplit(landing_page_url)
         parsed_final = urlsplit(final_url)
 

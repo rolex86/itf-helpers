@@ -5,8 +5,8 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.integrations.linkedin.client import LinkedInRestClient
-from app.integrations.linkedin.normalizers import normalize_entity_identifiers, records_to_frame
-from app.integrations.linkedin.restli import date_range_param, sponsored_account_urn
+from app.integrations.linkedin.normalizers import normalize_entity_identifiers, records_to_frame, urn_to_id
+from app.integrations.linkedin.restli import campaign_urn, creative_urn, date_range_param, sponsored_account_urn
 
 
 PRESET_TO_DAYS = {
@@ -38,11 +38,8 @@ PERFORMANCE_FIELDS = (
     "likes",
     "comments",
     "shares",
-    "follows",
     "videoViews",
-    "videoCompletions",
     "approximateMemberReach",
-    "conversionValueInLocalCurrency",
 )
 
 PERFORMANCE_FIELDS_FALLBACK = (
@@ -62,7 +59,6 @@ DEMOGRAPHIC_FIELDS = (
     "pivotValues",
     "impressions",
     "clicks",
-    "totalEngagements",
 )
 
 MEMBER_DEMOGRAPHIC_PIVOTS = (
@@ -114,17 +110,31 @@ def _date_windows(date_range: LinkedInDateRange, *, window_days: int) -> list[Li
 
 
 def _restli_list(values: list[str] | tuple[str, ...]) -> str:
-    cleaned = [str(value) for value in values if value]
+    cleaned: list[str] = []
+
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+
     return "List(" + ",".join(cleaned) + ")"
 
 
 def _fields_param(fields: tuple[str, ...] | list[str]) -> str:
-    return ",".join(dict.fromkeys(str(field) for field in fields if field))
+    cleaned: list[str] = []
+
+    for field in fields or []:
+        text = str(field or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+
+    return ",".join(cleaned)
 
 
 def _to_number(value: Any) -> float | None:
     if value is None or value == "":
         return None
+
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -132,10 +142,7 @@ def _to_number(value: Any) -> float | None:
 
 
 def _extract_urn_id(value: Any) -> str:
-    text = str(value or "")
-    if ":" not in text:
-        return text
-    return text.rsplit(":", 1)[-1]
+    return urn_to_id(value)
 
 
 def _linkedin_date_to_iso(value: Any) -> str:
@@ -143,9 +150,53 @@ def _linkedin_date_to_iso(value: Any) -> str:
         year = value.get("year")
         month = value.get("month")
         day = value.get("day")
+
         if year and month and day:
             return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+
     return ""
+
+
+def _apply_primary_pivot_identifiers(
+    normalized: dict[str, Any],
+    *,
+    requested_pivot: str,
+    pivot_values: list[Any],
+    account_id: str,
+    account_urn: str,
+) -> None:
+    normalized["account_id"] = str(account_id)
+    normalized["account_urn"] = account_urn
+
+    if not pivot_values:
+        return
+
+    first_pivot = str(pivot_values[0] or "").strip()
+    first_pivot_id = urn_to_id(first_pivot)
+
+    if requested_pivot == "ACCOUNT":
+        normalized["account_id"] = first_pivot_id or str(account_id)
+        normalized["account_urn"] = first_pivot or account_urn
+
+    elif requested_pivot == "CAMPAIGN":
+        normalized["campaign_id"] = first_pivot_id
+        normalized["campaign_urn"] = first_pivot or campaign_urn(first_pivot_id)
+
+    elif requested_pivot == "CREATIVE":
+        normalized["creative_id"] = first_pivot_id
+        normalized["creative_urn"] = first_pivot or creative_urn(first_pivot_id)
+
+    elif requested_pivot.startswith("CAMPAIGN,"):
+        normalized["campaign_id"] = first_pivot_id
+        normalized["campaign_urn"] = first_pivot or campaign_urn(first_pivot_id)
+
+    elif requested_pivot.startswith("CREATIVE,"):
+        normalized["creative_id"] = first_pivot_id
+        normalized["creative_urn"] = first_pivot or creative_urn(first_pivot_id)
+
+    elif requested_pivot.startswith("MEMBER_"):
+        normalized["member_demographic_id"] = first_pivot_id
+        normalized["member_demographic_urn"] = first_pivot
 
 
 def _flatten_ad_analytics_row(
@@ -164,21 +215,37 @@ def _flatten_ad_analytics_row(
     normalized["time_granularity"] = time_granularity
 
     date_range = row.get("dateRange") or {}
-    normalized["date_start"] = _linkedin_date_to_iso(date_range.get("start"))
-    normalized["date_end"] = _linkedin_date_to_iso(date_range.get("end"))
+    normalized["date_start"] = _linkedin_date_to_iso(date_range.get("start") if isinstance(date_range, dict) else {})
+    normalized["date_end"] = _linkedin_date_to_iso(date_range.get("end") if isinstance(date_range, dict) else {})
 
     pivot_values = row.get("pivotValues") or []
-    if isinstance(pivot_values, list):
-        for index, pivot_value in enumerate(pivot_values, start=1):
-            normalized[f"pivot_value_{index}"] = pivot_value
-            normalized[f"pivot_value_{index}_id"] = _extract_urn_id(pivot_value)
+    if not isinstance(pivot_values, list):
+        pivot_values = []
+
+    for index, pivot_value in enumerate(pivot_values, start=1):
+        normalized[f"pivot_value_{index}"] = pivot_value
+        normalized[f"pivot_value_{index}_id"] = _extract_urn_id(pivot_value)
+
+    _apply_primary_pivot_identifiers(
+        normalized,
+        requested_pivot=requested_pivot,
+        pivot_values=pivot_values,
+        account_id=account_id,
+        account_urn=account_urn,
+    )
 
     impressions = _to_number(row.get("impressions"))
     clicks = _to_number(row.get("clicks"))
     spend = _to_number(row.get("costInLocalCurrency"))
     website_conversions = _to_number(row.get("externalWebsiteConversions")) or 0.0
+    post_click_conversions = _to_number(row.get("externalWebsitePostClickConversions")) or 0.0
+    post_view_conversions = _to_number(row.get("externalWebsitePostViewConversions")) or 0.0
     one_click_leads = _to_number(row.get("oneClickLeads")) or 0.0
-    leads_or_conversions = website_conversions + one_click_leads
+
+    leads_or_conversions = max(
+        website_conversions,
+        post_click_conversions + post_view_conversions,
+    ) + one_click_leads
 
     if impressions and impressions > 0:
         normalized["ctr"] = (clicks or 0.0) / impressions
@@ -208,18 +275,20 @@ def _call_ad_analytics(
 
     try:
         payload = client.get("adAnalytics", params=request_params)
+        return payload if isinstance(payload, dict) else {"elements": []}
     except Exception:
-        if not fallback_fields:
-            raise
+        if fallback_fields:
+            fallback_params = dict(params)
+            fallback_params["fields"] = _fields_param(fallback_fields)
 
-        fallback_params = dict(params)
-        fallback_params["fields"] = _fields_param(fallback_fields)
-        payload = client.get("adAnalytics", params=fallback_params)
+            try:
+                payload = client.get("adAnalytics", params=fallback_params)
+                return payload if isinstance(payload, dict) else {"elements": []}
+            except Exception:
+                pass
 
-    if not isinstance(payload, dict):
-        return {"elements": []}
-
-    return payload
+        payload = client.get("adAnalytics", params=dict(params))
+        return payload if isinstance(payload, dict) else {"elements": []}
 
 
 def _analytics_request(
@@ -229,6 +298,8 @@ def _analytics_request(
     pivot: str,
     time_granularity: str,
     date_range: LinkedInDateRange,
+    fields: tuple[str, ...] = PERFORMANCE_FIELDS,
+    fallback_fields: tuple[str, ...] | None = PERFORMANCE_FIELDS_FALLBACK,
 ) -> list[dict[str, Any]]:
     account_urn = sponsored_account_urn(account_id)
     payload = _call_ad_analytics(
@@ -240,8 +311,8 @@ def _analytics_request(
             "timeGranularity": time_granularity,
             "dateRange": date_range_param(date_range.start, date_range.end),
         },
-        fields=PERFORMANCE_FIELDS,
-        fallback_fields=PERFORMANCE_FIELDS_FALLBACK,
+        fields=fields,
+        fallback_fields=fallback_fields,
     )
 
     rows = payload.get("elements", []) or []
@@ -310,6 +381,8 @@ def _analytics_rows(
     pivot: str,
     time_granularity: str,
     date_range: LinkedInDateRange,
+    fields: tuple[str, ...] = PERFORMANCE_FIELDS,
+    fallback_fields: tuple[str, ...] | None = PERFORMANCE_FIELDS_FALLBACK,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     window_days = (
@@ -328,6 +401,8 @@ def _analytics_rows(
                 pivot=pivot,
                 time_granularity=time_granularity,
                 date_range=window,
+                fields=fields,
+                fallback_fields=fallback_fields,
             )
 
             if len(batch) >= MAX_ANALYTICS_ROWS and window.start < window.end:
@@ -339,6 +414,8 @@ def _analytics_rows(
                         pivot=pivot,
                         time_granularity=time_granularity,
                         date_range=LinkedInDateRange(start=window.start, end=midpoint),
+                        fields=fields,
+                        fallback_fields=fallback_fields,
                     )
                 )
                 rows.extend(
@@ -348,6 +425,8 @@ def _analytics_rows(
                         pivot=pivot,
                         time_granularity=time_granularity,
                         date_range=LinkedInDateRange(start=midpoint + timedelta(days=1), end=window.end),
+                        fields=fields,
+                        fallback_fields=fallback_fields,
                     )
                 )
                 continue
@@ -423,16 +502,25 @@ def _professional_demographic_rows(
     member_pivot: str,
     entity_pivot: str | None = None,
 ) -> list[dict[str, Any]]:
-    pivots = [member_pivot] if not entity_pivot else [entity_pivot, member_pivot]
-
-    rows = _statistics_rows(
-        client,
-        account_ids=account_ids,
-        pivots=pivots,
-        time_granularity="ALL",
-        date_range=date_range,
-        fields=DEMOGRAPHIC_FIELDS,
-    )
+    if not entity_pivot:
+        rows = _analytics_rows(
+            client,
+            account_ids=account_ids,
+            pivot=member_pivot,
+            time_granularity="ALL",
+            date_range=date_range,
+            fields=DEMOGRAPHIC_FIELDS,
+            fallback_fields=None,
+        )
+    else:
+        rows = _statistics_rows(
+            client,
+            account_ids=account_ids,
+            pivots=[entity_pivot, member_pivot],
+            time_granularity="ALL",
+            date_range=date_range,
+            fields=DEMOGRAPHIC_FIELDS,
+        )
 
     for row in rows:
         row["demographic_pivot"] = member_pivot
@@ -441,11 +529,22 @@ def _professional_demographic_rows(
     return rows
 
 
+def _empty_professional_demographic_datasets(datasets: dict[str, Any], raw_payloads: dict[str, list[dict[str, Any]]]) -> None:
+    for dataset_key in (
+        "professional_demographics_account",
+        "professional_demographics_campaign",
+        "professional_demographics_creative",
+    ):
+        raw_payloads[f"{dataset_key}_raw"] = []
+        datasets[dataset_key] = records_to_frame([])
+
+
 def build_reporting_exports(
     client: LinkedInRestClient,
     *,
     account_ids: list[str],
     date_range: LinkedInDateRange,
+    include_professional_demographics: bool = True,
 ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], list[str]]:
     warnings: list[str] = []
     raw_payloads: dict[str, list[dict[str, Any]]] = {}
@@ -480,6 +579,10 @@ def build_reporting_exports(
             warnings.append(f"{dataset_key} nebylo možné načíst: {exc}")
             raw_payloads[f"{dataset_key}_raw"] = []
             datasets[dataset_key] = records_to_frame([])
+
+    if not include_professional_demographics:
+        _empty_professional_demographic_datasets(datasets, raw_payloads)
+        return datasets, raw_payloads, warnings
 
     demographic_specs = {
         "professional_demographics_account": None,
