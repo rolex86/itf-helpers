@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sklik Audit | Mapping</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Sklik Audit</p>
+          <h1>Mapping</h1>
+          <p class="brand-copy">Prirazeni Drak userId a rucne zadanych Fenix premiseId na existujici account contexty.</p>
+        </div>
+        <nav class="nav-block">
+          <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+          <a href="{{ url_for('web.meta_connections_page') }}">Meta Ads</a>
+          <a href="{{ url_for('web.linkedin_connections_page') }}">LinkedIn Ads</a>
+          <a href="{{ url_for('web.sklik_connections_page') }}">Sklik Připojení</a>
+          <a href="{{ url_for('web.sklik_discovery_page') }}">Sklik Discovery</a>
+          <a href="{{ url_for('web.sklik_mapping_page') }}">Sklik Mapping</a>
+          <a href="{{ url_for('web.sklik_audit_page') }}">Sklik Export</a>
+        </nav>
+      </aside>
+      <main class="content">
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Sklik mapping podle contextů</h3>
+              <p>Expected domains a UTM ocekavani slouzi i pro web scan a audit findings. Fenix premiseId se zatim zadava rucne.</p>
+            </div>
+          </div>
+          <div id="sklik-mapping-status"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Context</th>
+                  <th>Enabled</th>
+                  <th>Connection</th>
+                  <th>Drak userIds</th>
+                  <th>Fénix userIds</th>
+                  <th>Premise IDs</th>
+                  <th>Expected domains</th>
+                  <th>UTM source</th>
+                  <th>UTM medium</th>
+                  <th>Reporting</th>
+                  <th>Fénix</th>
+                  <th>GTM</th>
+                  <th>Web scan</th>
+                </tr>
+              </thead>
+              <tbody id="sklik-mapping-body"></tbody>
+            </table>
+          </div>
+          <div class="action-row mapping-actions">
+            <button class="btn btn-primary" type="button" id="save-sklik-mapping-button">Uložit Sklik mapping</button>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script>
+      const rows = {{ mapping_state.contexts_payload | tojson }};
+      const connections = {{ connections | tojson }};
+      const body = document.getElementById("sklik-mapping-body");
+      function parseTextareaLines(value) {
+        if (Array.isArray(value)) {
+          return value
+            .map(item => String(item || "").replace(/\\n/g, "\n"))
+            .flatMap(item => item.split(/\n+/))
+            .map(item => item.trim())
+            .filter(Boolean);
+        }
+        return String(value || "")
+          .replace(/\\n/g, "\n")
+          .split(/\n+/)
+          .map(item => item.trim())
+          .filter(Boolean);
+      }
+      function textareaLines(value, fallback = []) {
+        const parsed = parseTextareaLines(value);
+        if (parsed.length) {
+          return parsed.join("\n");
+        }
+        return parseTextareaLines(fallback).join("\n");
+      }
+      function connectionOptions(selected) {
+        const options = ['<option value=""></option>'];
+        for (const row of connections) {
+          options.push(`<option value="${row.key}" ${row.key === selected ? "selected" : ""}>${row.label} (${row.key})</option>`);
+        }
+        return options.join("");
+      }
+      function render() {
+        body.innerHTML = rows.map((row, index) => {
+          const sklik = row.sklik || {};
+          return `
+            <tr>
+              <td><strong>${row.label}</strong><br><small>${row.key}</small></td>
+              <td><input type="checkbox" data-index="${index}" data-field="enabled" ${sklik.enabled ? "checked" : ""}></td>
+              <td><select data-index="${index}" data-field="connection_key">${connectionOptions(sklik.connection_key || "")}</select></td>
+              <td><textarea data-index="${index}" data-field="drak_user_ids" rows="3">${textareaLines(sklik.drak_user_ids)}</textarea></td>
+              <td><textarea data-index="${index}" data-field="fenix_user_ids" rows="3">${textareaLines(sklik.fenix_user_ids)}</textarea></td>
+              <td><textarea data-index="${index}" data-field="fenix_premise_ids" rows="3">${textareaLines(sklik.fenix_premise_ids)}</textarea></td>
+              <td><textarea data-index="${index}" data-field="expected_domains" rows="3">${textareaLines(sklik.expected_domains, row.source_domains || [])}</textarea></td>
+              <td><textarea data-index="${index}" data-field="expected_utm_source" rows="2">${textareaLines(sklik.expected_utm_source, ["sklik", "seznam"])}</textarea></td>
+              <td><textarea data-index="${index}" data-field="expected_utm_medium" rows="2">${textareaLines(sklik.expected_utm_medium, ["cpc", "ppc"])}</textarea></td>
+              <td><input type="checkbox" data-index="${index}" data-field="enable_reporting" ${sklik.enable_reporting !== false ? "checked" : ""}></td>
+              <td><input type="checkbox" data-index="${index}" data-field="enable_fenix" ${sklik.enable_fenix !== false ? "checked" : ""}></td>
+              <td><input type="checkbox" data-index="${index}" data-field="enable_gtm_crosscheck" ${sklik.enable_gtm_crosscheck !== false ? "checked" : ""}></td>
+              <td><input type="checkbox" data-index="${index}" data-field="enable_web_scan" ${sklik.enable_web_scan !== false ? "checked" : ""}></td>
+            </tr>
+          `;
+        }).join("");
+      }
+      function payload() {
+        return {
+          contexts: rows.map((row, index) => {
+            const sklik = {};
+            for (const field of ["enabled", "connection_key", "drak_user_ids", "fenix_user_ids", "fenix_premise_ids", "expected_domains", "expected_utm_source", "expected_utm_medium", "enable_reporting", "enable_fenix", "enable_gtm_crosscheck", "enable_web_scan"]) {
+              const element = body.querySelector(`[data-index="${index}"][data-field="${field}"]`);
+              if (!element) continue;
+              if (element.type === "checkbox") {
+                sklik[field] = element.checked;
+              } else if (element.tagName === "TEXTAREA") {
+                sklik[field] = parseTextareaLines(element.value);
+              } else {
+                sklik[field] = element.value.trim();
+              }
+            }
+            return {key: row.key, sklik};
+          })
+        };
+      }
+      function setStatus(message, kind) {
+        document.getElementById("sklik-mapping-status").innerHTML =
+          `<div class="flash flash-${kind}">${message}</div>`;
+      }
+      document.getElementById("save-sklik-mapping-button").addEventListener("click", async () => {
+        const response = await fetch("{{ url_for('web.save_sklik_mapping_route') }}", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload())
+        });
+        const result = await response.json();
+        setStatus(result.ok ? "Sklik mapping bylo uloženo." : result.message, result.ok ? "success" : "error");
+      });
+      render();
+    </script>
+  </body>
+</html>

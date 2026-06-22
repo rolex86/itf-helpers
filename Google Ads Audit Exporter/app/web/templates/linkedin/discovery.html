@@ -15,10 +15,13 @@
           <p class="brand-copy">Zjištění dostupných účtů, kampaní, kreativ, conversions a lead form assetů.</p>
         </div>
         <nav class="nav-block">
+          <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+          <a href="{{ url_for('web.meta_connections_page') }}">Meta Ads</a>
           <a href="{{ url_for('web.linkedin_connections_page') }}">LinkedIn Připojení</a>
           <a href="{{ url_for('web.linkedin_discovery_page') }}">LinkedIn Discovery</a>
           <a href="{{ url_for('web.linkedin_mapping_page') }}">LinkedIn Mapping</a>
           <a href="{{ url_for('web.linkedin_audit_page') }}">LinkedIn Export</a>
+          <a href="{{ url_for('web.sklik_connections_page') }}">Sklik Ads</a>
         </nav>
       </aside>
       <main class="content">
@@ -108,4 +111,3 @@
     </script>
   </body>
 </html>
-

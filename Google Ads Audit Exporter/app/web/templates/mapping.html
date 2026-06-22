@@ -26,6 +26,10 @@
           <a href="{{ url_for('web.linkedin_discovery_page') }}">LinkedIn Discovery</a>
           <a href="{{ url_for('web.linkedin_mapping_page') }}">LinkedIn Mapping</a>
           <a href="{{ url_for('web.linkedin_audit_page') }}">LinkedIn Export</a>
+          <a href="{{ url_for('web.sklik_connections_page') }}">Sklik Připojení</a>
+          <a href="{{ url_for('web.sklik_discovery_page') }}">Sklik Discovery</a>
+          <a href="{{ url_for('web.sklik_mapping_page') }}">Sklik Mapping</a>
+          <a href="{{ url_for('web.sklik_audit_page') }}">Sklik Export</a>
         </nav>
       </aside>
 
@@ -35,6 +39,26 @@
             <p class="eyebrow">Fáze 2 až 4</p>
             <h2>Propojení účtů a kontextové exporty</h2>
             <p>Každý kontext může mít vlastní <code>source_domains</code>, podle kterých se oddělí landing pages, PageSpeed a další Google Ads data.</p>
+          </div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Další reklamní platformy</h3>
+              <p>Meta, LinkedIn a Sklik mají vlastní connection, discovery, mapping a export workflow mimo Google Ads část.</p>
+            </div>
+          </div>
+          <div class="quick-actions-grid">
+            <a class="btn btn-secondary" href="{{ url_for('web.meta_connections_page') }}">Meta Připojení</a>
+            <a class="btn btn-secondary" href="{{ url_for('web.meta_mapping_page') }}">Meta Mapping</a>
+            <a class="btn btn-secondary" href="{{ url_for('web.meta_audit_page') }}">Meta Export</a>
+            <a class="btn btn-secondary" href="{{ url_for('web.linkedin_connections_page') }}">LinkedIn Připojení</a>
+            <a class="btn btn-secondary" href="{{ url_for('web.linkedin_mapping_page') }}">LinkedIn Mapping</a>
+            <a class="btn btn-secondary" href="{{ url_for('web.linkedin_audit_page') }}">LinkedIn Export</a>
+            <a class="btn btn-secondary" href="{{ url_for('web.sklik_connections_page') }}">Sklik Připojení</a>
+            <a class="btn btn-secondary" href="{{ url_for('web.sklik_mapping_page') }}">Sklik Mapping</a>
+            <a class="btn btn-secondary" href="{{ url_for('web.sklik_audit_page') }}">Sklik Export</a>
           </div>
         </section>
 

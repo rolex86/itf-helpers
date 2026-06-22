@@ -1,0 +1,119 @@
+{
+  "contexts": {
+    "shopid_cz": {
+      "context_key": "shopid_cz",
+      "enabled": true,
+      "connection_key": "itfuture",
+      "drak_user_ids": [
+        "363489"
+      ],
+      "fenix_user_ids": [],
+      "fenix_premise_ids": [
+        "115749"
+      ],
+      "expected_domains": [
+        "shopid.cz"
+      ],
+      "expected_utm_source": [
+        "sklik",
+        "seznam"
+      ],
+      "expected_utm_medium": [
+        "cpc",
+        "ppc"
+      ],
+      "expected_sem": true,
+      "expected_sklik_conversions": [],
+      "expected_retargeting_lists": [],
+      "enable_reporting": true,
+      "enable_fenix": true,
+      "enable_gtm_crosscheck": true,
+      "enable_web_scan": true,
+      "notes": ""
+    },
+    "plussystem_cz": {
+      "context_key": "plussystem_cz",
+      "enabled": false,
+      "connection_key": "",
+      "drak_user_ids": [],
+      "fenix_user_ids": [],
+      "fenix_premise_ids": [],
+      "expected_domains": [
+        "www.plussystem.cz",
+        "plussystem.cz"
+      ],
+      "expected_utm_source": [
+        "sklik",
+        "seznam"
+      ],
+      "expected_utm_medium": [
+        "cpc",
+        "ppc"
+      ],
+      "expected_sem": true,
+      "expected_sklik_conversions": [],
+      "expected_retargeting_lists": [],
+      "enable_reporting": false,
+      "enable_fenix": false,
+      "enable_gtm_crosscheck": false,
+      "enable_web_scan": false,
+      "notes": ""
+    },
+    "kaufid_de": {
+      "context_key": "kaufid_de",
+      "enabled": false,
+      "connection_key": "",
+      "drak_user_ids": [],
+      "fenix_user_ids": [],
+      "fenix_premise_ids": [],
+      "expected_domains": [
+        "kaufid.de",
+        "www.kaufid.de"
+      ],
+      "expected_utm_source": [
+        "sklik",
+        "seznam"
+      ],
+      "expected_utm_medium": [
+        "cpc",
+        "ppc"
+      ],
+      "expected_sem": true,
+      "expected_sklik_conversions": [],
+      "expected_retargeting_lists": [],
+      "enable_reporting": false,
+      "enable_fenix": false,
+      "enable_gtm_crosscheck": false,
+      "enable_web_scan": false,
+      "notes": ""
+    },
+    "chainway_cz": {
+      "context_key": "chainway_cz",
+      "enabled": false,
+      "connection_key": "",
+      "drak_user_ids": [],
+      "fenix_user_ids": [],
+      "fenix_premise_ids": [],
+      "expected_domains": [
+        "www.chainway.cz",
+        "chainway.cz"
+      ],
+      "expected_utm_source": [
+        "sklik",
+        "seznam"
+      ],
+      "expected_utm_medium": [
+        "cpc",
+        "ppc"
+      ],
+      "expected_sem": true,
+      "expected_sklik_conversions": [],
+      "expected_retargeting_lists": [],
+      "enable_reporting": false,
+      "enable_fenix": false,
+      "enable_gtm_crosscheck": false,
+      "enable_web_scan": false,
+      "notes": ""
+    }
+  }
+}

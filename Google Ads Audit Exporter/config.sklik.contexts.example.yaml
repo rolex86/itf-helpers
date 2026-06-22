@@ -1,0 +1,26 @@
+contexts:
+  shopid_cz:
+    enabled: true
+    connection_key: itfuture
+    drak_user_ids:
+      - "123456"
+    fenix_user_ids:
+      - "123456"
+    fenix_premise_ids:
+      - "230104"
+    expected_domains:
+      - shopid.cz
+      - www.shopid.cz
+    expected_utm_source:
+      - sklik
+      - seznam
+    expected_utm_medium:
+      - cpc
+      - ppc
+    expected_sem: true
+    expected_sklik_conversions: []
+    expected_retargeting_lists: []
+    enable_reporting: true
+    enable_fenix: true
+    enable_gtm_crosscheck: true
+    enable_web_scan: true

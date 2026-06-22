@@ -1,0 +1,1500 @@
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from app.accounts.context_config import load_account_contexts, resolve_context_env_config
+from app.config.env_settings import load_env_config
+from app.gtm.export import build_gtm_exports
+from app.integrations.sklik.audit_rules import build_audit_findings
+from app.integrations.sklik.auth import get_secret, load_sklik_runtime_config
+from app.integrations.sklik.client_drak import SklikDrakClient
+from app.integrations.sklik.client_fenix import SklikFenixClient
+from app.integrations.sklik.connections import load_sklik_connections
+from app.integrations.sklik.discovery import run_sklik_discovery
+from app.integrations.sklik.errors import SklikApiError, SklikPartialFailure, SklikValidationError
+from app.integrations.sklik.exporters import export_sklik_bundle
+from app.integrations.sklik.gtm_crosscheck import build_gtm_crosscheck
+from app.integrations.sklik.models import (
+    SklikAccountContextMapping,
+    SklikAuditFinding,
+    SklikExportManifest,
+)
+from app.integrations.sklik.normalizers import (
+    dataframe_to_records,
+    extract_rows,
+    normalize_campaign,
+    normalize_conversion,
+    normalize_domains,
+    normalize_generic_entity,
+    records_to_frame,
+    sanitize_payload,
+)
+from app.integrations.sklik.reporting import (
+    REPORT_DISPLAY_COLUMNS,
+    fetch_report_rows,
+)
+from app.integrations.sklik.validators import validate_mapping
+from app.integrations.sklik.web_scan import build_utm_audit_rows, scan_landing_pages
+
+
+LOGGER = logging.getLogger("google_ads_audit_exporter")
+
+CSV_DATASET_NAMES = {
+    "account_stats_daily",
+    "account_stats_total",
+    "account_stats_by_conversion_daily",
+    "campaigns_daily",
+    "campaigns_total",
+    "campaign_settings_audit",
+    "groups_daily",
+    "groups_total",
+    "ads_daily",
+    "ads_total",
+    "ad_landing_pages",
+    "ad_creatives_audit",
+    "banners_daily",
+    "banners_total",
+    "banner_assets",
+    "keywords_daily",
+    "keywords_total",
+    "negative_keywords_daily",
+    "campaign_negative_keywords_daily",
+    "queries_daily",
+    "queries_total",
+    "search_terms_audit",
+    "shared_budget_campaigns",
+    "sitelinks_daily",
+    "sitelinks_total",
+    "retargeting_daily",
+    "retargeting_total",
+    "fenix_campaign_stats_daily",
+    "fenix_campaign_stats_total",
+    "utm_audit",
+}
+
+REPORT_ENTITY_COUNT_DATASET = {
+    "campaigns": "campaigns",
+    "groups": "groups",
+    "ads": "ads",
+    "banners": "banners",
+    "keywords": "keywords",
+    "queries": "keywords",
+    "sitelinks": "sitelinks",
+    "retargeting": "retargeting_lists",
+}
+
+CAMPAIGN_RESTRICTION_FILTER = {
+    "isDeleted": False,
+}
+
+CAMPAIGN_DISPLAY_OPTIONS = {
+    "offset": 0,
+    "limit": 5000,
+    "displayColumns": [
+        "actualClicks",
+        "adSelection",
+        "automaticLocation",
+        "budget.colorCodeId",
+        "budget.dayBudget",
+        "budget.deleted",
+        "budget.deleteDate",
+        "budget.id",
+        "budget.name",
+        "context",
+        "contextNetwork",
+        "createDate",
+        "deleted",
+        "deleteDate",
+        "defaultBudgetId",
+        "devicesPriceRatio",
+        "endDate",
+        "excludedSearchServices",
+        "excludedUrls",
+        "exhaustedTotalBudget",
+        "fulltext",
+        "id",
+        "name",
+        "paymentMethod",
+        "premises.id",
+        "phone.number",
+        "phone.statusId",
+        "phone.status",
+        "regions.id",
+        "regions.parentId",
+        "regions.name",
+        "schedule",
+        "scheduleEnabled",
+        "startDate",
+        "status",
+        "statusId",
+        "totalClicks",
+        "totalClicksFrom",
+        "totalBudgetFrom",
+        "type",
+        "totalBudget",
+        "videoFormat",
+        "defaultZbozi",
+        "zboziBiddingType",
+        "zboziPremiseId",
+    ],
+}
+
+LIST_EXPORT_PARAMS: dict[str, list[dict[str, Any]]] = {
+    "groups.list": [
+        {"isDeleted": False},
+        {
+            "offset": 0,
+            "limit": 5000,
+            "displayColumns": [
+                "id",
+                "name",
+                "status",
+                "statusId",
+                "deleted",
+                "createDate",
+                "deleteDate",
+                "maxCpc",
+                "maxCpt",
+                "maxUserDailyImpressions",
+                "sensitivity",
+                "devicesPriceRatio",
+                "campaign.id",
+                "campaign.name",
+            ],
+        },
+    ],
+    "ads.list": [
+        {"isDeleted": False},
+        {
+            "offset": 0,
+            "limit": 5000,
+            "displayColumns": [
+                "id",
+                "adStatus",
+                "adType",
+                "status",
+                "statusId",
+                "deleted",
+                "createDate",
+                "deleteDate",
+                "headline1",
+                "headline2",
+                "headline3",
+                "description",
+                "description2",
+                "finalUrl",
+                "clickthruUrl",
+                "path1",
+                "path2",
+                "name",
+                "companyName",
+                "group.id",
+                "group.name",
+                "campaign.id",
+                "campaign.name",
+            ],
+        },
+    ],
+    "banners.list": [
+        {"isDeleted": False},
+        {
+            "offset": 0,
+            "limit": 5000,
+            "displayColumns": [
+                "id",
+                "bannerName",
+                "adStatus",
+                "adType",
+                "status",
+                "statusId",
+                "deleted",
+                "createDate",
+                "deleteDate",
+                "description",
+                "clickthruUrl",
+                "mobileFinalUrl",
+                "image.id",
+                "image.url",
+                "image.width",
+                "image.height",
+                "image.size",
+                "imageType",
+                "width",
+                "height",
+                "premiseId",
+                "premiseMode",
+                "sensitivity",
+                "schedule",
+                "scheduleEnabled",
+                "group.id",
+                "group.name",
+                "campaign.id",
+                "campaign.name",
+            ],
+        },
+    ],
+    "keywords.list": [
+        {"isDeleted": False},
+        {
+            "offset": 0,
+            "limit": 5000,
+            "displayColumns": [
+                "id",
+                "name",
+                "matchType",
+                "matchTypeId",
+                "status",
+                "statusId",
+                "deleted",
+                "disabled",
+                "createDate",
+                "deleteDate",
+                "url",
+                "cpc",
+                "group.id",
+                "group.name",
+                "group.maxCpc",
+                "group.maxCpt",
+                "campaign.id",
+                "campaign.name",
+                "campaign.status",
+                "campaign.statusId",
+                "campaign.context",
+                "campaign.fulltext",
+                "campaign.paymentMethod",
+                "campaign.automaticLocation",
+                "campaign.budgetId",
+                "campaign.defaultBudgetId",
+            ],
+        },
+    ],
+    "keywords.negative.list": [
+        {"isDeleted": False},
+        {
+            "offset": 0,
+            "limit": 5000,
+            "displayColumns": [
+                "id",
+                "name",
+                "matchType",
+                "matchTypeId",
+                "deleted",
+                "deleteDate",
+                "group.id",
+                "group.name",
+                "group.deleted",
+                "group.createDate",
+                "group.deleteDate",
+                "group.maxCpc",
+                "group.maxCpt",
+                "campaign.id",
+                "campaign.name",
+                "campaign.totalClicks",
+                "campaign.actualClicks",
+                "campaign.startDate",
+                "campaign.endDate",
+                "campaign.totalBudgetFrom",
+                "campaign.totalClicksFrom",
+                "campaign.createDate",
+                "campaign.deleteDate",
+                "campaign.deleted",
+                "campaign.context",
+                "campaign.fulltext",
+                "campaign.adSelectionId",
+                "campaign.paymentMethodId",
+                "campaign.automaticLocation",
+                "campaign.budgetId",
+                "campaign.defaultBudgetId",
+                "campaign.devicesPriceRatio",
+            ],
+        },
+    ],
+}
+
+
+def _timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def _string(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _mapping_path(project_root: Path) -> Path:
+    return project_root / "app_state" / "sklik_mapping.json"
+
+
+def _split_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw = str(value).replace("\\n", "\n").replace(";", "\n").replace(",", "\n").splitlines()
+    normalized: list[str] = []
+    for item in raw:
+        text = str(item or "").replace("\\n", "\n")
+        for line in text.splitlines():
+            clean = _string(line)
+            if clean and clean not in normalized:
+                normalized.append(clean)
+    return normalized
+
+
+def _mapping_from_payload(payload: dict[str, Any], context_key: str) -> SklikAccountContextMapping:
+    return SklikAccountContextMapping(
+        context_key=context_key,
+        enabled=bool(payload.get("enabled", False)),
+        connection_key=_string(payload.get("connection_key")),
+        drak_user_ids=_split_list(payload.get("drak_user_ids")),
+        fenix_user_ids=_split_list(payload.get("fenix_user_ids")),
+        fenix_premise_ids=_split_list(payload.get("fenix_premise_ids")),
+        expected_domains=normalize_domains(_split_list(payload.get("expected_domains"))),
+        expected_utm_source=_split_list(payload.get("expected_utm_source")) or ["sklik", "seznam"],
+        expected_utm_medium=_split_list(payload.get("expected_utm_medium")) or ["cpc", "ppc"],
+        expected_sem=bool(payload.get("expected_sem", True)),
+        expected_sklik_conversions=_split_list(payload.get("expected_sklik_conversions")),
+        expected_retargeting_lists=_split_list(payload.get("expected_retargeting_lists")),
+        enable_reporting=bool(payload.get("enable_reporting", True)),
+        enable_fenix=bool(payload.get("enable_fenix", True)),
+        enable_gtm_crosscheck=bool(payload.get("enable_gtm_crosscheck", True)),
+        enable_web_scan=bool(payload.get("enable_web_scan", True)),
+        notes=_string(payload.get("notes")),
+    )
+
+
+def load_sklik_mapping(project_root: Path) -> dict[str, SklikAccountContextMapping]:
+    path = _mapping_path(project_root)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    rows = payload.get("contexts", {}) if isinstance(payload, dict) else {}
+    mappings: dict[str, SklikAccountContextMapping] = {}
+    if isinstance(rows, dict):
+        for context_key, raw in rows.items():
+            if isinstance(raw, dict):
+                mappings[str(context_key)] = _mapping_from_payload(raw, str(context_key))
+    elif isinstance(rows, list):
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            context_key = _string(raw.get("context_key") or raw.get("key"))
+            if context_key:
+                mappings[context_key] = _mapping_from_payload(raw, context_key)
+    return mappings
+
+
+@dataclass(slots=True)
+class SklikSyncResult:
+    context_key: str
+    export_dir: str = ""
+    manifest: SklikExportManifest | None = None
+    datasets: dict[str, Any] = field(default_factory=dict)
+    raw_payloads: dict[str, Any] = field(default_factory=dict)
+    findings: list[SklikAuditFinding] = field(default_factory=list)
+    info_notes: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _empty_datasets() -> dict[str, Any]:
+    names = [
+        "connection_summary",
+        "mapping_used",
+        "account",
+        "foreign_accounts",
+        "api_limits",
+        "api_version",
+        "account_credit",
+        "account_stats_daily",
+        "account_stats_total",
+        "account_stats_by_conversion_daily",
+        "campaigns",
+        "campaigns_daily",
+        "campaigns_total",
+        "campaign_settings_audit",
+        "groups",
+        "groups_daily",
+        "groups_total",
+        "ads",
+        "ads_daily",
+        "ads_total",
+        "ad_landing_pages",
+        "ad_creatives_audit",
+        "banners",
+        "banners_daily",
+        "banners_total",
+        "banner_assets",
+        "keywords",
+        "keywords_daily",
+        "keywords_total",
+        "negative_keywords",
+        "negative_keywords_daily",
+        "campaign_negative_keywords",
+        "campaign_negative_keywords_daily",
+        "queries_daily",
+        "queries_total",
+        "search_terms_audit",
+        "conversions",
+        "conversion_types",
+        "autotagging",
+        "autotagging_default",
+        "autotagging_history",
+        "utm_settings_audit",
+        "shared_budgets",
+        "shared_budget_campaigns",
+        "sitelinks",
+        "sitelink_campaign_links",
+        "sitelink_group_links",
+        "sitelinks_daily",
+        "sitelinks_total",
+        "retargeting_lists",
+        "retargeting_combinations",
+        "retargeting_group_lists",
+        "retargeting_group_combinations",
+        "retargeting_lookalikes",
+        "retargeting_daily",
+        "retargeting_total",
+        "retargeting_negative_summary",
+        "reference_search_services",
+        "reference_regions",
+        "reference_conversion_types",
+        "reference_campaign_types",
+        "fenix_user",
+        "fenix_scopes",
+        "fenix_premises",
+        "fenix_campaigns",
+        "fenix_campaign_params",
+        "fenix_campaign_budgets",
+        "fenix_campaign_multipliers",
+        "fenix_feed_status",
+        "fenix_feed_errors",
+        "fenix_campaign_stats_daily",
+        "fenix_campaign_stats_total",
+        "fenix_gdpr_withdrawals",
+        "gtm_sklik_crosscheck",
+        "sem_web_scan",
+        "landing_page_scan",
+        "utm_audit",
+    ]
+    datasets: dict[str, Any] = {}
+    for name in names:
+        datasets[name] = pd.DataFrame() if name in CSV_DATASET_NAMES else []
+    datasets["connection_summary"] = {}
+    datasets["mapping_used"] = {}
+    datasets["gtm_sklik_crosscheck"] = {}
+    datasets["retargeting_negative_summary"] = {}
+    return datasets
+
+
+def _add_info(result: SklikSyncResult, message: str) -> None:
+    text = _string(message)
+    if text:
+        result.info_notes.append(text)
+
+
+def _add_warning(result: SklikSyncResult, message: str) -> None:
+    text = _string(message)
+    if text:
+        result.warnings.append(text)
+
+
+def _exception_details(exc: Exception) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "error": str(exc),
+        "exception_type": type(exc).__name__,
+    }
+    if isinstance(exc, (SklikApiError, SklikPartialFailure)):
+        details["status_code"] = exc.status_code
+        details["recoverable"] = exc.recoverable
+        if exc.payload is not None:
+            details["payload"] = sanitize_payload(exc.payload)
+    return details
+
+
+def _add_diagnostic(
+    result: SklikSyncResult,
+    *,
+    level: str,
+    stage: str,
+    method: str = "",
+    user_id: int | None = None,
+    dataset: str = "",
+    details: dict[str, Any] | None = None,
+) -> None:
+    record: dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "stage": stage,
+        "context_key": result.context_key,
+    }
+    if method:
+        record["method"] = method
+    if user_id is not None:
+        record["user_id"] = user_id
+    if dataset:
+        record["dataset"] = dataset
+    if details:
+        record.update(details)
+    result.diagnostics.append(record)
+
+
+def _safe_drak_rows(
+    *,
+    client: SklikDrakClient,
+    result: SklikSyncResult,
+    raw_key: str,
+    method: str,
+    user_id: int | None,
+    params: list[Any] | dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    LOGGER.info("Sklik fetch start method=%s user_id=%s", method, user_id)
+    try:
+        payload = client.call(method, params, user_id=user_id)
+        result.raw_payloads[raw_key] = sanitize_payload(payload)
+        rows = extract_rows(payload)
+        LOGGER.info("Sklik fetch done method=%s user_id=%s rows=%s", method, user_id, len(rows))
+        return rows
+    except SklikPartialFailure as exc:
+        LOGGER.warning("Sklik fetch warning method=%s user_id=%s error=%s", method, user_id, exc)
+        _add_warning(result, f"{method} userId={user_id or '-'}: {exc}")
+        result.raw_payloads[raw_key] = sanitize_payload(exc.payload) if exc.payload is not None else {"error": str(exc)}
+        _add_diagnostic(
+            result,
+            level="warning",
+            stage="fetch_rows",
+            method=method,
+            user_id=user_id,
+            details=_exception_details(exc),
+        )
+        return []
+    except SklikApiError as exc:
+        LOGGER.warning("Sklik fetch warning method=%s user_id=%s error=%s", method, user_id, exc)
+        _add_warning(result, f"{method} userId={user_id or '-'}: {exc}")
+        result.raw_payloads[raw_key] = sanitize_payload(exc.payload) if exc.payload is not None else {"error": str(exc)}
+        _add_diagnostic(
+            result,
+            level="warning",
+            stage="fetch_rows",
+            method=method,
+            user_id=user_id,
+            details=_exception_details(exc),
+        )
+        return []
+    except Exception as exc:
+        LOGGER.warning("Sklik fetch warning method=%s user_id=%s error=%s", method, user_id, exc)
+        _add_warning(result, f"{method} userId={user_id or '-'}: {exc}")
+        result.raw_payloads[raw_key] = {"error": str(exc)}
+        _add_diagnostic(
+            result,
+            level="warning",
+            stage="fetch_rows",
+            method=method,
+            user_id=user_id,
+            details=_exception_details(exc),
+        )
+        return []
+
+
+def _safe_drak_payload(
+    *,
+    client: SklikDrakClient,
+    result: SklikSyncResult,
+    raw_key: str,
+    method: str,
+    user_id: int | None,
+    params: list[Any] | dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    LOGGER.info("Sklik fetch start method=%s user_id=%s", method, user_id)
+    try:
+        payload = client.call(method, params, user_id=user_id)
+        result.raw_payloads[raw_key] = sanitize_payload(payload)
+        LOGGER.info("Sklik fetch done method=%s user_id=%s rows=%s", method, user_id, len(extract_rows(payload)))
+        return payload
+    except Exception as exc:
+        LOGGER.warning("Sklik fetch warning method=%s user_id=%s error=%s", method, user_id, exc)
+        _add_warning(result, f"{method} userId={user_id or '-'}: {exc}")
+        result.raw_payloads[raw_key] = sanitize_payload(exc.payload) if isinstance(exc, (SklikApiError, SklikPartialFailure)) and exc.payload is not None else {"error": str(exc)}
+        _add_diagnostic(
+            result,
+            level="warning",
+            stage="fetch_payload",
+            method=method,
+            user_id=user_id,
+            details=_exception_details(exc),
+        )
+        return {}
+
+
+def _safe_fenix(*, result: SklikSyncResult, raw_key: str, action: Any) -> Any:
+    LOGGER.info("Sklik fetch start method=%s", raw_key)
+    try:
+        payload = action()
+        result.raw_payloads[raw_key] = sanitize_payload(payload)
+        rows = len(payload) if isinstance(payload, list) else len(extract_rows(payload)) if isinstance(payload, dict) else 0
+        LOGGER.info("Sklik fetch done method=%s rows=%s", raw_key, rows)
+        return payload
+    except Exception as exc:
+        LOGGER.warning("Sklik fetch warning method=%s error=%s", raw_key, exc)
+        _add_warning(result, f"{raw_key}: {exc}")
+        result.raw_payloads[raw_key] = {"error": str(exc)}
+        _add_diagnostic(
+            result,
+            level="warning",
+            stage="fenix_fetch",
+            method=raw_key,
+            details=_exception_details(exc),
+        )
+        return [] if raw_key.endswith("s") else {}
+
+
+def _normalize_entity_rows(dataset_name: str, rows: list[dict[str, Any]], *, user_id: int) -> list[dict[str, Any]]:
+    if dataset_name == "campaigns":
+        return [normalize_campaign(row, user_id) for row in rows]
+    if dataset_name == "conversions":
+        return [normalize_conversion(row, user_id) for row in rows]
+    return [normalize_generic_entity(row, user_id=user_id) for row in rows]
+
+
+def _normalize_sitelink_link_rows(
+    dataset_name: str,
+    rows: list[dict[str, Any]],
+    *,
+    user_id: int,
+) -> list[dict[str, Any]]:
+    parent_key = "campaign_id" if dataset_name == "sitelink_campaign_links" else "group_id"
+    output: list[dict[str, Any]] = []
+
+    for row in rows:
+        parent_id = row.get("id") or row.get("campaignId") or row.get("groupId")
+        parent_name = row.get("name")
+        sitelinks = row.get("sitelinks")
+        if not isinstance(sitelinks, list):
+            continue
+
+        for sitelink in sitelinks:
+            if not isinstance(sitelink, dict):
+                continue
+            record = normalize_generic_entity(sitelink, user_id=user_id)
+            record[parent_key] = parent_id
+            record["parent_name"] = parent_name
+            record["sitelink_id"] = sitelink.get("id")
+            record["sitelink_name"] = sitelink.get("name")
+            record["sitelink_url"] = sitelink.get("url")
+            record["sitelink_status"] = sitelink.get("status")
+            record["sitelink_status_id"] = sitelink.get("statusId")
+            output.append(record)
+
+    return output
+
+
+def _client_stats_rows(payload: dict[str, Any], *, user_id: int) -> list[dict[str, Any]]:
+    rows = extract_rows(payload)
+    return [normalize_generic_entity(row, user_id=user_id) for row in rows]
+
+
+def _drak_api_limits_value(api_limits_payload: Any, key: str) -> int | None:
+    if not isinstance(api_limits_payload, dict):
+        return None
+    limits = api_limits_payload.get("limits")
+    if isinstance(limits, dict):
+        value = limits.get(key)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            pass
+    value = api_limits_payload.get(key)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _landing_seed_rows(datasets: dict[str, Any]) -> list[dict[str, Any]]:
+    seeds: list[dict[str, Any]] = []
+    for record in datasets["ads"] if isinstance(datasets["ads"], list) else []:
+        final_url = _string(record.get("final_url") or record.get("finalUrl") or record.get("clickthru_url") or record.get("clickthruUrl"))
+        if final_url:
+            seeds.append(
+                {
+                    "campaign_id": record.get("campaign_id") or record.get("campaign_id", ""),
+                    "group_id": record.get("group_id") or record.get("group_id", ""),
+                    "ad_id": record.get("ad_id") or record.get("id") or "",
+                    "source_url": final_url,
+                }
+            )
+    for record in datasets["banners"] if isinstance(datasets["banners"], list) else []:
+        final_url = _string(record.get("clickthru_url") or record.get("clickthruUrl") or record.get("mobile_final_url") or record.get("mobileFinalUrl"))
+        if final_url:
+            seeds.append(
+                {
+                    "campaign_id": record.get("campaign_id") or record.get("campaign_id", ""),
+                    "group_id": record.get("group_id") or record.get("group_id", ""),
+                    "banner_id": record.get("banner_id") or record.get("id") or "",
+                    "source_url": final_url,
+                }
+            )
+    return seeds
+
+
+def export_sklik_context(
+    *,
+    project_root: Path,
+    context_key: str,
+    date_from: str,
+    date_to: str,
+    granularity: str = "daily",
+    include_raw: bool = True,
+    include_empty_statistics: bool = False,
+    enable_fenix: bool = True,
+    enable_gtm_crosscheck: bool = True,
+    enable_web_scan: bool = True,
+) -> Path:
+    mappings = load_sklik_mapping(project_root)
+    mapping = mappings.get(context_key)
+    if mapping is None:
+        raise SklikValidationError(f"Kontext '{context_key}' nemá Sklik mapping.")
+
+    contexts = load_account_contexts(project_root / "config.accounts.yaml")
+    context = next((item for item in contexts if item.key == context_key), None)
+    if context is None:
+        raise SklikValidationError(f"Kontext '{context_key}' nebyl nalezen v config.accounts.yaml.")
+
+    connections = load_sklik_connections(project_root)
+    connection = next((item for item in connections if item.key == mapping.connection_key), None)
+    if connection is None:
+        raise SklikValidationError(f"Sklik connection '{mapping.connection_key}' nebyla nalezena.")
+
+    validation = validate_mapping(
+        mapping,
+        known_context_keys={item.key for item in contexts},
+        known_connection_keys={item.key for item in connections},
+    )
+    if not validation.ok:
+        raise SklikValidationError(" | ".join(validation.errors))
+
+    runtime_config = load_sklik_runtime_config(project_root)
+    include_raw = bool(include_raw and runtime_config.export_raw)
+    enable_fenix = bool(enable_fenix and runtime_config.enable_fenix and mapping.enable_fenix and connection.fenix_enabled)
+    enable_gtm_crosscheck = bool(enable_gtm_crosscheck and runtime_config.enable_gtm_crosscheck and mapping.enable_gtm_crosscheck)
+    enable_web_scan = bool(enable_web_scan and runtime_config.enable_web_scan and mapping.enable_web_scan)
+
+    drak_token = get_secret(project_root, connection.drak_token_env_key)
+    if connection.drak_enabled and not drak_token:
+        raise SklikValidationError("Chybí Drak token v .env.sklik.local.")
+
+    fenix_refresh_token = get_secret(project_root, connection.fenix_refresh_token_env_key)
+
+    result = SklikSyncResult(context_key=context_key)
+    datasets = _empty_datasets()
+    manifest = SklikExportManifest(
+        platform="sklik",
+        context_key=context_key,
+        export_started_at=datetime.now(timezone.utc).isoformat(),
+        date_from=date_from,
+        date_to=date_to,
+        connection_key=connection.key,
+        drak_enabled=connection.drak_enabled,
+        fenix_enabled=enable_fenix,
+        user_ids=list(mapping.drak_user_ids),
+        premise_ids=list(mapping.fenix_premise_ids),
+        raw_export_enabled=include_raw,
+    )
+    result.manifest = manifest
+
+    drak_client = SklikDrakClient(
+        token=drak_token,
+        base_url=runtime_config.drak_base_url,
+        timeout=runtime_config.request_timeout_seconds,
+        max_retries=runtime_config.max_retries,
+        user_agent=runtime_config.user_agent,
+    )
+
+    fenix_client = None
+    if enable_fenix and fenix_refresh_token:
+        fenix_client = SklikFenixClient(
+            refresh_token=fenix_refresh_token,
+            base_url=runtime_config.fenix_base_url,
+            timeout=runtime_config.request_timeout_seconds,
+            max_retries=runtime_config.max_retries,
+            user_agent=runtime_config.user_agent,
+            user_id=(mapping.fenix_user_ids[0] if mapping.fenix_user_ids else ""),
+        )
+    elif enable_fenix and not fenix_refresh_token:
+        _add_warning(result, "Fénix export je zapnutý, ale chybí refresh token.")
+
+    discovery_snapshot = run_sklik_discovery(connection=connection, drak_client=drak_client, fenix_client=fenix_client)
+    result.warnings.extend(discovery_snapshot.warnings)
+    result.errors.extend(discovery_snapshot.errors)
+    result.raw_payloads["discovery"] = discovery_snapshot.to_dict()
+
+    datasets["connection_summary"] = {
+        "connection": connection.to_dict(),
+        "validation": validation.to_dict(),
+        "discovery_status": discovery_snapshot.status,
+        "warnings": discovery_snapshot.warnings,
+        "errors": discovery_snapshot.errors,
+    }
+    datasets["mapping_used"] = mapping.to_dict()
+    datasets["account"] = discovery_snapshot.drak.get("account", {})
+    datasets["foreign_accounts"] = discovery_snapshot.drak.get("foreign_accounts", [])
+    datasets["api_limits"] = discovery_snapshot.drak.get("api_limits", {})
+    datasets["api_version"] = discovery_snapshot.drak.get("api_version", {})
+
+    if connection.drak_enabled:
+        try:
+            drak_client.login_by_token()
+        except Exception as exc:
+            raise SklikValidationError(f"Drak login selhal: {exc}") from exc
+
+        primary_user_ids = mapping.drak_user_ids or ([connection.default_user_id] if connection.default_user_id else [])
+        if not primary_user_ids:
+            raise SklikValidationError("Chybí Drak user_id pro Sklik export.")
+
+        LOGGER.info(
+            "Sklik export start context=%s user_ids=%s date_from=%s date_to=%s",
+            context_key,
+            primary_user_ids,
+            date_from,
+            date_to,
+        )
+        stats_data_limit = _drak_api_limits_value(datasets["api_limits"], "statsDataLimit")
+
+        combined_account_credit: list[dict[str, Any]] = []
+        combined_account_stats_daily: list[dict[str, Any]] = []
+        combined_account_stats_total: list[dict[str, Any]] = []
+        combined_account_stats_conversions: list[dict[str, Any]] = []
+
+        entity_defs: dict[str, tuple[str, Any]] = {
+            "campaigns": ("campaigns.list", [CAMPAIGN_RESTRICTION_FILTER, CAMPAIGN_DISPLAY_OPTIONS]),
+            "groups": ("groups.list", LIST_EXPORT_PARAMS["groups.list"]),
+            "ads": ("ads.list", LIST_EXPORT_PARAMS["ads.list"]),
+            "banners": ("banners.list", LIST_EXPORT_PARAMS["banners.list"]),
+            "keywords": ("keywords.list", LIST_EXPORT_PARAMS["keywords.list"]),
+            "negative_keywords": ("keywords.negative.list", LIST_EXPORT_PARAMS["keywords.negative.list"]),
+            "shared_budgets": ("sharedbudgets.list", None),
+            "sitelinks": ("sitelinks.list", None),
+            "retargeting_lists": ("retargeting.lists.list", None),
+            "retargeting_combinations": ("retargeting.combinations.list", None),
+            "retargeting_lookalikes": ("retargeting.lookalikes.list", None),
+            "reference_search_services": ("listSearchServices", None),
+            "reference_regions": ("listPredefinedRegions", None),
+            "reference_campaign_types": ("campaigns.listCampaignsTypes", None),
+        }
+        aggregate_lists: dict[str, list[dict[str, Any]]] = {key: [] for key in entity_defs}
+        aggregate_lists["conversions"] = []
+        aggregate_lists["conversion_types"] = []
+        aggregate_lists["sitelink_campaign_links"] = []
+        aggregate_lists["sitelink_group_links"] = []
+        aggregate_lists["retargeting_group_lists"] = []
+        aggregate_lists["retargeting_group_combinations"] = []
+
+        for user_id_raw in primary_user_ids:
+            user_id = int(user_id_raw)
+
+            account_credit_payload = _safe_drak_payload(
+                client=drak_client,
+                result=result,
+                raw_key=f"account_credit_raw_{user_id}",
+                method="client.getCredit",
+                user_id=user_id,
+            )
+            if account_credit_payload:
+                row = normalize_generic_entity(account_credit_payload, user_id=user_id)
+                row["user_id"] = str(user_id)
+                combined_account_credit.append(row)
+
+            stats_daily_payload = _safe_drak_payload(
+                client=drak_client,
+                result=result,
+                raw_key=f"account_stats_daily_raw_{user_id}",
+                method="client.stats",
+                user_id=user_id,
+                params={
+                    "dateFrom": date_from,
+                    "dateTo": date_to,
+                    "granularity": "daily",
+                    "includeZbozi": True,
+                    "splitByConversions": False,
+                },
+            )
+            stats_total_payload = _safe_drak_payload(
+                client=drak_client,
+                result=result,
+                raw_key=f"account_stats_total_raw_{user_id}",
+                method="client.stats",
+                user_id=user_id,
+                params={
+                    "dateFrom": date_from,
+                    "dateTo": date_to,
+                    "granularity": "total",
+                    "includeZbozi": True,
+                    "splitByConversions": False,
+                },
+            )
+            stats_conversion_payload = _safe_drak_payload(
+                client=drak_client,
+                result=result,
+                raw_key=f"account_stats_by_conversion_daily_raw_{user_id}",
+                method="client.stats",
+                user_id=user_id,
+                params={
+                    "dateFrom": date_from,
+                    "dateTo": date_to,
+                    "granularity": "daily",
+                    "includeZbozi": True,
+                    "splitByConversions": True,
+                },
+            )
+            combined_account_stats_daily.extend(_client_stats_rows(stats_daily_payload, user_id=user_id))
+            combined_account_stats_total.extend(_client_stats_rows(stats_total_payload, user_id=user_id))
+            combined_account_stats_conversions.extend(_client_stats_rows(stats_conversion_payload, user_id=user_id))
+
+            for dataset_name, (method, params) in entity_defs.items():
+                rows = _safe_drak_rows(
+                    client=drak_client,
+                    result=result,
+                    raw_key=f"{dataset_name}_raw_{user_id}",
+                    method=method,
+                    user_id=user_id,
+                    params=params,
+                )
+                aggregate_lists[dataset_name].extend(_normalize_entity_rows(dataset_name, rows, user_id=user_id))
+
+            try:
+                LOGGER.info("Sklik fetch start method=%s user_id=%s", "listConversionTypes", user_id)
+                conversion_types_payload = drak_client.call("listConversionTypes", None, user_id=user_id)
+                result.raw_payloads[f"conversion_types_raw_{user_id}"] = sanitize_payload(conversion_types_payload)
+                conversion_type_rows = extract_rows(conversion_types_payload)
+                aggregate_lists["conversion_types"].extend(
+                    _normalize_entity_rows("conversion_types", conversion_type_rows, user_id=user_id)
+                )
+                LOGGER.info(
+                    "Sklik fetch done method=%s user_id=%s rows=%s",
+                    "listConversionTypes",
+                    user_id,
+                    len(conversion_type_rows),
+                )
+            except Exception as exc:
+                LOGGER.info("Sklik fetch info method=%s user_id=%s error=%s", "listConversionTypes", user_id, exc)
+                _add_info(result, f"listConversionTypes userId={user_id}: reference method unavailable / server error ({exc})")
+                result.raw_payloads[f"conversion_types_raw_{user_id}"] = {"info": str(exc)}
+
+            campaign_ids = [
+                int(campaign_id)
+                for campaign_id in (
+                    row.get("campaign_id")
+                    for row in aggregate_lists["campaigns"]
+                    if str(row.get("user_id") or "") == str(user_id)
+                )
+                if campaign_id not in (None, "")
+            ]
+            group_ids = [
+                int(group_id)
+                for group_id in (
+                    row.get("id") or row.get("group_id")
+                    for row in aggregate_lists["groups"]
+                    if str(row.get("user_id") or "") == str(user_id)
+                )
+                if group_id not in (None, "")
+            ]
+
+            sitelink_campaign_rows = _safe_drak_rows(
+                client=drak_client,
+                result=result,
+                raw_key=f"sitelink_campaign_links_raw_{user_id}",
+                method="sitelinks.campaign.list",
+                user_id=user_id,
+                params=[campaign_ids],
+            ) if campaign_ids else []
+            sitelink_group_rows = _safe_drak_rows(
+                client=drak_client,
+                result=result,
+                raw_key=f"sitelink_group_links_raw_{user_id}",
+                method="sitelinks.group.list",
+                user_id=user_id,
+                params=[group_ids],
+            ) if group_ids else []
+
+            aggregate_lists["sitelink_campaign_links"].extend(
+                _normalize_sitelink_link_rows("sitelink_campaign_links", sitelink_campaign_rows, user_id=user_id)
+            )
+            aggregate_lists["sitelink_group_links"].extend(
+                _normalize_sitelink_link_rows("sitelink_group_links", sitelink_group_rows, user_id=user_id)
+            )
+
+            retargeting_group_list_rows = _safe_drak_rows(
+                client=drak_client,
+                result=result,
+                raw_key=f"retargeting_group_lists_raw_{user_id}",
+                method="retargeting.group.lists.list",
+                user_id=user_id,
+                params=[group_ids],
+            ) if group_ids else []
+            retargeting_group_combination_rows = _safe_drak_rows(
+                client=drak_client,
+                result=result,
+                raw_key=f"retargeting_group_combinations_raw_{user_id}",
+                method="retargeting.group.combinations.list",
+                user_id=user_id,
+                params=[group_ids],
+            ) if group_ids else []
+
+            aggregate_lists["retargeting_group_lists"].extend(
+                _normalize_entity_rows("retargeting_group_lists", retargeting_group_list_rows, user_id=user_id)
+            )
+            aggregate_lists["retargeting_group_combinations"].extend(
+                _normalize_entity_rows("retargeting_group_combinations", retargeting_group_combination_rows, user_id=user_id)
+            )
+
+            try:
+                conversion_payload = drak_client.call("conversions.list", None, user_id=user_id)
+                result.raw_payloads[f"conversions_raw_{user_id}"] = sanitize_payload(conversion_payload)
+                aggregate_lists["conversions"].extend(
+                    _normalize_entity_rows("conversions", extract_rows(conversion_payload), user_id=user_id)
+                )
+                LOGGER.info("Sklik fetch done method=%s user_id=%s rows=%s", "conversions.list", user_id, len(extract_rows(conversion_payload)))
+            except SklikPartialFailure as exc:
+                LOGGER.warning("Sklik fetch warning method=%s user_id=%s error=%s", "conversions.list", user_id, exc)
+                _add_warning(result, f"conversions.list userId={user_id}: conversions.list unavailable; possible SEM account or permissions ({exc})")
+                result.raw_payloads[f"conversions_raw_{user_id}"] = sanitize_payload(exc.payload) if exc.payload is not None else {"error": str(exc)}
+                _add_diagnostic(
+                    result,
+                    level="warning",
+                    stage="fetch_rows",
+                    method="conversions.list",
+                    user_id=user_id,
+                    details=_exception_details(exc),
+                )
+            except SklikApiError as exc:
+                LOGGER.warning("Sklik fetch warning method=%s user_id=%s error=%s", "conversions.list", user_id, exc)
+                _add_warning(result, f"conversions.list userId={user_id}: conversions.list unavailable; possible SEM account or permissions ({exc})")
+                result.raw_payloads[f"conversions_raw_{user_id}"] = sanitize_payload(exc.payload) if exc.payload is not None else {"error": str(exc)}
+                _add_diagnostic(
+                    result,
+                    level="warning",
+                    stage="fetch_rows",
+                    method="conversions.list",
+                    user_id=user_id,
+                    details=_exception_details(exc),
+                )
+
+            autotagging_payload = _safe_drak_payload(
+                client=drak_client,
+                result=result,
+                raw_key=f"autotagging_raw_{user_id}",
+                method="autotagging.get",
+                user_id=user_id,
+            )
+            autotagging_default_payload = _safe_drak_payload(
+                client=drak_client,
+                result=result,
+                raw_key=f"autotagging_default_raw_{user_id}",
+                method="autotagging.default.get",
+                user_id=user_id,
+            )
+            autotagging_history_rows = _safe_drak_rows(
+                client=drak_client,
+                result=result,
+                raw_key=f"autotagging_history_raw_{user_id}",
+                method="autotagging.history.list",
+                user_id=user_id,
+                params=[{
+                    "userIds": [int(user_id)],
+                    "dateFrom": date_from,
+                    "dateTo": date_to,
+                    "offset": 0,
+                    "limit": 50,
+                }],
+            )
+
+            if autotagging_payload:
+                datasets["autotagging"] = datasets["autotagging"] + [dict({"user_id": str(user_id)}, **sanitize_payload(autotagging_payload))]
+            if autotagging_default_payload:
+                datasets["autotagging_default"] = datasets["autotagging_default"] + [dict({"user_id": str(user_id)}, **sanitize_payload(autotagging_default_payload))]
+            datasets["autotagging_history"] = list(datasets["autotagging_history"]) + [
+                dict({"user_id": str(user_id)}, **sanitize_payload(row))
+                for row in autotagging_history_rows
+            ]
+
+        datasets["account_credit"] = combined_account_credit
+        datasets["account_stats_daily"] = records_to_frame(combined_account_stats_daily)
+        datasets["account_stats_total"] = records_to_frame(combined_account_stats_total)
+        datasets["account_stats_by_conversion_daily"] = records_to_frame(combined_account_stats_conversions)
+        LOGGER.info("Sklik dataset rows context=%s dataset=account_credit rows=%s", context_key, len(combined_account_credit))
+        LOGGER.info("Sklik dataset rows context=%s dataset=account_stats_daily rows=%s", context_key, len(combined_account_stats_daily))
+        LOGGER.info("Sklik dataset rows context=%s dataset=account_stats_total rows=%s", context_key, len(combined_account_stats_total))
+        LOGGER.info("Sklik dataset rows context=%s dataset=account_stats_by_conversion_daily rows=%s", context_key, len(combined_account_stats_conversions))
+
+        for key, rows in aggregate_lists.items():
+            datasets[key] = rows
+            LOGGER.info("Sklik dataset rows context=%s dataset=%s rows=%s", context_key, key, len(rows))
+
+        unsupported_reference_datasets = {
+            "reference_devices": "listDevices není potvrzená veřejná Drak reference metoda.",
+            "reference_payment_methods": "listPaymentMethods není potvrzená veřejná Drak reference metoda.",
+            "reference_ad_types": "listAdTypes není potvrzená veřejná Drak reference metoda; adType ber z ads.list/readReport.",
+        }
+        for dataset_name, note in unsupported_reference_datasets.items():
+            _add_info(result, note)
+            datasets[dataset_name] = []
+
+        datasets["utm_settings_audit"] = []
+        for row in datasets["autotagging"] if isinstance(datasets["autotagging"], list) else []:
+            payload = dict(row)
+            utm_source_value = ((payload.get("utmSource") or {}) if isinstance(payload.get("utmSource"), dict) else {}).get("value")
+            utm_medium_value = ((payload.get("utmMedium") or {}) if isinstance(payload.get("utmMedium"), dict) else {}).get("value")
+            utm_campaign_enabled = ((payload.get("utmCampaign") or {}) if isinstance(payload.get("utmCampaign"), dict) else {}).get("enabled")
+            datasets["utm_settings_audit"].append(
+                {
+                    "user_id": payload.get("user_id"),
+                    "enabled": payload.get("enabled"),
+                    "utm_source_value": utm_source_value,
+                    "utm_medium_value": utm_medium_value,
+                    "utm_campaign_enabled": utm_campaign_enabled,
+                    "remove_accents": payload.get("removeAccents"),
+                    "expected_utm_source": mapping.expected_utm_source,
+                    "expected_utm_medium": mapping.expected_utm_medium,
+                }
+            )
+
+        report_entities = {
+            "campaigns": ["campaigns_daily", "campaigns_total"],
+            "groups": ["groups_daily", "groups_total"],
+            "ads": ["ads_daily", "ads_total"],
+            "banners": ["banners_daily", "banners_total"],
+            "keywords": ["keywords_daily", "keywords_total"],
+            "queries": ["queries_daily", "queries_total"],
+            "sitelinks": ["sitelinks_daily", "sitelinks_total"],
+            "retargeting": ["retargeting_daily", "retargeting_total"],
+        }
+
+        if mapping.enable_reporting:
+            for user_id_raw in primary_user_ids:
+                user_id = int(user_id_raw)
+                for entity_name, outputs in report_entities.items():
+                    display_columns = REPORT_DISPLAY_COLUMNS.get(entity_name)
+                    dataset_name_for_count = REPORT_ENTITY_COUNT_DATASET.get(entity_name, entity_name.replace(".", "_"))
+                    entity_count = len(datasets.get(dataset_name_for_count, [])) if isinstance(datasets.get(dataset_name_for_count), list) else 1
+
+                    for output_name in outputs:
+                        report_granularity = "total" if output_name.endswith("_total") else granularity
+                        try:
+                            LOGGER.info(
+                                "Sklik report start entity=%s user_id=%s granularity=%s date_from=%s date_to=%s",
+                                entity_name,
+                                user_id,
+                                report_granularity,
+                                date_from,
+                                date_to,
+                            )
+                            report_rows = fetch_report_rows(
+                                client=drak_client,
+                                entity=entity_name,
+                                user_id=user_id,
+                                date_from=date_from,
+                                date_to=date_to,
+                                granularity=report_granularity,
+                                include_empty_statistics=include_empty_statistics,
+                                restriction_filter_extra=None,
+                                display_columns=display_columns,
+                                entity_count=max(1, entity_count),
+                                stats_data_limit=stats_data_limit,
+                            )
+                            dataframe = datasets.get(output_name)
+                            existing = dataframe_to_records(dataframe) if isinstance(dataframe, pd.DataFrame) else []
+                            existing.extend(report_rows)
+                            datasets[output_name] = records_to_frame(existing)
+                            result.raw_payloads[f"{output_name}_raw_{user_id}"] = sanitize_payload(report_rows)
+                            LOGGER.info("Sklik report done entity=%s user_id=%s granularity=%s rows=%s", entity_name, user_id, report_granularity, len(report_rows))
+                        except Exception as exc:
+                            LOGGER.warning("Sklik report warning entity=%s user_id=%s granularity=%s error=%s", entity_name, user_id, report_granularity, exc)
+                            _add_warning(result, f"{entity_name} report {report_granularity} userId={user_id}: {exc}")
+                            result.raw_payloads[f"{output_name}_raw_{user_id}"] = sanitize_payload(exc.payload) if isinstance(exc, (SklikApiError, SklikPartialFailure)) and exc.payload is not None else {"error": str(exc)}
+                            _add_diagnostic(
+                                result,
+                                level="warning",
+                                stage="report_fetch",
+                                method=entity_name,
+                                user_id=user_id,
+                                dataset=output_name,
+                                details={"granularity": report_granularity, **_exception_details(exc)},
+                            )
+
+        datasets["campaign_settings_audit"] = datasets["campaigns_daily"]
+        datasets["ad_landing_pages"] = datasets["ads_total"]
+        datasets["ad_creatives_audit"] = datasets["ads_total"]
+        datasets["banner_assets"] = datasets["banners_total"]
+        datasets["search_terms_audit"] = datasets["queries_total"]
+        datasets["shared_budget_campaigns"] = records_to_frame(datasets["shared_budgets"] if isinstance(datasets["shared_budgets"], list) else [])
+        datasets["retargeting_negative_summary"] = {
+            "campaign_negative_count": len(dataframe_to_records(datasets["campaign_negative_keywords_daily"])) if isinstance(datasets["campaign_negative_keywords_daily"], pd.DataFrame) else 0,
+            "group_negative_count": len(dataframe_to_records(datasets["negative_keywords_daily"])) if isinstance(datasets["negative_keywords_daily"], pd.DataFrame) else 0,
+        }
+
+        landing_seed_rows = _landing_seed_rows(datasets)
+        if enable_web_scan:
+            landing_rows, web_warnings = scan_landing_pages(
+                [str(row.get("source_url") or "") for row in landing_seed_rows],
+                timeout_seconds=runtime_config.request_timeout_seconds,
+            )
+            result.warnings.extend(web_warnings)
+            indexed = {str(row.get("source_url") or ""): row for row in landing_rows}
+            merged_rows: list[dict[str, Any]] = []
+            for seed in landing_seed_rows:
+                row = dict(seed)
+                row.update(indexed.get(str(seed.get("source_url") or ""), {}))
+                merged_rows.append(row)
+            datasets["landing_page_scan"] = merged_rows
+            datasets["sem_web_scan"] = merged_rows
+            datasets["utm_audit"] = records_to_frame(
+                build_utm_audit_rows(
+                    merged_rows,
+                    expected_sources=mapping.expected_utm_source,
+                    expected_mediums=mapping.expected_utm_medium,
+                    expected_domains=mapping.expected_domains,
+                )
+            )
+        else:
+            _add_info(result, "Web scan byl vypnutý runtime flagem, UI volbou nebo mappingem.")
+            datasets["landing_page_scan"] = []
+            datasets["sem_web_scan"] = []
+            datasets["utm_audit"] = pd.DataFrame()
+
+    if enable_fenix and fenix_client is not None:
+        fenix_user = _safe_fenix(result=result, raw_key="fenix_user_raw", action=fenix_client.get_user_me)
+        datasets["fenix_user"] = fenix_user if isinstance(fenix_user, dict) else {"items": fenix_user}
+        datasets["fenix_scopes"] = fenix_user.get("scopes", []) if isinstance(fenix_user, dict) else []
+        datasets["fenix_premises"] = [{"premise_id": premise_id, "source": "manual_mapping"} for premise_id in mapping.fenix_premise_ids]
+        if mapping.fenix_premise_ids:
+            _add_info(result, "Fénix premiseId je použitý z ručního mappingu; autodiscovery premise endpoint není potvrzený veřejnými docs.")
+
+        all_campaigns: list[dict[str, Any]] = []
+        all_params: list[dict[str, Any]] = []
+        all_budgets: list[dict[str, Any]] = []
+        all_multipliers: list[dict[str, Any]] = []
+
+        for premise_id in mapping.fenix_premise_ids:
+            campaigns = _safe_fenix(
+                result=result,
+                raw_key=f"fenix_campaigns_{premise_id}",
+                action=lambda premise_id=premise_id: fenix_client.list_nakupy_campaigns(premise_id),
+            )
+            for campaign in campaigns if isinstance(campaigns, list) else []:
+                campaign = dict(campaign)
+                campaign["premise_id"] = premise_id
+                all_campaigns.append(campaign)
+                all_params.append({"premise_id": premise_id, "campaign_id": campaign.get("id", ""), "params": sanitize_payload(campaign.get("params", {}))})
+                all_budgets.append({"premise_id": premise_id, "campaign_id": campaign.get("id", ""), "budget": sanitize_payload(campaign.get("budget", {}))})
+                all_multipliers.append({"premise_id": premise_id, "campaign_id": campaign.get("id", ""), "multipliers": sanitize_payload(campaign.get("multipliers", {}))})
+
+            _safe_fenix(
+                result=result,
+                raw_key=f"fenix_feed_status_{premise_id}",
+                action=lambda premise_id=premise_id: fenix_client.list_feed_statuses(premise_id),
+            )
+            _safe_fenix(
+                result=result,
+                raw_key=f"fenix_campaign_stats_daily_{premise_id}",
+                action=lambda premise_id=premise_id: fenix_client.get_campaign_stats(premise_id, date_from, date_to, "daily"),
+            )
+            _safe_fenix(
+                result=result,
+                raw_key=f"fenix_campaign_stats_total_{premise_id}",
+                action=lambda premise_id=premise_id: fenix_client.get_campaign_stats(premise_id, date_from, date_to, "total"),
+            )
+            if runtime_config.export_pii:
+                _safe_fenix(
+                    result=result,
+                    raw_key=f"fenix_gdpr_withdrawals_{premise_id}",
+                    action=lambda premise_id=premise_id: fenix_client.list_gdpr_withdrawals(premise_id, date_from, date_to),
+                )
+
+        datasets["fenix_campaigns"] = all_campaigns
+        datasets["fenix_campaign_params"] = all_params
+        datasets["fenix_campaign_budgets"] = all_budgets
+        datasets["fenix_campaign_multipliers"] = all_multipliers
+        datasets["fenix_feed_status"] = []
+        datasets["fenix_feed_errors"] = []
+        datasets["fenix_campaign_stats_daily"] = pd.DataFrame()
+        datasets["fenix_campaign_stats_total"] = pd.DataFrame()
+        datasets["fenix_gdpr_withdrawals"] = []
+
+    gtm_crosscheck = {
+        "context_key": context_key,
+        "expected_domains": list(mapping.expected_domains),
+        "matched": False,
+        "warnings": [],
+        "errors": [],
+        "found_tags": [],
+    }
+    if enable_gtm_crosscheck:
+        base_env = load_env_config(project_root / ".env")
+        context_env = resolve_context_env_config(base_env, context)
+        gtm_result = build_gtm_exports(env_config=context_env, reports_enabled={"gtm_tags": True})
+        gtm_crosscheck = build_gtm_crosscheck(
+            context_key=context_key,
+            expected_domains=mapping.expected_domains,
+            gtm_tags=gtm_result.datasets.get("gtm_tags", pd.DataFrame()),
+        )
+    else:
+        _add_info(result, "GTM cross-check byl vypnutý runtime flagem, UI volbou nebo mappingem.")
+    datasets["gtm_sklik_crosscheck"] = gtm_crosscheck
+
+    findings = build_audit_findings(
+        connection=connection,
+        mapping=mapping,
+        datasets=datasets,
+        gtm_crosscheck=gtm_crosscheck,
+        web_scan_rows=datasets["landing_page_scan"] if isinstance(datasets["landing_page_scan"], list) else [],
+        export_warnings=result.warnings,
+        export_info_notes=result.info_notes,
+    )
+    result.findings = findings
+    result.datasets = datasets
+
+    manifest.counts = {
+        key: (
+            int(len(value.index))
+            if isinstance(value, pd.DataFrame)
+            else len(value)
+            if isinstance(value, list)
+            else 1
+            if value
+            else 0
+        )
+        for key, value in datasets.items()
+    }
+    manifest.infos = [{"message": note} for note in result.info_notes]
+    manifest.warnings = [{"message": warning} for warning in result.warnings]
+    manifest.errors = [{"message": error} for error in result.errors]
+    manifest.export_finished_at = datetime.now(timezone.utc).isoformat()
+    manifest.status = "failed" if result.errors else ("partial" if result.warnings else "success")
+
+    report_lines = [
+        f"# Sklik audit report - {context.label}",
+        "",
+        "## Export summary",
+        f"- Context: `{context.key}`",
+        f"- Connection: `{connection.key}`",
+        f"- Date range: `{date_from}` -> `{date_to}`",
+        f"- Drak user IDs: {', '.join(mapping.drak_user_ids) or '-'}",
+        f"- Fenix premise IDs: {', '.join(mapping.fenix_premise_ids) or '-'}",
+        f"- Export time: `{manifest.export_started_at}` -> `{manifest.export_finished_at}`",
+        f"- Partial failures: `{len(result.warnings)}` warnings / `{len(result.errors)}` errors",
+        "",
+        "## Account overview",
+        f"- Accounts: `{manifest.counts.get('account', 0)}`",
+        f"- Foreign accounts: `{manifest.counts.get('foreign_accounts', 0)}`",
+        f"- API version rows: `{manifest.counts.get('api_version', 0)}`",
+        f"- API limits: `{manifest.counts.get('api_limits', 0)}`",
+        "",
+        "## Campaign overview",
+        f"- Campaign count: `{manifest.counts.get('campaigns', 0)}`",
+        f"- Group count: `{manifest.counts.get('groups', 0)}`",
+        f"- Ads count: `{manifest.counts.get('ads', 0)}`",
+        f"- Keywords count: `{manifest.counts.get('keywords', 0)}`",
+        "",
+        "## Measurement overview",
+        f"- Autotagging rows: `{manifest.counts.get('autotagging', 0)}`",
+        f"- SEM/web scan rows: `{manifest.counts.get('sem_web_scan', 0)}`",
+        f"- GTM cross-check warnings: `{len(gtm_crosscheck.get('warnings', []))}`",
+        f"- Conversions availability: `{manifest.counts.get('conversions', 0)}`",
+        "",
+        "## Fenix / Seznam Nákupy overview",
+        f"- Premises: `{manifest.counts.get('fenix_premises', 0)}`",
+        f"- Shopping campaigns: `{manifest.counts.get('fenix_campaigns', 0)}`",
+        f"- Feed status rows: `{manifest.counts.get('fenix_feed_status', 0)}`",
+        f"- Shopping stats rows: `{manifest.counts.get('fenix_campaign_stats_daily', 0)}`",
+        "",
+        "## Critical findings",
+    ]
+
+    criticals = [item for item in findings if item.severity in {"critical", "error"}]
+    warnings_only = [item for item in findings if item.severity == "warning"]
+    infos = [item for item in findings if item.severity == "info"]
+
+    report_lines.extend([f"- [{item.severity}] {item.code}: {item.title} - {item.message}" for item in criticals] or ["- Bez critical/error findings."])
+    report_lines.extend(["", "## Warnings"])
+    report_lines.extend([f"- [{item.severity}] {item.code}: {item.title} - {item.message}" for item in warnings_only] or ["- Bez warning findings."])
+    report_lines.extend(["", "## Informational findings"])
+    report_lines.extend([f"- [{item.severity}] {item.code}: {item.title} - {item.message}" for item in infos] or ["- Bez info findings."])
+    report_lines.extend(["", "## Files"])
+    report_lines.extend([f"- `{name}`" for name in sorted(datasets.keys())])
+
+    export_root = project_root / "exports" / "sklik" / context_key / _timestamp()
+    raw_payloads = result.raw_payloads if include_raw else {}
+    raw_payloads["errors"] = list(result.diagnostics) + [
+        {"level": "warning", "message": message}
+        for message in result.warnings
+    ] + [
+        {"level": "error", "message": message}
+        for message in result.errors
+    ]
+    export_sklik_bundle(
+        export_root=export_root,
+        datasets=datasets,
+        raw_payloads=raw_payloads,
+        manifest=manifest,
+        findings=findings,
+        report_markdown="\n".join(report_lines),
+    )
+
+    try:
+        drak_client.logout()
+    except Exception:
+        pass
+
+    result.export_dir = str(export_root)
+    LOGGER.info(
+        "Sklik export finished context=%s path=%s warnings=%s errors=%s",
+        context_key,
+        result.export_dir,
+        len(result.warnings),
+        len(result.errors),
+    )
+    return export_root
+
+
+def export_all_enabled_sklik_contexts(
+    *,
+    project_root: Path,
+    date_from: str,
+    date_to: str,
+    granularity: str = "daily",
+    include_raw: bool = True,
+    include_empty_statistics: bool = False,
+    enable_fenix: bool = True,
+    enable_gtm_crosscheck: bool = True,
+    enable_web_scan: bool = True,
+) -> list[Path]:
+    outputs: list[Path] = []
+    for context_key, mapping in load_sklik_mapping(project_root).items():
+        if not mapping.enabled:
+            continue
+        outputs.append(
+            export_sklik_context(
+                project_root=project_root,
+                context_key=context_key,
+                date_from=date_from,
+                date_to=date_to,
+                granularity=granularity,
+                include_raw=include_raw,
+                include_empty_statistics=include_empty_statistics,
+                enable_fenix=enable_fenix,
+                enable_gtm_crosscheck=enable_gtm_crosscheck,
+                enable_web_scan=enable_web_scan,
+            )
+        )
+    return outputs

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sklik Audit | Export</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Sklik Audit</p>
+          <h1>Export</h1>
+          <p class="brand-copy">Samostatný export pro vybraný context nebo všechny Sklik-enabled contexty.</p>
+        </div>
+        <nav class="nav-block">
+          <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+          <a href="{{ url_for('web.meta_connections_page') }}">Meta Ads</a>
+          <a href="{{ url_for('web.linkedin_connections_page') }}">LinkedIn Ads</a>
+          <a href="{{ url_for('web.sklik_connections_page') }}">Sklik Připojení</a>
+          <a href="{{ url_for('web.sklik_discovery_page') }}">Sklik Discovery</a>
+          <a href="{{ url_for('web.sklik_mapping_page') }}">Sklik Mapping</a>
+          <a href="{{ url_for('web.sklik_audit_page') }}">Sklik Export</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Spuštění Sklik exportu</h3>
+              <p>Volby exportu kopírují zadání: date range, raw payloady, zero stats, Fénix, GTM cross-check a web scan.</p>
+            </div>
+          </div>
+
+          <div id="sklik-audit-status"></div>
+
+          <div class="field-grid compact">
+            <label>
+              <span>Context</span>
+              <select id="sklik-context-key">
+                {% for row in mapping_state.contexts_payload %}
+                <option value="{{ row.key }}">{{ row.label }} ({{ row.key }})</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              <span>Preset</span>
+              <select id="sklik-preset">
+                <option value="last_30_days">last_30_days</option>
+                <option value="last_90_days" selected>last_90_days</option>
+                <option value="last_180_days">last_180_days</option>
+                <option value="last_365_days">last_365_days</option>
+              </select>
+            </label>
+            <label>
+              <span>Date from</span>
+              <input id="sklik-date-from" type="date" />
+            </label>
+            <label>
+              <span>Date to</span>
+              <input id="sklik-date-to" type="date" />
+            </label>
+            <label>
+              <span>Granularity</span>
+              <select id="sklik-granularity">
+                <option value="daily" selected>daily</option>
+                <option value="weekly">weekly</option>
+                <option value="monthly">monthly</option>
+                <option value="total">total</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="toggle-row">
+            <label class="toggle"><input id="include-raw" type="checkbox" checked /><span>Include raw</span></label>
+            <label class="toggle"><input id="include-empty-statistics" type="checkbox" /><span>Include zero stats</span></label>
+            <label class="toggle"><input id="enable-fenix" type="checkbox" checked /><span>Enable Fénix</span></label>
+            <label class="toggle"><input id="enable-gtm-crosscheck" type="checkbox" checked /><span>Enable GTM cross-check</span></label>
+            <label class="toggle"><input id="enable-web-scan" type="checkbox" checked /><span>Enable web scan</span></label>
+          </div>
+
+          <div class="action-row mapping-actions">
+            <button class="btn btn-primary" type="button" id="run-sklik-context-export-button">Spustit vybraný export</button>
+            <button class="btn btn-secondary" type="button" id="run-sklik-all-export-button">Spustit všechny aktivní contexty</button>
+            <button class="btn btn-secondary" type="button" id="run-sklik-web-scan-button">Spustit jen web scan</button>
+          </div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>Sklik-enabled contexty</h3>
+              <p>Rychla kontrola, kde je Sklik mapping zapnuty a s jakymi userId a rucne spravovanymi premiseId.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Context</th>
+                  <th>Enabled</th>
+                  <th>Connection</th>
+                  <th>Drak userIds</th>
+                  <th>Premise IDs</th>
+                  <th>Expected domains</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in mapping_state.contexts_payload %}
+                <tr>
+                  <td>{{ row.label }}<br><small>{{ row.key }}</small></td>
+                  <td>{{ row.sklik.enabled }}</td>
+                  <td>{{ row.sklik.connection_key }}</td>
+                  <td>{{ row.sklik.drak_user_ids | join(', ') }}</td>
+                  <td>{{ row.sklik.fenix_premise_ids | join(', ') }}</td>
+                  <td>{{ row.sklik.expected_domains | join(', ') }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6">Zatím nejsou dostupné žádné contexty.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script>
+      function getEl(id) { return document.getElementById(id); }
+      function payload() {
+        return {
+          context_key: getEl("sklik-context-key").value,
+          preset: getEl("sklik-preset").value,
+          date_from: getEl("sklik-date-from").value,
+          date_to: getEl("sklik-date-to").value,
+          granularity: getEl("sklik-granularity").value,
+          include_raw: getEl("include-raw").checked,
+          include_empty_statistics: getEl("include-empty-statistics").checked,
+          enable_fenix: getEl("enable-fenix").checked,
+          enable_gtm_crosscheck: getEl("enable-gtm-crosscheck").checked,
+          enable_web_scan: getEl("enable-web-scan").checked
+        };
+      }
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+      function setStatus(message, kind) {
+        const target = getEl("sklik-audit-status");
+        target.innerHTML = `<div class="flash flash-${kind}">${escapeHtml(message)}</div>`;
+      }
+      async function postJson(url, body) {
+        const response = await fetch(url, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {"Content-Type": "application/json", Accept: "application/json"},
+          body: JSON.stringify(body || payload())
+        });
+        const text = await response.text();
+        let result = {};
+        try {
+          result = text ? JSON.parse(text) : {};
+        } catch (error) {
+          throw new Error(`Server nevrátil JSON. HTTP ${response.status}. Odpověď: ${text.slice(0, 500)}`);
+        }
+        if (!response.ok) {
+          throw new Error(result.message || `HTTP ${response.status}`);
+        }
+        return result;
+      }
+      async function runAction(url, runningMessage, successBuilder) {
+        setStatus(runningMessage, "info");
+        try {
+          const result = await postJson(url, payload());
+          setStatus(successBuilder(result), "success");
+        } catch (error) {
+          setStatus(error && error.message ? error.message : String(error), "error");
+        }
+      }
+      document.getElementById("run-sklik-context-export-button").addEventListener("click", () => {
+        runAction(
+          "{{ url_for('web.run_sklik_context_export_route') }}",
+          "Spouštím Sklik export vybraného contextu… sleduj zároveň terminál.",
+          (result) => `Sklik export doběhl. Výstup: ${result.export_dir || "viz export složka"}`
+        );
+      });
+      document.getElementById("run-sklik-all-export-button").addEventListener("click", () => {
+        runAction(
+          "{{ url_for('web.run_sklik_all_export_route') }}",
+          "Spouštím Sklik export všech aktivních contextů…",
+          () => "All-enabled Sklik export doběhl."
+        );
+      });
+      document.getElementById("run-sklik-web-scan-button").addEventListener("click", () => {
+        runAction(
+          "{{ url_for('web.sklik_web_scan_route') }}",
+          "Spouštím Sklik web scan…",
+          (result) => `Sklik web scan doběhl. Výstup: ${result.export_dir || "viz export složka"}`
+        );
+      });
+    </script>
+  </body>
+</html>

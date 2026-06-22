@@ -20,6 +20,8 @@
           </p>
         </div>
         <nav class="nav-block">
+          <a href="{{ url_for('web.dashboard') }}">Dashboard</a>
+          <a href="{{ url_for('web.meta_connections_page') }}">Meta Ads</a>
           <a href="{{ url_for('web.linkedin_connections_page') }}"
             >LinkedIn Připojení</a
           >
@@ -30,6 +32,7 @@
             >LinkedIn Mapping</a
           >
           <a href="{{ url_for('web.linkedin_audit_page') }}">LinkedIn Export</a>
+          <a href="{{ url_for('web.sklik_connections_page') }}">Sklik Ads</a>
         </nav>
       </aside>
 

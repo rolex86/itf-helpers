@@ -36,6 +36,15 @@ from app.web.services.linkedin_oauth_service import (
     refresh_linkedin_connection_token,
     revoke_local_linkedin_connection,
 )
+from app.web.services.sklik_audit_service import run_sklik_export_for_all_enabled_contexts, run_sklik_export_for_context
+from app.web.services.sklik_connection_service import (
+    delete_sklik_connection_locally,
+    list_sklik_connections,
+    save_sklik_connection,
+    test_sklik_connection,
+)
+from app.web.services.sklik_discovery_service import load_all_sklik_discovery_snapshots, run_sklik_discovery_for_connection
+from app.web.services.sklik_mapping_service import load_sklik_mapping_state, save_sklik_mapping_state
 from app.web.services.mapping_service import (
     get_context_test_job_status,
     load_mapping_state,
@@ -300,6 +309,65 @@ def linkedin_audit_page():
     )
 
 
+@web_bp.get("/sklik/connections")
+def sklik_connections_page():
+    connections = list_sklik_connections(_project_root())
+    selected_connection_key = str(
+        request.args.get("connection_key")
+        or request.args.get("key")
+        or ""
+    ).strip()
+    selected_connection = None
+    if selected_connection_key:
+        selected_connection = next(
+            (
+                item
+                for item in connections
+                if str(item.get("key") or "").strip() == selected_connection_key
+            ),
+            None,
+        )
+    return render_template(
+        "sklik/connections.html",
+        connections=connections,
+        selected_connection=selected_connection,
+        selected_connection_key=selected_connection_key,
+    )
+
+
+@web_bp.get("/sklik/discovery")
+def sklik_discovery_page():
+    connections = list_sklik_connections(_project_root())
+    selected_connection_key = str(
+        request.args.get("connection_key")
+        or (connections[0].get("key") if connections else "")
+        or ""
+    ).strip()
+    return render_template(
+        "sklik/discovery.html",
+        connections=connections,
+        selected_connection_key=selected_connection_key,
+        snapshots=load_all_sklik_discovery_snapshots(_project_root()),
+    )
+
+
+@web_bp.get("/sklik/mapping")
+def sklik_mapping_page():
+    return render_template(
+        "sklik/mapping.html",
+        mapping_state=load_sklik_mapping_state(_project_root()),
+        connections=list_sklik_connections(_project_root()),
+    )
+
+
+@web_bp.get("/sklik/audit")
+def sklik_audit_page():
+    return render_template(
+        "sklik/audit.html",
+        mapping_state=load_sklik_mapping_state(_project_root()),
+    )
+
+
 @web_bp.post("/mapping/save")
 def save_mapping_page():
     payload = request.get_json(silent=True) or {}
@@ -546,6 +614,115 @@ def linkedin_web_scan_route():
     payload["include_reporting"] = False
     try:
         result = run_linkedin_export_for_context(_project_root(), str(payload.get("context_key") or "").strip(), payload)
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/connections/save")
+def save_sklik_connection_route():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = save_sklik_connection(_project_root(), payload)
+        return jsonify({"ok": True, "connection": result}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/connections/test")
+def test_sklik_connection_route():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = test_sklik_connection(_project_root(), payload)
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/connections/delete")
+def delete_sklik_connection_route():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = delete_sklik_connection_locally(_project_root(), str(payload.get("connection_key") or "").strip())
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/discovery/run")
+def run_sklik_discovery_route():
+    payload = request.get_json(silent=True) or {}
+    connection_key = str(payload.get("connection_key") or "").strip()
+    try:
+        result = run_sklik_discovery_for_connection(_project_root(), connection_key)
+        return jsonify({"ok": True, "snapshot": result}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/mapping/save")
+def save_sklik_mapping_route():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = save_sklik_mapping_state(_project_root(), payload)
+        return jsonify({"ok": True, "mapping_state": result}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/audit/run-context")
+def run_sklik_context_export_route():
+    payload = request.get_json(silent=True) or {}
+    context_key = str(payload.get("context_key") or "").strip()
+    try:
+        result = run_sklik_export_for_context(_project_root(), context_key, payload)
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/audit/run-all")
+def run_sklik_all_export_route():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = run_sklik_export_for_all_enabled_contexts(_project_root(), payload)
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/audit/test-drak")
+def sklik_test_drak_route():
+    payload = request.get_json(silent=True) or {}
+    payload["fenix_enabled"] = False
+    payload["drak_enabled"] = True
+    try:
+        result = test_sklik_connection(_project_root(), payload)
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/audit/test-fenix")
+def sklik_test_fenix_route():
+    payload = request.get_json(silent=True) or {}
+    payload["fenix_enabled"] = True
+    payload["drak_enabled"] = False
+    try:
+        result = test_sklik_connection(_project_root(), payload)
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+
+@web_bp.post("/sklik/audit/web-scan")
+def sklik_web_scan_route():
+    payload = request.get_json(silent=True) or {}
+    payload["include_web_scan"] = True
+    payload["enable_fenix"] = False
+    payload["include_empty_statistics"] = False
+    try:
+        result = run_sklik_export_for_context(_project_root(), str(payload.get("context_key") or "").strip(), payload)
         return jsonify(result), 200
     except Exception as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400

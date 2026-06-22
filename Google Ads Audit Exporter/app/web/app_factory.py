@@ -9,7 +9,10 @@ from app.web.routes import web_bp
 
 
 def create_app(project_root: Path | None = None) -> Flask:
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+    )
     root = project_root or Path(__file__).resolve().parents[2]
     app = Flask(
         __name__,
