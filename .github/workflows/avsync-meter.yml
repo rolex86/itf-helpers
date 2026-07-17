@@ -37,6 +37,9 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Correct Android ImageFormat import
+        run: sed -i 's/import android.media.ImageFormat;/import android.graphics.ImageFormat;/' app/src/main/java/cz/filip/avsyncmeter/MainActivity.java
+
       - name: Build debug APK
         shell: bash
         run: |
