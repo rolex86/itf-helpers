@@ -40,8 +40,18 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Correct Android ImageFormat import
-        run: sed -i 's/import android.media.ImageFormat;/import android.graphics.ImageFormat;/' app/src/main/java/cz/filip/avsyncmeter/MainActivity.java
+      - name: Apply Android and microphone fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=app/src/main/java/cz/filip/avsyncmeter/MainActivity.java
+          sed -i 's/import android.media.ImageFormat;/import android.graphics.ImageFormat;/' "$file"
+          sed -i 's/private double noiseRms = 250.0;/private double noiseRms = 10.0;/' "$file"
+          sed -i 's/noiseRms = 250.0;/noiseRms = 10.0;/' "$file"
+          sed -i 's/Math.max(1100.0, noiseRms \* 4.2)/Math.max(18.0, noiseRms * 3.2)/' "$file"
+          sed -i 's/Math.max(4500.0, noiseRms \* 8.0)/Math.max(80.0, noiseRms * 7.0)/' "$file"
+          sed -i 's/Math.max(750.0, noiseRms \* 2.0)/Math.max(12.0, noiseRms * 1.8)/' "$file"
+          sed -i 's/Math.max(1800, peakThreshold \/ 2)/Math.max(30, peakThreshold \/ 2)/' "$file"
 
       - name: Build debug APK
         shell: bash
@@ -64,16 +74,16 @@ jobs:
 
       - name: Prepare artifact
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk AV-Sync-Meter-v0.1.1.apk
-          sha256sum AV-Sync-Meter-v0.1.1.apk > SHA256SUMS.txt
-          unzip -t AV-Sync-Meter-v0.1.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk AV-Sync-Meter-v0.1.2.apk
+          sha256sum AV-Sync-Meter-v0.1.2.apk > SHA256SUMS.txt
+          unzip -t AV-Sync-Meter-v0.1.2.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AV-Sync-Meter-v0.1.1
+          name: AV-Sync-Meter-v0.1.2
           path: |
-            avsync-meter/AV-Sync-Meter-v0.1.1.apk
+            avsync-meter/AV-Sync-Meter-v0.1.2.apk
             avsync-meter/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -83,7 +93,7 @@ jobs:
         run: |
           set -euo pipefail
           publish_dir="$(mktemp -d)"
-          cp avsync-meter/AV-Sync-Meter-v0.1.1.apk "$publish_dir/"
+          cp avsync-meter/AV-Sync-Meter-v0.1.2.apk "$publish_dir/"
           cp avsync-meter/SHA256SUMS.txt "$publish_dir/"
 
           git config user.name "github-actions[bot]"
@@ -91,8 +101,8 @@ jobs:
           git checkout --orphan apk-publish-temp
           git rm -rf .
           git clean -fdx
-          cp "$publish_dir/AV-Sync-Meter-v0.1.1.apk" .
+          cp "$publish_dir/AV-Sync-Meter-v0.1.2.apk" .
           cp "$publish_dir/SHA256SUMS.txt" .
-          git add AV-Sync-Meter-v0.1.1.apk SHA256SUMS.txt
-          git commit -m "Publish verified AV Sync Meter v0.1.1"
+          git add AV-Sync-Meter-v0.1.2.apk SHA256SUMS.txt
+          git commit -m "Publish verified AV Sync Meter v0.1.2"
           git push --force origin HEAD:apk-download
