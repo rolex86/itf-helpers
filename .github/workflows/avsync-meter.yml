@@ -78,7 +78,6 @@ jobs:
           if-no-files-found: error
 
       - name: Publish exact APK binary to download branch
-        if: github.event_name == 'push'
         working-directory: ${{ github.workspace }}
         shell: bash
         run: |
