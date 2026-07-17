@@ -7,6 +7,12 @@ on:
     paths:
       - 'avsync-meter/**'
       - '.github/workflows/avsync-meter.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'avsync-meter/**'
+      - '.github/workflows/avsync-meter.yml'
   workflow_dispatch:
 
 jobs:
